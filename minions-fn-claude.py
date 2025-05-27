@@ -1,7 +1,7 @@
 """
 title: MinionS Integration for Open WebUI
 author: @SunkThought
-author_url: https://github.com/SunkThought/minions
+author_url: https://github.com/SunkThought/minions-openwebui
 original_author: @HazyResearch wrote the original MinionS Protocol paper and code examples on github that spawned this
 original_author_url: https://github.com/HazyResearch/minions
 funding_url: https://github.com/SunkThought
