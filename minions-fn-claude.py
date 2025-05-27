@@ -1,5 +1,5 @@
 """
-title: MinionS Integration for Open WebUI
+title: MinionS Protocol Integration for Open WebUI
 author: Wil Everts and the @SunkThought team
 author_url: https://github.com/SunkThought/minions-openwebui
 original_author: Copyright (c) 2025 Sabri Eyuboglu, Avanika Narayan, Dan Biderman, and the rest of the Minions team (@HazyResearch wrote the original MinionS Protocol paper and code examples on github that spawned this)
