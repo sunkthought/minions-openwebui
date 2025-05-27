@@ -5,7 +5,7 @@ author_url: https://github.com/SunkThought/minions-openwebui
 original_author: Copyright (c) 2025 Sabri Eyuboglu, Avanika Narayan, Dan Biderman, and the rest of the Minions team (@HazyResearch wrote the original MinionS Protocol paper and code examples on github that spawned this)
 original_author_url: https://github.com/HazyResearch/
 funding_url: https://github.com/HazyResearch/minions
-version: 0.2.0
+version: 0.1.0
 description: Basic Minion protocol - conversational collaboration between local and cloud models
 required_open_webui_version: 0.5.0
 license: MIT License
@@ -140,12 +140,25 @@ class Pipe:
             debug_log.append(f"**⏱️ Overall process started. (Debug Mode)**\n")
 
 
-        initial_claude_prompt = f"""You are collaborating with a local AI assistant that has access to full context/documents, but you don't have direct access to them.
-Your goal: Answer this question: "{query}"
-The local assistant can see this context (you cannot): [CONTEXT: {len(context)} characters of text including uploaded documents]
-Please ask the local assistant specific, focused questions to gather the information you need. Be direct and precise. Ask only what you need.
-If you have enough information to answer, respond with the exact phrase 'FINAL ANSWER READY.' followed by your comprehensive final answer.
-If not, ask ONE more specific question. Do not use 'FINAL ANSWER READY.' yet."""
+        initial_claude_prompt = f"""Your primary goal is to answer the user's question: "{query}"
+
+To achieve this, you will collaborate with a local AI assistant. This local assistant has ALREADY READ and has FULL ACCESS to the relevant document ({len(context)} characters long). The local assistant is a TRUSTED source that will provide you with factual information, summaries, and direct extractions FROM THE DOCUMENT in response to your questions.
+
+Your role is to:
+1.  Formulate specific, focused questions to the local assistant to gather the necessary information from the document. Ask only what you need to build up the answer to the user's original query.
+2.  Receive and understand the information provided by the local assistant.
+3.  Synthesize this information to answer the user's original query.
+
+IMPORTANT INSTRUCTIONS:
+- DO NOT ask the local assistant to provide the entire document or large raw excerpts.
+- DO NOT express that you cannot see the document. Assume the local assistant provides accurate information from it.
+- Your questions should be aimed at extracting pieces of information that you can then synthesize.
+
+If, after receiving responses from the local assistant, you believe you have gathered enough information to comprehensively answer the user's original query ("{query}"), then respond ONLY with the exact phrase "FINAL ANSWER READY." followed by your detailed final answer.
+If you need more specific information from the document, ask the local assistant ONE more clear, targeted question. Do not use the phrase "FINAL ANSWER READY." yet.
+
+Start by asking your first question to the local assistant to begin gathering information.
+"""
 
         for round_num in range(self.valves.max_rounds):
             if self.valves.debug_mode:
@@ -427,25 +440,26 @@ Please provide a helpful, accurate response based on the context you have access
     def _build_conversation_context(
         self, history: List[tuple], original_query: str
     ) -> str:
-        """Build context for Claude based on conversation history"""
         context_parts = [
-            f"ORIGINAL QUESTION: {original_query}",
+            f"You are a supervisor LLM collaborating with a trusted local AI assistant to answer the user's ORIGINAL QUESTION: \"{original_query}\"",
+            "The local assistant has full access to the source document and has been providing factual information extracted from it.",
             "",
-            "CONVERSATION SO FAR:",
+            "CONVERSATION SO FAR (Your questions, Local Assistant's factual responses from the document):",
         ]
 
         for role, message in history:
-            if role == "assistant":
-                context_parts.append(f"You previously asked: {message}")
-            else:
-                context_parts.append(f"Local assistant responded: {message}")
+            if role == "assistant": # Claude's previous message
+                context_parts.append(f"You previously asked the local assistant: \"{message}\"")
+            else: # Local model's response
+                context_parts.append(f"The local assistant responded with information from the document: \"{message}\"")
 
         context_parts.extend(
             [
                 "",
-                "Based on this conversation, do you now have enough information to provide a complete answer to the original question?",
-                "If YES: Respond with the exact phrase 'FINAL ANSWER READY.' followed by your comprehensive final answer.",
-                "If NO: Ask ONE more specific question to get the missing information. Do not use the phrase 'FINAL ANSWER READY.' yet.",
+                "REMINDER: The local assistant's responses are factual information extracted directly from the document.",
+                "Based on ALL information provided by the local assistant so far, can you now provide a complete and comprehensive answer to the user's ORIGINAL QUESTION?",
+                "If YES: Respond ONLY with the exact phrase 'FINAL ANSWER READY.' followed by your comprehensive final answer. Ensure your answer directly addresses the original query using the information gathered.",
+                "If NO: Ask ONE more specific, targeted question to the local assistant to obtain the remaining information you need from the document. Be precise. Do not ask for the document itself or express that you cannot see it.",
             ]
         )
         return "\n".join(context_parts)
