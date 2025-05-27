@@ -12,9 +12,17 @@ required_open_webui_version: 0.5.0
 
 import asyncio
 import aiohttp
-from typing import Dict, List
+import json # ADDED for schema serialization and parsing
+from typing import List, Optional, Dict # MODIFIED (ensure Dict is present)
 from pydantic import BaseModel, Field
 from fastapi import Request # type: ignore
+
+class TaskResult(BaseModel):
+    """Structured response format for task execution in MinionS protocol"""
+    explanation: str = Field(description="Brief explanation of findings")
+    citation: Optional[str] = Field(default=None, description="Direct quote from text supporting answer")
+    answer: Optional[str] = Field(default=None, description="The extracted information, or None if not found")
+    confidence: str = Field(default="LOW", description="HIGH, MEDIUM, or LOW confidence")
 
 class Pipe:
     class Valves(BaseModel):
@@ -64,6 +72,10 @@ class Pipe:
         )
         ollama_num_predict: int = Field(
             default=1000, description="Max tokens for Ollama API calls (num_predict)"
+        )
+        use_structured_output: bool = Field(
+            default=False, 
+            description="Use JSON structured output for local model responses (requires local model support)"
         )
 
     def __init__(self):
@@ -395,9 +407,15 @@ Final Answer:'''
 {chunk}
 ---END TEXT---
 
-Task: {task}
+Task: {task}'''
 
-Provide a brief, specific answer based ONLY on the text provided above. If no relevant information is found in THIS SPECIFIC TEXT, respond with the single word "NONE".'''
+        if self.valves.use_structured_output:
+            local_prompt_text += f"\n\nProvide your answer ONLY as a valid JSON object matching the specified schema. If no relevant information is found in THIS SPECIFIC TEXT, ensure the 'answer' field in your JSON response is explicitly set to null (or None)."
+            # Schema itself is appended by _call_ollama
+        else:
+            local_prompt_text += "\n\nProvide a brief, specific answer based ONLY on the text provided above. If no relevant information is found in THIS SPECIFIC TEXT, respond with the single word \"NONE\"."
+        
+        local_prompt = local_prompt_text
                 
                 start_time_ollama = 0
                 if self.valves.debug_mode:
@@ -407,19 +425,40 @@ Provide a brief, specific answer based ONLY on the text provided above. If no re
                     start_time_ollama = asyncio.get_event_loop().time()
 
                 try:
-                    result = await asyncio.wait_for(
-                        self._call_ollama(local_prompt),
+                    response_str = await asyncio.wait_for(
+                        self._call_ollama(
+                            local_prompt,
+                            use_json=True, # Enable JSON mode if valve is on
+                            schema=TaskResult # Provide the TaskResult schema model
+                        ),
                         timeout=self.valves.timeout_local,
+                    )
+                    response_data = self._parse_local_response(
+                        response_str,
+                        is_structured=True # Attempt structured parsing
                     )
                     if self.valves.debug_mode:
                         end_time_ollama = asyncio.get_event_loop().time()
                         time_taken_ollama = end_time_ollama - start_time_ollama
+                        status_msg = ""
+                        details_msg = ""
+                        if response_data.get("parse_error"):
+                            status_msg = "Parse Error"
+                            details_msg = f"Error: {response_data['parse_error']}, Raw: {response_data.get('answer', '')[:70]}..."
+                        elif response_data['_is_none_equivalent']:
+                            status_msg = "No relevant info"
+                            details_msg = f"Response indicates no info found. Confidence: {response_data.get('confidence', 'N/A')}"
+                        else:
+                            status_msg = "Relevant info found"
+                            details_msg = f"Answer: {response_data.get('answer', '')[:70]}..., Confidence: {response_data.get('confidence', 'N/A')}"
+            
                         conversation_log.append(
-                             f"   ⏱️ Task {task_idx+1}, Chunk {chunk_idx+1} processed by local LLM in {time_taken_ollama:.2f}s. Status: {'Relevant info found' if 'NONE' not in result.strip().upper() else 'No relevant info'}. Result: {result[:70]}... (Debug Mode)"
+                             f"   ⏱️ Task {task_idx+1}, Chunk {chunk_idx+1} processed by local LLM in {time_taken_ollama:.2f}s. Status: {status_msg}. Details: {details_msg} (Debug Mode)"
                         )
 
-                    if not (result.strip().upper() == "NONE" or len(result.strip()) < 5):
-                        results_for_this_task_from_chunks.append(f"[Chunk {chunk_idx+1}]: {result}")
+                    if not response_data['_is_none_equivalent']:
+                        extracted_info = response_data.get('answer') or response_data.get('explanation', 'Could not extract details.')
+                        results_for_this_task_from_chunks.append(f"[Chunk {chunk_idx+1}]: {extracted_info}")
                         num_relevant_chunks_found += 1
                         # Reduced verbosity for non-debug success, already logged in debug
                 except asyncio.TimeoutError:
@@ -518,13 +557,22 @@ Provide a brief, specific answer based ONLY on the text provided above. If no re
                     if self.valves.debug_mode: print(f"Unexpected Claude API response format: {result}")
                     raise Exception("Unexpected response format from Anthropic API or empty content.")
 
-    async def _call_ollama(self, prompt: str) -> str:
+    async def _call_ollama(self, prompt: str, use_json: bool = False, schema: Optional[BaseModel] = None) -> str:
+        # Existing payload setup
         payload = {
             "model": self.valves.local_model,
-            "prompt": prompt,
+            "prompt": prompt, # Original prompt
             "stream": False,
             "options": {"temperature": 0.1, "num_predict": self.valves.ollama_num_predict},
         }
+
+        if use_json and self.valves.use_structured_output and schema:
+            payload["format"] = "json"
+            schema_for_prompt = json.dumps(schema.model_json_schema(indent=2)) # Pydantic v2
+            schema_prompt_addition = f"\n\nRespond ONLY with valid JSON matching this schema:\n{schema_for_prompt}"
+            payload["prompt"] = prompt + schema_prompt_addition
+        elif "format" in payload:
+            del payload["format"]
         async with aiohttp.ClientSession() as session:
             async with session.post(
                 f"{self.valves.ollama_base_url}/api/generate", json=payload, timeout=self.valves.timeout_local
@@ -614,4 +662,30 @@ Provide a brief, specific answer based ONLY on the text provided above. If no re
         except Exception as e:
             return f"[Error extracting file content: {str(e)}]"
         
+        
+    def _parse_local_response(self, response: str, is_structured: bool = False) -> Dict:
+        """Parse local model response, supporting both text and structured formats for MinionS."""
+        if is_structured and self.valves.use_structured_output:
+            try:
+                parsed_json = json.loads(response)
+                validated_model = TaskResult(**parsed_json)
+                model_dict = validated_model.model_dump() # Pydantic v2
+                model_dict['parse_error'] = None
+                # Crucial for MinionS: Check if the structured response indicates "not found" via its 'answer' field
+                if model_dict.get('answer') is None:
+                     model_dict['_is_none_equivalent'] = True
+                else:
+                     model_dict['_is_none_equivalent'] = False
+                return model_dict
+            except Exception as e:
+                if self.valves.debug_mode:
+                    print(f"DEBUG: Failed to parse structured output in MinionS: {e}. Response was: {response[:500]}")
+                # Fallback for parsing failure
+                # Check if the raw response is "NONE" for MinionS backward compatibility
+                is_none_equivalent_fallback = response.strip().upper() == "NONE"
+                return {"answer": response, "explanation": response, "confidence": "LOW", "citation": None, "parse_error": str(e), "_is_none_equivalent": is_none_equivalent_fallback}
+        
+        # Fallback for non-structured processing
+        is_none_equivalent_text = response.strip().upper() == "NONE"
+        return {"answer": response, "explanation": response, "confidence": "MEDIUM", "citation": None, "parse_error": None, "_is_none_equivalent": is_none_equivalent_text}
         # Take a bow!
