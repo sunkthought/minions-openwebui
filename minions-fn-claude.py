@@ -16,7 +16,7 @@ import os
 import aiohttp
 from typing import Optional, Dict, Any, List
 from pydantic import BaseModel, Field
-from fastapi import Request
+from fastapi import Request # type: ignore
 
 class Pipe:
     class Valves(BaseModel):
