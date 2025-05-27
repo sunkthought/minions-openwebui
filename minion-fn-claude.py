@@ -391,7 +391,7 @@ If you are instructed to provide a JSON response (e.g., by a schema appended to 
             payload["format"] = "json"
             # Add schema to prompt for models that support it
             # Ensure json is imported at the top of the file
-            schema_for_prompt = json.dumps(schema.model_json_schema(indent=2)) # Pydantic v2
+            schema_for_prompt = schema.schema_json() # Pydantic v1
             schema_prompt_addition = f"\n\nRespond ONLY with valid JSON matching this schema:\n{schema_for_prompt}"
             payload["prompt"] = prompt + schema_prompt_addition # Append schema to original prompt
         elif "format" in payload: # Clean up if not using JSON format
@@ -527,7 +527,7 @@ If you are instructed to provide a JSON response (e.g., by a schema appended to 
                 parsed_json = json.loads(response)
                 validated_model = LocalAssistantResponse(**parsed_json)
                 # Add a 'parse_error': None field for consistency
-                model_dict = validated_model.model_dump() # Pydantic v2
+                model_dict = validated_model.dict() # Pydantic v1
                 model_dict['parse_error'] = None
                 return model_dict
             except Exception as e:

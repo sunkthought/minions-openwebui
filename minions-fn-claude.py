@@ -568,7 +568,7 @@ Task: {task}'''
 
         if use_json and self.valves.use_structured_output and schema:
             payload["format"] = "json"
-            schema_for_prompt = json.dumps(schema.model_json_schema(indent=2)) # Pydantic v2
+            schema_for_prompt = schema.schema_json() # Pydantic v1
             schema_prompt_addition = f"\n\nRespond ONLY with valid JSON matching this schema:\n{schema_for_prompt}"
             payload["prompt"] = prompt + schema_prompt_addition
         elif "format" in payload:
@@ -669,7 +669,7 @@ Task: {task}'''
             try:
                 parsed_json = json.loads(response)
                 validated_model = TaskResult(**parsed_json)
-                model_dict = validated_model.model_dump() # Pydantic v2
+                model_dict = validated_model.dict() # Pydantic v1
                 model_dict['parse_error'] = None
                 # Crucial for MinionS: Check if the structured response indicates "not found" via its 'answer' field
                 if model_dict.get('answer') is None:
