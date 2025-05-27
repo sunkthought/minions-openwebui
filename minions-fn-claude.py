@@ -53,10 +53,19 @@ class Pipe:
         debug_mode: bool = Field(
             default=False, description="Show additional technical details"
         )
+        max_tokens_claude: int = Field(
+            default=2000, description="Max tokens for Claude API calls"
+        )
+        timeout_claude: int = Field(
+            default=60, description="Timeout for Claude API calls in seconds"
+        )
+        ollama_num_predict: int = Field(
+            default=1000, description="Max tokens for Ollama API calls (num_predict)"
+        )
 
     def __init__(self):
         self.valves = self.Valves()
-        self.name = "MinionS v0.1.0"
+        self.name = "MinionS v0.2.0 (Multi-Round)"
 
     def pipes(self):
         """Define the available models"""
@@ -120,356 +129,331 @@ class Pipe:
             return f"❌ **Error in MinionS protocol:** {error_details}"
 
     async def _execute_minions_protocol(self, query: str, context: str) -> str:
-        """Execute the advanced MinionS protocol with task decomposition"""
-
         conversation_log = []
         debug_log = []
+        scratchpad_content = "" 
+        all_round_results_aggregated = [] 
+        decomposition_prompts_history = []
+        synthesis_prompts_history = []
+        final_response = "No answer could be synthesized."
+        claude_provided_final_answer = False
+        total_tasks_executed_local = 0
+        total_chunks_processed_for_stats = 0 # Will be len(chunks) as all tasks see all chunks
+        synthesis_input_summary = "" # Ensure it's initialized
 
-        try:
-            if self.valves.debug_mode:
-                debug_info = f"🔍 **Debug Info (MinionS):**\n"
-                debug_info += f"- Query: {query[:100]}...\n"
-                debug_info += f"- Context length: {len(context)} chars\n"
-                debug_info += f"- Protocol: MinionS (task decomposition)\n\n"
-                debug_log.append(debug_info)
+        if self.valves.debug_mode:
+            debug_log.append(f"🔍 **Debug Info (MinionS v0.2.0):**\n- Query: {query[:100]}...\n- Context length: {len(context)} chars")
 
-            conversation_log.append("### 🎯 Task Decomposition Phase")
+        chunks = self._create_chunks(context) # Create chunks once
+        if not chunks and context: # If context exists but chunking failed or yielded no chunks
+             return "❌ **Error:** Context provided, but failed to create any processable chunks. Check chunk_size."
+        if not chunks and not context: # No context, no chunks
+            conversation_log.append("ℹ️ No context or chunks to process with MinionS. Attempting direct call.")
+            try:
+                final_response = await self._call_claude_directly(query)
+                output_parts = []
+                if self.valves.show_conversation:
+                    output_parts.append("## 🗣️ MinionS Collaboration (Direct Call)")
+                    output_parts.extend(conversation_log)
+                    output_parts.append("---")
+                output_parts.append(f"## 🎯 Final Answer (Direct)\n{final_response}")
+                # Simplified stats for direct call might be added here if desired
+                return "\n".join(output_parts)
+            except Exception as e:
+                return f"❌ **Error in direct Claude call:** {str(e)}"
 
-            # Step 1: Task decomposition by Claude
-            decomposition_prompt = f"""You are the acting supervisor in an agentic workflow. You are collaborating with a local AI assistant that has access to full context/documents, but you don't have direct access to them.
 
-Your goal: Answer this question: "{query}"
+        total_chunks_processed_for_stats = len(chunks)
 
-The local assistant can see this context (you cannot): [CONTEXT: {len(context)} characters of text including uploaded documents]
 
-Please ask the local assistant specific, focused questions to gather the information you need. Be direct and precise in your requests. Ask only what you need to answer the original question.
+        for current_round in range(self.valves.max_rounds):
+            conversation_log.append(f"### 🎯 Round {current_round + 1}/{self.valves.max_rounds} - Task Decomposition Phase")
             
-Break down this question into no more than {self.valves.max_tasks_per_round} simple, specific tasks. If tasks must happen **in sequence**, do **not** include them all in this round; move to a subsequent round to handle later steps.
+            decomposition_prompt = f'''You are a supervisor LLM in a multi-round process. Your goal is to answer: "{query}"
+Context has been split into {len(chunks)} chunks. A local LLM will process these chunks for each task you define.
+Scratchpad (previous findings): {scratchpad_content if scratchpad_content else "Nothing yet."}
 
-Create simple tasks that can be answered to help answer the User's question. Format as a simple list:
-1. [First specific task]
-2. [Second specific task] 
-3. [Third specific task]
-
-Keep tasks simple and focused on extracting specific information to help answer the larger query."""
+Based on the scratchpad and the original query, identify up to {self.valves.max_tasks_per_round} specific, simple tasks for the local assistant.
+If the information in the scratchpad is sufficient to answer the query, respond ONLY with the exact phrase "FINAL ANSWER READY." followed by the comprehensive answer.
+Otherwise, list the new tasks clearly. Ensure tasks are actionable. Avoid redundant tasks.
+Format tasks as a simple list (e.g., 1. Task A, 2. Task B).'''
+            decomposition_prompts_history.append(decomposition_prompt)
 
             try:
-                claude_response = await asyncio.wait_for(
-                    self._call_claude(decomposition_prompt), timeout=30.0
-                )
-                conversation_log.append(f"**🤖 Claude (Task Decomposition):**")
-                conversation_log.append(f"{claude_response}\n")
-            except asyncio.TimeoutError:
-                return "❌ **Error:** Task decomposition timed out. Try using the 'minion' protocol instead."
+                claude_response = await self._call_claude(decomposition_prompt)
+                conversation_log.append(f"**🤖 Claude (Decomposition - Round {current_round + 1}):**\n{claude_response}\n")
+            except Exception as e:
+                conversation_log.append(f"❌ Error calling Claude for decomposition in round {current_round + 1}: {e}")
+                break 
 
-            # Parse tasks
+            if "FINAL ANSWER READY." in claude_response:
+                final_response = claude_response.split("FINAL ANSWER READY.", 1)[1].strip()
+                claude_provided_final_answer = True
+                conversation_log.append(f"**🤖 Claude indicates final answer is ready in round {current_round + 1}.**")
+                scratchpad_content += f"\n\n**Round {current_round + 1}:** Claude provided final answer."
+                break 
+
             tasks = self._parse_tasks(claude_response)
-
-            if self.valves.debug_mode:
-                debug_log.append(f"**Parsed tasks:** {tasks}")
-
-            conversation_log.append("### ⚡ Parallel Execution Phase")
-
-            # Step 2: Execute tasks efficiently
-            chunks = self._create_chunks(context)
-
-            if self.valves.debug_mode:
-                debug_log.append(
-                    f"**Processing:** {len(chunks)} chunks of ~{self.valves.chunk_size} chars each"
-                )
-                debug_log.append(
-                    f"**Timeout setting:** {self.valves.timeout_local} seconds per chunk"
-                )
-
-            # Execute tasks in parallel across chunks
-            task_results = await self._execute_tasks_on_chunks(tasks, chunks, conversation_log)
-
-            # Check if we had too many timeouts
-            timeout_count = sum(1 for r in task_results if r["result"] == "Timeout")
-            if timeout_count >= len(tasks) * 2:
-                conversation_log.append(
-                    "\n⚠️ **Too many local model timeouts detected. Consider increasing timeout or using simpler models.**"
-                )
-
-            conversation_log.append("\n### 🔄 Synthesis Phase")
-
-            # Step 3: Synthesis
-            results_summary = "\n".join(
-                [f"- {r['task']}: {r['result']}" for r in task_results]
-            )
-
-            synthesis_prompt = f"""Combine these task results into a complete answer for: {query}
-
-RESULTS:
-{results_summary}
-
-Provide a clear, comprehensive answer based on the information found:"""
-
-            try:
-                final_response = await asyncio.wait_for(
-                    self._call_claude(synthesis_prompt), timeout=30.0
-                )
-                conversation_log.append(f"**🤖 Claude (Synthesis):**")
-                conversation_log.append(f"{final_response}")
-            except asyncio.TimeoutError:
-                final_response = (
-                    "Analysis completed, but synthesis timed out. Here are the key findings:\n\n"
-                    + results_summary
-                )
-
-            # Build output
-            output_parts = []
-
-            if self.valves.show_conversation:
-                output_parts.append("## 🗣️ MinionS Collaboration (Task Decomposition)")
-                output_parts.extend(conversation_log)
-                output_parts.append("---")
-
-            if self.valves.debug_mode:
-                output_parts.extend(debug_log)
-
-            output_parts.append(f"## 🎯 Final Answer")
-            output_parts.append(final_response)
-
-            # Calculate stats
-            stats = self._calculate_token_savings_minions(
-                decomposition_prompt, synthesis_prompt, results_summary, 
-                final_response, context, query
-            )
+            if not tasks:
+                conversation_log.append(f"**🤖 Claude provided no new tasks in round {current_round + 1}. Proceeding to final synthesis.**")
+                break
             
-            total_tasks = len(tasks)
-            successful_tasks = len(
-                [r for r in task_results if "not found" not in r["result"].lower() and r["result"] != "Timeout"]
-            )
+            total_tasks_executed_local += len(tasks)
+            if self.valves.debug_mode: debug_log.append(f"**Parsed tasks for round {current_round + 1}:** {tasks}")
 
-            output_parts.append(f"\n## 📊 MinionS Efficiency Stats")
-            output_parts.append(
-                f"- **Protocol:** MinionS (task decomposition + parallel processing)"
-            )
-            output_parts.append(
-                f"- **Tasks completed:** {successful_tasks}/{total_tasks}"
-            )
-            output_parts.append(f"- **Chunks processed:** {len(chunks)}")
-            output_parts.append(f"- **Timeouts encountered:** {timeout_count}")
-            output_parts.append(
-                f"- **Local model timeout setting:** {self.valves.timeout_local}s"
-            )
-            output_parts.append(f"- **Context size:** {len(context):,} characters")
-            output_parts.append(f"")
-            output_parts.append(
-                f"## 💰 Token Savings Analysis ({self.valves.remote_model})"
-            )
-            output_parts.append(
-                f"- **Traditional approach:** ~{stats['traditional_tokens']:,} tokens"
-            )
-            output_parts.append(f"- **MinionS approach:** ~{stats['minions_tokens']:,} tokens")
-            output_parts.append(f"- **💰 Token savings:** ~{stats['percentage_savings']:.1f}%")
+            conversation_log.append(f"### ⚡ Round {current_round + 1} - Parallel Execution Phase (Processing {len(chunks)} chunks for {len(tasks)} tasks)")
             
-            return "\n".join(output_parts)
+            current_round_task_results = await self._execute_tasks_on_chunks(tasks, chunks, conversation_log, current_round + 1)
+            
+            round_summary_for_scratchpad_parts = []
+            for r_idx, r_val in enumerate(current_round_task_results): # Use enumerate for unique keys if needed, or just iterate
+                if r_val['status'] == 'success': 
+                    round_summary_for_scratchpad_parts.append(f"- Task: {r_val['task']}, Result: {r_val['result'][:300]}...") 
+                elif r_val['status'] == 'not_found':
+                    round_summary_for_scratchpad_parts.append(f"- Task: {r_val['task']}, Result: Information not found.")
+                else: 
+                    round_summary_for_scratchpad_parts.append(f"- Task: {r_val['task']}, Result: {r_val['result']}.") 
+            
+            if round_summary_for_scratchpad_parts:
+                scratchpad_content += f"\n\n**Results from Round {current_round + 1}:**\n" + "\n".join(round_summary_for_scratchpad_parts)
+            
+            all_round_results_aggregated.extend(current_round_task_results) 
 
-        except Exception as e:
-            error_msg = f"❌ **MinionS Protocol Error:** {str(e)}\n\n"
-            error_msg += "**Consider using the basic Minion protocol instead.**\n"
-            return error_msg
+            if current_round == self.valves.max_rounds - 1: 
+                 conversation_log.append(f"**🏁 Reached max rounds ({self.valves.max_rounds}). Proceeding to final synthesis.**")
+
+
+        if not claude_provided_final_answer:
+            conversation_log.append("\n### 🔄 Final Synthesis Phase")
+            if not all_round_results_aggregated:
+                final_response = "No information was gathered from the document by local models across the rounds."
+                conversation_log.append(f"**🤖 Claude (Synthesis):** {final_response}")
+            else:
+                synthesis_input_summary = "\n".join([f"- Task: {r['task']}\n  Result: {r['result']}" for r in all_round_results_aggregated if r['status'] == 'success'])
+                if not synthesis_input_summary: 
+                    synthesis_input_summary = "No definitive information was found by local models. The original query was: " + query
+                
+                synthesis_prompt = f'''Based on all the information gathered across multiple rounds, provide a comprehensive answer to the original query: "{query}"
+
+GATHERED INFORMATION:
+{synthesis_input_summary if synthesis_input_summary else "No specific information was extracted by local models."}
+
+If the gathered information is insufficient, explain what's missing or state that the answer cannot be provided.
+Final Answer:'''
+                synthesis_prompts_history.append(synthesis_prompt)
+                try:
+                    final_response = await self._call_claude(synthesis_prompt)
+                    conversation_log.append(f"**🤖 Claude (Final Synthesis):**\n{final_response}")
+                except Exception as e:
+                    conversation_log.append(f"❌ Error during final synthesis: {e}")
+                    final_response = "Error during final synthesis. Raw findings might be available in conversation log."
+        
+        output_parts = []
+        if self.valves.show_conversation:
+            output_parts.append("## 🗣️ MinionS Collaboration (Multi-Round)")
+            output_parts.extend(conversation_log)
+            output_parts.append("---")
+        if self.valves.debug_mode:
+            output_parts.append("### 🔍 Debug Log")
+            output_parts.extend(debug_log)
+            output_parts.append("---")
+        output_parts.append(f"## 🎯 Final Answer")
+        output_parts.append(final_response)
+
+        summary_for_stats = synthesis_input_summary if not claude_provided_final_answer else scratchpad_content
+
+        stats = self._calculate_token_savings_minions(
+            decomposition_prompts_history, synthesis_prompts_history,
+            summary_for_stats, final_response, 
+            len(context), len(query), total_chunks_processed_for_stats, total_tasks_executed_local
+        )
+        
+        total_successful_tasks = len([r for r in all_round_results_aggregated if r['status'] == 'success'])
+        total_timeout_tasks = len([r for r in all_round_results_aggregated if 'timeout' in r['status']]) # Catches timeout_all_chunks
+
+        output_parts.append(f"\n## 📊 MinionS Efficiency Stats (v0.2.0)")
+        output_parts.append(f"- **Protocol:** MinionS (Multi-Round)")
+        output_parts.append(f"- **Rounds executed:** {stats['total_rounds']}/{self.valves.max_rounds}")
+        output_parts.append(f"- **Total tasks for local LLM:** {stats['total_tasks_executed_local']}")
+        output_parts.append(f"- **Successful tasks (local):** {total_successful_tasks}")
+        output_parts.append(f"- **Tasks with timeouts (local):** {total_timeout_tasks}") # Changed from "all chunks timed out"
+        output_parts.append(f"- **Chunks processed per task (local):** {stats['total_chunks_processed_local'] if stats['total_tasks_executed_local'] > 0 else 0}") # Avoid division by zero
+        output_parts.append(f"- **Context size:** {len(context):,} characters")
+        output_parts.append(f"\n## 💰 Token Savings Analysis (Claude: {self.valves.remote_model})")
+        output_parts.append(f"- **Traditional single call (est.):** ~{stats['traditional_tokens_claude']:,} tokens")
+        output_parts.append(f"- **MinionS multi-round (Claude only):** ~{stats['minions_tokens_claude']:,} tokens")
+        output_parts.append(f"- **💰 Est. Claude Token savings:** ~{stats['percentage_savings_claude']:.1f}%")
+            
+        return "\n".join(output_parts)
 
     def _parse_tasks(self, claude_response: str) -> List[str]:
-        """Parse tasks from Claude's decomposition response"""
         lines = claude_response.split("\n")
         tasks = []
         for line in lines:
             line = line.strip()
-            if any(
-                line.startswith(prefix)
-                for prefix in ["1.", "2.", "3.", "4.", "-", "*"]
-            ):
-                task = (
-                    line.split(".", 1)[-1].strip()
-                    if "." in line
-                    else line[1:].strip()
-                )
-                if len(task) > 10:
+            # More robust parsing for numbered or bulleted lists
+            if line.startswith(tuple(f"{i}." for i in range(1, 10))) or \
+               line.startswith(tuple(f"{i})" for i in range(1, 10))) or \
+               line.startswith(("- ", "* ", "+ ")):
+                task = line.split(None, 1)[1].strip() if len(line.split(None, 1)) > 1 else ""
+                if len(task) > 10: # Keep simple task filter
                     tasks.append(task)
-
-        # Fallback if parsing failed
-        if len(tasks) == 0:
-            tasks = [
-                "Extract key financial figures or metrics",
-                "Identify main points or conclusions",
-                "Find important names, dates, or specific details",
-            ]
-
-        # Limit to max tasks
         return tasks[:self.valves.max_tasks_per_round]
 
     def _create_chunks(self, context: str) -> List[str]:
-        """Create document chunks for parallel processing"""
-        chunk_size = min(len(context) // 2, self.valves.chunk_size)
+        if not context: return []
+        actual_chunk_size = max(1, min(self.valves.chunk_size, len(context)))
         chunks = [
-            context[i : i + chunk_size] 
-            for i in range(0, len(context), chunk_size)
+            context[i : i + actual_chunk_size] 
+            for i in range(0, len(context), actual_chunk_size)
         ]
-        return chunks[:self.valves.max_chunks]
+        return chunks
 
     async def _execute_tasks_on_chunks(
-        self, tasks: List[str], chunks: List[str], conversation_log: List[str]
+        self, tasks: List[str], chunks: List[str], conversation_log: List[str], current_round: int
     ) -> List[Dict[str, str]]:
-        """Execute tasks in parallel across document chunks"""
-        task_results = []
-
+        overall_task_results = []
         for task_idx, task in enumerate(tasks):
-            conversation_log.append(f"**📋 Task {task_idx + 1}:** {task}")
+            conversation_log.append(f"**📋 Task {task_idx + 1} (Round {current_round}):** {task}")
+            results_for_this_task_from_chunks = []
+            chunk_timeout_count_for_task = 0
+            num_relevant_chunks_found = 0
 
-            best_result = None
-
-            # Try chunks in order
             for chunk_idx, chunk in enumerate(chunks):
-                # Simplified prompt for faster processing
-                local_prompt = f"""Text to analyze:
-{chunk[:3000]}
+                local_prompt = f'''Text to analyze (Chunk {chunk_idx + 1}/{len(chunks)} of document):
+---BEGIN TEXT---
+{chunk}
+---END TEXT---
 
 Task: {task}
 
-Provide a brief, specific answer based on this text. If no relevant information, say "NONE"."""
+Provide a brief, specific answer based ONLY on the text provided above. If no relevant information is found in THIS SPECIFIC TEXT, respond with the single word "NONE".'''
 
                 try:
                     if self.valves.debug_mode:
                         conversation_log.append(
-                            f"   🔄 Trying chunk {chunk_idx + 1} (size: {len(chunk)} chars)..."
+                            f"   🔄 Task {task_idx + 1} - Trying chunk {chunk_idx + 1}/{len(chunks)} (size: {len(chunk)} chars)..."
                         )
-
                     result = await asyncio.wait_for(
                         self._call_ollama(local_prompt),
                         timeout=self.valves.timeout_local,
                     )
-
                     if self.valves.debug_mode:
                         conversation_log.append(
-                            f"   ✅ Chunk {chunk_idx + 1} completed: {result[:100]}..."
+                            f"   ✅ Task {task_idx + 1} - Chunk {chunk_idx + 1} completed: {result[:100]}..."
                         )
-
-                    if "NONE" not in result.upper() and len(result.strip()) > 5:
-                        best_result = result
-                        conversation_log.append(
-                            f"**💻 Local Model (chunk {chunk_idx + 1}):** {result[:150]}..."
-                        )
-                        break  # Found result, move to next task
-                    else:
-                        conversation_log.append(
-                            f"   ℹ️ Chunk {chunk_idx + 1}: No relevant info found"
-                        )
+                    if not (result.strip().upper() == "NONE" or len(result.strip()) < 5):
+                        results_for_this_task_from_chunks.append(f"[Chunk {chunk_idx+1}]: {result}")
+                        num_relevant_chunks_found += 1
+                        if self.valves.debug_mode: # Log individual finds only in debug
+                             conversation_log.append(
+                                f"   ℹ️ Task {task_idx + 1} - Chunk {chunk_idx + 1}: Relevant info found: {result[:100]}..."
+                            )
+                    # No separate log for "no info" in non-debug to reduce noise
                 except asyncio.TimeoutError:
+                    chunk_timeout_count_for_task +=1
                     conversation_log.append(
-                        f"   ⏰ Chunk {chunk_idx + 1} timed out after {self.valves.timeout_local}s"
+                        f"   ⏰ Task {task_idx + 1} - Chunk {chunk_idx + 1} timed out after {self.valves.timeout_local}s"
                     )
-                    continue
                 except Exception as e:
                     conversation_log.append(
-                        f"   ❌ Chunk {chunk_idx + 1} error: {str(e)}"
+                        f"   ❌ Task {task_idx + 1} - Chunk {chunk_idx + 1} error: {str(e)}"
                     )
-                    if self.valves.debug_mode:
-                        conversation_log.append(f"      Full error: {repr(e)}")
-                    continue
-
-            if best_result:
-                task_results.append({"task": task, "result": best_result})
-            else:
+            
+            if results_for_this_task_from_chunks:
+                aggregated_result_for_task = "\n".join(results_for_this_task_from_chunks)
+                overall_task_results.append({"task": task, "result": aggregated_result_for_task, "status": "success"})
                 conversation_log.append(
-                    f"**💻 Local Model:** No relevant information found"
+                    f"**💻 Local Model (Aggregated for Task {task_idx + 1}, Round {current_round}):** Found info in {num_relevant_chunks_found}/{len(chunks)} chunk(s). First result snippet: {results_for_this_task_from_chunks[0][:100]}..."
                 )
-                task_results.append(
-                    {"task": task, "result": "Information not found"}
+            elif chunk_timeout_count_for_task > 0 and chunk_timeout_count_for_task == len(chunks):
+                 overall_task_results.append({"task": task, "result": f"Timeout on all {len(chunks)} chunks", "status": "timeout_all_chunks"})
+                 conversation_log.append(
+                    f"**💻 Local Model (Task {task_idx + 1}, Round {current_round}):** All {len(chunks)} chunks timed out."
                 )
-
-        return task_results
+            else:
+                overall_task_results.append(
+                    {"task": task, "result": "Information not found in any relevant chunk", "status": "not_found"}
+                )
+                conversation_log.append(
+                    f"**💻 Local Model (Task {task_idx + 1}, Round {current_round}):** No relevant information found in any chunk."
+                )
+        return overall_task_results
 
     def _calculate_token_savings_minions(
-        self, decomposition_prompt: str, synthesis_prompt: str, 
-        results_summary: str, final_response: str, context: str, query: str
+        self, decomposition_prompts: List[str], synthesis_prompts: List[str],
+        all_results_summary_for_claude: str, final_response_claude: str, 
+        context_length: int, query_length: int, total_chunks_processed_local: int,
+        total_tasks_executed_local: int
     ) -> dict:
-        """Calculate token savings for the MinionS protocol"""
-        chars_per_token = 3.5
-        
-        # Get actual pricing for the model being used
-        model_pricing = self._get_model_pricing(self.valves.remote_model)
-        
-        # Traditional approach: entire context + query sent to Claude
-        traditional_tokens = int((len(context) + len(query)) / chars_per_token)
-        
-        # MinionS approach: only decomposition + synthesis prompts + results
-        decomposition_tokens = int(len(decomposition_prompt) / chars_per_token)
-        synthesis_content = synthesis_prompt + final_response + results_summary
-        synthesis_tokens = int(len(synthesis_content) / chars_per_token)
-        minions_tokens = decomposition_tokens + synthesis_tokens
-        
-        # Calculate savings
-        token_savings = traditional_tokens - minions_tokens
-        percentage_savings = (
-            (token_savings / traditional_tokens * 100)
-            if traditional_tokens > 0
-            else 0
-        )
+        chars_per_token = 3.5 
+        traditional_tokens = int((context_length + query_length) / chars_per_token)
+        minions_tokens_claude = 0
+        for p in decomposition_prompts:
+            minions_tokens_claude += int(len(p) / chars_per_token)
+        for p in synthesis_prompts:
+            minions_tokens_claude += int(len(p) / chars_per_token)
+        minions_tokens_claude += int(len(all_results_summary_for_claude) / chars_per_token)
+        minions_tokens_claude += int(len(final_response_claude) / chars_per_token)
+        token_savings = traditional_tokens - minions_tokens_claude
+        percentage_savings = (token_savings / traditional_tokens * 100) if traditional_tokens > 0 else 0
         
         return {
-            'traditional_tokens': traditional_tokens,
-            'minions_tokens': minions_tokens,
-            'token_savings': token_savings,
-            'percentage_savings': percentage_savings
+            'traditional_tokens_claude': traditional_tokens,
+            'minions_tokens_claude': minions_tokens_claude,
+            'token_savings_claude': token_savings,
+            'percentage_savings_claude': percentage_savings,
+            'total_rounds': len(decomposition_prompts),
+            'total_chunks_processed_local': total_chunks_processed_local,
+            'total_tasks_executed_local': total_tasks_executed_local,
         }
     
     async def _call_claude(self, prompt: str) -> str:
-        """Call Anthropic Claude API"""
         headers = {
             "x-api-key": self.valves.anthropic_api_key,
             "Content-Type": "application/json",
             "anthropic-version": "2023-06-01",
         }
-
         payload = {
             "model": self.valves.remote_model,
-            "max_tokens": 1000,
+            "max_tokens": self.valves.max_tokens_claude, 
             "temperature": 0.1,
             "messages": [{"role": "user", "content": prompt}],
         }
-
         async with aiohttp.ClientSession() as session:
             async with session.post(
-                "https://api.anthropic.com/v1/messages", headers=headers, json=payload
+                "https://api.anthropic.com/v1/messages", headers=headers, json=payload, timeout=self.valves.timeout_claude
             ) as response:
                 if response.status != 200:
                     error_text = await response.text()
-                    raise Exception(
-                        f"Anthropic API error: {response.status} - {error_text}"
-                    )
-
+                    raise Exception(f"Anthropic API error: {response.status} - {error_text}")
                 result = await response.json()
-
-                # Extract content from Anthropic's response format
-                if "content" in result and len(result["content"]) > 0:
+                if result.get("content") and isinstance(result["content"], list) and len(result["content"]) > 0 and result["content"][0].get("text"):
                     return result["content"][0]["text"]
                 else:
-                    raise Exception("Unexpected response format from Anthropic API")
+                    if self.valves.debug_mode: print(f"Unexpected Claude API response format: {result}")
+                    raise Exception("Unexpected response format from Anthropic API or empty content.")
 
     async def _call_ollama(self, prompt: str) -> str:
-        """Call Ollama API"""
         payload = {
             "model": self.valves.local_model,
             "prompt": prompt,
             "stream": False,
-            "options": {"temperature": 0.1, "num_predict": 1000},
+            "options": {"temperature": 0.1, "num_predict": self.valves.ollama_num_predict},
         }
-
         async with aiohttp.ClientSession() as session:
             async with session.post(
-                f"{self.valves.ollama_base_url}/api/generate", json=payload
+                f"{self.valves.ollama_base_url}/api/generate", json=payload, timeout=self.valves.timeout_local
             ) as response:
                 if response.status != 200:
                     error_text = await response.text()
-                    raise Exception(
-                        f"Ollama API error: {response.status} - {error_text}"
-                    )
-
+                    raise Exception(f"Ollama API error: {response.status} - {error_text}")
                 result = await response.json()
-                return result["response"]
+                if "response" in result:
+                    return result["response"].strip()
+                else:
+                    if self.valves.debug_mode: print(f"Unexpected Ollama API response format: {result}")
+                    raise Exception("Unexpected response format from Ollama API or no response field.")
 
     async def _call_claude_directly(self, query: str) -> str:
         """Fallback to direct Claude call when no context is available"""
