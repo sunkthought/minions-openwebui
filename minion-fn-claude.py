@@ -56,7 +56,7 @@ class Pipe:
         return [
             {
                 "id": "minion-claude",
-                "name": f"Minion ({self.valves.local_model} + {self.valves.remote_model})",
+                "name": f" ({self.valves.local_model} + {self.valves.remote_model})",
             }
         ]
 
