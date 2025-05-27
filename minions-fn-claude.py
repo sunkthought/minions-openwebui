@@ -11,10 +11,8 @@ required_open_webui_version: 0.5.0
 """
 
 import asyncio
-import json
-import os
 import aiohttp
-from typing import Optional, Dict, Any, List
+from typing import Dict, List
 from pydantic import BaseModel, Field
 from fastapi import Request # type: ignore
 
