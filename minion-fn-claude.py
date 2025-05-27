@@ -5,12 +5,13 @@ author_url: https://github.com/SunkThought/minions-openwebui
 original_author: Copyright (c) 2025 Sabri Eyuboglu, Avanika Narayan, Dan Biderman, and the rest of the Minions team (@HazyResearch wrote the original MinionS Protocol paper and code examples on github that spawned this)
 original_author_url: https://github.com/HazyResearch/
 funding_url: https://github.com/HazyResearch/minions
-version: 0.2.0
+version: 0.1.0
 description: Basic Minion protocol - conversational collaboration between local and cloud models
 required_open_webui_version: 0.5.0
 license: MIT License
 """
 
+import asyncio
 import aiohttp
 from typing import List
 from pydantic import BaseModel, Field
@@ -302,7 +303,7 @@ Please provide a helpful, accurate response based on the context you have access
 
         payload = {
             "model": self.valves.remote_model,
-            "max_tokens": 5000,
+            "max_tokens": self.valves.max_tokens_claude, # Using the valve
             "temperature": 0.1,
             "messages": [{"role": "user", "content": prompt}],
         }
@@ -320,7 +321,7 @@ Please provide a helpful, accurate response based on the context you have access
                 if result.get("content") and isinstance(result["content"], list) and len(result["content"]) > 0 and result["content"][0].get("text"):
                     return result["content"][0]["text"]
                 else:
-                    if self.valves.debug_mode: print(f"Unexpected Claude API response format: {result}") # Simple print for now
+                    if self.valves.debug_mode: print(f"Unexpected Claude API response format: {result}") 
                     raise Exception("Unexpected response format from Anthropic API or empty content.")
 
     async def _call_ollama(self, prompt: str) -> str:
@@ -329,7 +330,7 @@ Please provide a helpful, accurate response based on the context you have access
             "model": self.valves.local_model,
             "prompt": prompt,
             "stream": False,
-            "options": {"temperature": 0.1, "num_predict": self.valves.ollama_num_predict},
+            "options": {"temperature": 0.1, "num_predict": self.valves.ollama_num_predict}, # Using the valve
         }
 
         async with aiohttp.ClientSession() as session:
@@ -345,7 +346,7 @@ Please provide a helpful, accurate response based on the context you have access
                 if "response" in result:
                     return result["response"].strip()
                 else:
-                    if self.valves.debug_mode: print(f"Unexpected Ollama API response format: {result}") # Simple print for now
+                    if self.valves.debug_mode: print(f"Unexpected Ollama API response format: {result}")
                     raise Exception("Unexpected response format from Ollama API or no response field.")
 
     async def _call_claude_directly(self, query: str) -> str:
@@ -452,4 +453,4 @@ Please provide a helpful, accurate response based on the context you have access
     def _is_final_answer(self, response: str) -> bool:
         """Check if response contains the specific final answer marker."""
         return "FINAL ANSWER READY." in response
-    # take a bow 
+    # take a bow
