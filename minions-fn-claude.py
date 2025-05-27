@@ -308,22 +308,21 @@ Provide a clear, comprehensive answer based on the information found:"""
             context[i : i + chunk_size] 
             for i in range(0, len(context), chunk_size)
         ]
-        return chunks[:self.valves.max_chunks]
+        # The slicing by self.valves.max_chunks has been removed here
+        return chunks
 
     async def _execute_tasks_on_chunks(
         self, tasks: List[str], chunks: List[str], conversation_log: List[str]
     ) -> List[Dict[str, str]]:
-        """Execute tasks in parallel across document chunks"""
+        """Execute tasks by processing all relevant chunks for each task."""
         task_results = []
 
         for task_idx, task in enumerate(tasks):
             conversation_log.append(f"**📋 Task {task_idx + 1}:** {task}")
+            
+            accumulated_results_for_task = [] # Stores results from different chunks for the current task
 
-            best_result = None
-
-            # Try chunks in order
             for chunk_idx, chunk in enumerate(chunks):
-                # Simplified prompt for faster processing
                 local_prompt = f"""Text to analyze:
 {chunk[:3000]}
 
@@ -334,7 +333,7 @@ Provide a brief, specific answer based on this text. If no relevant information,
                 try:
                     if self.valves.debug_mode:
                         conversation_log.append(
-                            f"   🔄 Trying chunk {chunk_idx + 1} (size: {len(chunk)} chars)..."
+                            f"   🔄 Task '{task[:30]}...' on chunk {chunk_idx + 1}/{len(chunks)} (size: {len(chunk)} chars)..."
                         )
 
                     result = await asyncio.wait_for(
@@ -344,42 +343,48 @@ Provide a brief, specific answer based on this text. If no relevant information,
 
                     if self.valves.debug_mode:
                         conversation_log.append(
-                            f"   ✅ Chunk {chunk_idx + 1} completed: {result[:100]}..."
+                            f"   ✅ Chunk {chunk_idx + 1} for task '{task[:30]}...' completed: {result[:100]}..."
                         )
 
                     if "NONE" not in result.upper() and len(result.strip()) > 5:
-                        best_result = result
+                        accumulated_results_for_task.append(result)
                         conversation_log.append(
-                            f"**💻 Local Model (chunk {chunk_idx + 1}):** {result[:150]}..."
+                            f"**💻 Local Model (chunk {chunk_idx + 1} for task '{task[:30]}...'):** Found: {result[:150]}..."
                         )
-                        break  # Found result, move to next task
+                        # The 'break' statement has been removed here to process all chunks
                     else:
-                        conversation_log.append(
-                            f"   ℹ️ Chunk {chunk_idx + 1}: No relevant info found"
-                        )
+                        if self.valves.debug_mode: # Only log if no info found and in debug mode to reduce noise
+                            conversation_log.append(
+                                f"   ℹ️ Chunk {chunk_idx + 1} for task '{task[:30]}...': No relevant info found or result was 'NONE'."
+                            )
+
                 except asyncio.TimeoutError:
                     conversation_log.append(
-                        f"   ⏰ Chunk {chunk_idx + 1} timed out after {self.valves.timeout_local}s"
+                        f"   ⏰ Chunk {chunk_idx + 1} for task '{task[:30]}...' timed out after {self.valves.timeout_local}s"
                     )
-                    continue
+                    continue 
                 except Exception as e:
                     conversation_log.append(
-                        f"   ❌ Chunk {chunk_idx + 1} error: {str(e)}"
+                        f"   ❌ Chunk {chunk_idx + 1} for task '{task[:30]}...' error: {str(e)}"
                     )
                     if self.valves.debug_mode:
                         conversation_log.append(f"      Full error: {repr(e)}")
                     continue
-
-            if best_result:
-                task_results.append({"task": task, "result": best_result})
+            
+            # After processing all chunks for the current task
+            if accumulated_results_for_task:
+                final_task_result = "\n\n---\n\n".join(accumulated_results_for_task) # Join results with a clear separator
+                task_results.append({"task": task, "result": final_task_result})
+                conversation_log.append(
+                    f"✅ Task '{task[:30]}...' completed. Aggregated results from {len(accumulated_results_for_task)} chunk(s)."
+                )
             else:
                 conversation_log.append(
-                    f"**💻 Local Model:** No relevant information found"
+                    f"**💻 Local Model:** No relevant information found for task '{task[:30]}...' after checking all {len(chunks)} chunk(s)."
                 )
                 task_results.append(
                     {"task": task, "result": "Information not found"}
                 )
-
         return task_results
 
     def _calculate_token_savings_minions(
