@@ -415,46 +415,9 @@ Provide a brief, specific answer based on this text. If no relevant information,
             'traditional_tokens': traditional_tokens,
             'minions_tokens': minions_tokens,
             'token_savings': token_savings,
-            'percentage_savings': percentage_savings,
-            'model_pricing': model_pricing
+            'percentage_savings': percentage_savings
         }
-
-    def _get_model_pricing(self, model_name: str) -> dict:
-        """Get actual Anthropic pricing for the specified model"""
-        # Current Anthropic pricing as of 2025 (per million tokens)
-        pricing_map = {
-            # Claude 4 models
-            "claude-4-opus": {"input": 15.00, "output": 75.00},
-            "claude-4-sonnet": {"input": 3.00, "output": 15.00},
-            # Claude 3.7 models
-            "claude-3-7-sonnet": {"input": 3.00, "output": 15.00},
-            "claude-3.7-sonnet": {"input": 3.00, "output": 15.00},
-            # Claude 3.5 models
-            "claude-3-5-sonnet": {"input": 3.00, "output": 15.00},
-            "claude-3-5-sonnet-20241022": {"input": 3.00, "output": 15.00},
-            "claude-3-5-haiku": {"input": 0.25, "output": 1.25},
-            "claude-3-5-haiku-20241022": {"input": 0.25, "output": 1.25},
-            # Claude 3 models (legacy)
-            "claude-3-opus": {"input": 15.00, "output": 75.00},
-            "claude-3-opus-20240229": {"input": 15.00, "output": 75.00},
-            "claude-3-sonnet": {"input": 3.00, "output": 15.00},
-            "claude-3-sonnet-20240229": {"input": 3.00, "output": 15.00},
-            "claude-3-haiku": {"input": 0.25, "output": 1.25},
-            "claude-3-haiku-20240307": {"input": 0.25, "output": 1.25},
-        }
-
-        # Check for exact match first
-        if model_name in pricing_map:
-            return pricing_map[model_name]
-
-        # Check for partial matches (in case of version suffixes)
-        for model_key in pricing_map:
-            if model_name.startswith(model_key) or model_key in model_name:
-                return pricing_map[model_key]
-
-        # Default to Haiku pricing if model not found
-        return {"input": 0.25, "output": 1.25}
-
+    
     async def _call_claude(self, prompt: str) -> str:
         """Call Anthropic Claude API"""
         headers = {
