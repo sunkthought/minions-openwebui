@@ -13,9 +13,17 @@ license: MIT License
 
 import asyncio
 import aiohttp
-from typing import List
+import json # ADDED for schema serialization in prompt
+from typing import List, Optional, Dict # MODIFIED (added Dict)
 from pydantic import BaseModel, Field
 from fastapi import Request # type: ignore
+
+class LocalAssistantResponse(BaseModel):
+    """Structured response format for local assistant in Minion protocol"""
+    answer: str = Field(description="The main response to the question")
+    confidence: str = Field(description="HIGH, MEDIUM, or LOW confidence in the answer")
+    key_points: Optional[List[str]] = Field(default=None, description="Key points extracted from context")
+    citations: Optional[List[str]] = Field(default=None, description="Direct quotes supporting the answer")
 
 class Pipe:
     class Valves(BaseModel):
@@ -50,6 +58,10 @@ class Pipe:
         )
         ollama_num_predict: int = Field(
             default=1000, description="num_predict for Ollama generation (max output tokens for local model)."
+        )
+        use_structured_output: bool = Field(
+            default=False, 
+            description="Use JSON structured output for local model responses (requires local model support)"
         )
         debug_mode: bool = Field(
             default=False, description="Show additional technical details"
@@ -209,12 +221,23 @@ CONTEXT:
 {context}
 ORIGINAL QUESTION: {query}
 CLAUDE'S REQUEST: {claude_response}
-Please provide a helpful, accurate response based on the context you have access to. Extract relevant information that answers Claude's specific question. Be concise but thorough."""
+Please provide a helpful, accurate response based on the context you have access to. Extract relevant information that answers Claude's specific question. Be concise but thorough.
+If you are instructed to provide a JSON response (e.g., by a schema appended to this prompt), ensure your entire response is ONLY that valid JSON object, without any surrounding text, explanations, or markdown formatting like ```json ... ```."""
+        # The schema itself will be appended by _call_ollama if structured output is enabled and a schema is provided.
             
-            local_response = ""
+            local_response_str = "" # Renamed from local_response
             try:
                 if self.valves.debug_mode: start_time_ollama = asyncio.get_event_loop().time()
-                local_response = await self._call_ollama(local_prompt)
+                # MODIFIED: Call _call_ollama with new parameters
+                local_response_str = await self._call_ollama(
+                    local_prompt,
+                    use_json=True, # Enable JSON mode in Ollama if valve is on
+                    schema=LocalAssistantResponse # Provide the schema model
+                )
+                local_response_data = self._parse_local_response(
+                    local_response_str,
+                    is_structured=True # Indicate that structured parsing should be attempted
+                )
                 if self.valves.debug_mode:
                     end_time_ollama = asyncio.get_event_loop().time()
                     time_taken_ollama = end_time_ollama - start_time_ollama
@@ -226,10 +249,27 @@ Please provide a helpful, accurate response based on the context you have access
                 actual_final_answer = "Minion protocol failed due to Local LLM API error."
                 break 
 
-            conversation_history.append(("user", local_response))
+            response_for_claude = local_response_data.get("answer", "Error: Could not extract answer from local LLM.")
+            if self.valves.use_structured_output and local_response_data.get("parse_error") and self.valves.debug_mode:
+                response_for_claude += f" (Local LLM response parse error: {local_response_data['parse_error']})"
+            elif not local_response_data.get("answer") and not local_response_data.get("parse_error"): # handles cases where answer might be missing from dict
+                 response_for_claude = "Local LLM provided no answer."
+
+            conversation_history.append(("user", response_for_claude))
             if self.valves.show_conversation:
                 conversation_log.append(f"**💻 Local Model ({self.valves.local_model}):**")
-                conversation_log.append(f"{local_response}\n")
+                if self.valves.use_structured_output and local_response_data.get("parse_error") is None:
+                    # Successfully parsed structured output
+                    # Ensure json is imported for dumps
+                    conversation_log.append(f"```json\n{json.dumps(local_response_data, indent=2)}\n```")
+                elif self.valves.use_structured_output and local_response_data.get("parse_error"):
+                    # Attempted structured output but failed
+                    conversation_log.append(f"Attempted structured output, but failed. Raw response:\n{local_response_data.get('answer', 'Error displaying local response.')}")
+                    conversation_log.append(f"(Parse Error: {local_response_data['parse_error']})")
+                else:
+                    # Plain text output (use_structured_output is False)
+                    conversation_log.append(f"{local_response_data.get('answer', 'Error displaying local response.')}")
+                conversation_log.append("\n") # Original newline
 
             if self.valves.debug_mode:
                 current_cumulative_time = asyncio.get_event_loop().time() - overall_start_time
@@ -337,14 +377,25 @@ Please provide a helpful, accurate response based on the context you have access
                     if self.valves.debug_mode: print(f"Unexpected Claude API response format: {result}") 
                     raise Exception("Unexpected response format from Anthropic API or empty content.")
 
-    async def _call_ollama(self, prompt: str) -> str:
+    async def _call_ollama(self, prompt: str, use_json: bool = False, schema: Optional[BaseModel] = None) -> str:
         """Call Ollama API"""
+        # Existing payload setup
         payload = {
             "model": self.valves.local_model,
-            "prompt": prompt,
+            "prompt": prompt, # Original prompt
             "stream": False,
-            "options": {"temperature": 0.1, "num_predict": self.valves.ollama_num_predict}, # Using the valve
+            "options": {"temperature": 0.1, "num_predict": self.valves.ollama_num_predict},
         }
+
+        if use_json and self.valves.use_structured_output and schema:
+            payload["format"] = "json"
+            # Add schema to prompt for models that support it
+            # Ensure json is imported at the top of the file
+            schema_for_prompt = schema.schema_json() # Pydantic v1
+            schema_prompt_addition = f"\n\nRespond ONLY with valid JSON matching this schema:\n{schema_for_prompt}"
+            payload["prompt"] = prompt + schema_prompt_addition # Append schema to original prompt
+        elif "format" in payload: # Clean up if not using JSON format
+            del payload["format"]
 
         async with aiohttp.ClientSession() as session:
             async with session.post(
@@ -467,4 +518,24 @@ Please provide a helpful, accurate response based on the context you have access
     def _is_final_answer(self, response: str) -> bool:
         """Check if response contains the specific final answer marker."""
         return "FINAL ANSWER READY." in response
+
+    def _parse_local_response(self, response: str, is_structured: bool = False) -> Dict:
+        """Parse local model response, supporting both text and structured formats."""
+        if is_structured and self.valves.use_structured_output:
+            try:
+                # Ensure json is imported at the top of the file for json.loads
+                parsed_json = json.loads(response)
+                validated_model = LocalAssistantResponse(**parsed_json)
+                # Add a 'parse_error': None field for consistency
+                model_dict = validated_model.dict() # Pydantic v1
+                model_dict['parse_error'] = None
+                return model_dict
+            except Exception as e:
+                if self.valves.debug_mode:
+                    print(f"DEBUG: Failed to parse structured output in Minion: {e}. Response was: {response[:500]}")
+                # Fallback for parsing failure
+                return {"answer": response, "confidence": "LOW", "key_points": None, "citations": None, "parse_error": str(e)}
+        
+        # Fallback for non-structured processing or when use_structured_output is False
+        return {"answer": response, "confidence": "MEDIUM", "key_points": None, "citations": None, "parse_error": None}
     # take a bow
