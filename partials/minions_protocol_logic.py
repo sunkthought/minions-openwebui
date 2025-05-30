@@ -1,39 +1,20 @@
 import asyncio
 import json
-from typing import List, Optional, Dict, Any, Callable, Awaitable
+from typing import List, Dict, Any, Callable # Removed Optional, Awaitable
 
-def parse_tasks(claude_response: str, max_tasks: int) -> List[str]:
-    """Parse tasks from Claude's response"""
-    lines = claude_response.split("\n")
-    tasks = []
-    for line in lines:
-        line = line.strip()
-        # More robust parsing for numbered or bulleted lists
-        if line.startswith(tuple(f"{i}." for i in range(1, 10))) or \
-           line.startswith(tuple(f"{i})" for i in range(1, 10))) or \
-           line.startswith(("- ", "* ", "+ ")):
-            task = line.split(None, 1)[1].strip() if len(line.split(None, 1)) > 1 else ""
-            if len(task) > 10:  # Keep simple task filter
-                tasks.append(task)
-    return tasks[:max_tasks]
+# Unused import: from .common_file_processing import create_chunks
+from .minions_prompts import get_minions_local_task_prompt
 
-def create_chunks(context: str, chunk_size: int, max_chunks: int) -> List[str]:
-    """Create chunks from context"""
-    if not context:
-        return []
-    actual_chunk_size = max(1, min(chunk_size, len(context)))
-    chunks = [
-        context[i : i + actual_chunk_size]
-        for i in range(0, len(context), actual_chunk_size)
-    ]
-    return chunks[:max_chunks] if max_chunks > 0 else chunks
+# parse_tasks function removed, will be part of minions_decomposition_logic.py
 
-def parse_local_response(response: str, is_structured: bool, use_structured_output: bool, debug_mode: bool) -> Dict:
+# Removed create_chunks function from here
+
+def parse_local_response(response: str, is_structured: bool, use_structured_output: bool, debug_mode: bool, TaskResultModel: Any) -> Dict: # Added TaskResultModel param
     """Parse local model response, supporting both text and structured formats"""
     if is_structured and use_structured_output:
         try:
             parsed_json = json.loads(response)
-            validated_model = TaskResult(**parsed_json)
+            validated_model = TaskResultModel(**parsed_json) # Use TaskResultModel
             model_dict = validated_model.dict()
             model_dict['parse_error'] = None
             # Check if the structured response indicates "not found" via its 'answer' field
@@ -75,17 +56,15 @@ async def execute_tasks_on_chunks(
 
         for chunk_idx, chunk in enumerate(chunks):
             total_attempts_this_call += 1
-            local_prompt = f'''Text to analyze (Chunk {chunk_idx + 1}/{len(chunks)} of document):
----BEGIN TEXT---
-{chunk}
----END TEXT---
-
-Task: {task}'''
-
-            if valves.use_structured_output:
-                local_prompt += f"\n\nProvide your answer ONLY as a valid JSON object matching the specified schema. If no relevant information is found in THIS SPECIFIC TEXT, ensure the 'answer' field in your JSON response is explicitly set to null (or None)."
-            else:
-                local_prompt += "\n\nProvide a brief, specific answer based ONLY on the text provided above. If no relevant information is found in THIS SPECIFIC TEXT, respond with the single word \"NONE\"."
+            
+            # Call the new function for local task prompt
+            local_prompt = get_minions_local_task_prompt(
+                chunk=chunk,
+                task=task,
+                chunk_idx=chunk_idx,
+                total_chunks=len(chunks),
+                valves=valves
+            )
             
             start_time_ollama = 0
             if valves.debug_mode:
@@ -108,7 +87,8 @@ Task: {task}'''
                     response_str,
                     is_structured=True,
                     use_structured_output=valves.use_structured_output,
-                    debug_mode=valves.debug_mode
+                    debug_mode=valves.debug_mode,
+                    TaskResultModel=TaskResult # Pass TaskResult to parse_local_response
                 )
                 
                 if valves.debug_mode:
