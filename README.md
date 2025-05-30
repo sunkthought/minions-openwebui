@@ -19,7 +19,7 @@ Key concepts include:
 This approach aims to improve efficiency, reduce costs, and enhance AI capabilities by combining the strengths of different models, especially for querying large documents or codebases.
 
 **Learn More:**
-*   **Original Research Paper**: [MinionS: A Protocol for Scalable and Cost-Effective AI Collaboration (PDF)](https://arxiv.org/pdf/2502.15964) *(Note: Please verify this link as the publication date appears to be in the future. The foundational concepts are from HazyResearch.)*
+*   **Original Research Paper**: [MinionS: A Protocol for Scalable and Cost-Effective AI Collaboration (PDF)](https://arxiv.org/pdf/2502.15964)
 *   **HazyResearch GitHub Repository**: [github.com/HazyResearch/minions](https://github.com/HazyResearch/minions)
 
 ## Minion/MinionS for Open WebUI
