@@ -1,23 +1,8 @@
 import asyncio
 import json
-from typing import List, Optional, Dict, Any, Tuple
+from typing import List, Optional, Dict, Any, Tuple, Callable
 
-# Placeholder for actual Valves type from minion_valves.py
-# from .minion_valves import MinionValves as ValvesType
-ValvesType = Any 
-
-# Placeholder for actual LocalAssistantResponse model from minion_models.py
-# from .minion_models import LocalAssistantResponse
-class LocalAssistantResponseModel(Dict): # Basic Dict as placeholder
-    pass
-
-# Placeholder for API call functions from common_api_calls.py
-# async def call_claude(valves: ValvesType, prompt: str) -> str: ...
-# async def call_ollama(valves: ValvesType, prompt: str, use_json: bool, schema: Optional[Any]) -> str: ...
-
-# NOTE: _calculate_token_savings_for_minion was moved to partials/minion_token_savings.py
-# and renamed to calculate_minion_token_savings.
-# The execute_minion_protocol function below will expect it to be imported/available.
+# All code is self-contained, no external imports needed
 
 def build_minion_conversation_context(
     history: List[Tuple[str, str]], 
@@ -54,7 +39,7 @@ def is_minion_final_answer(response: str) -> bool:
 
 def parse_minion_local_response(
     response_text: str, 
-    valves: ValvesType, # For debug_mode and use_structured_output flags
+    valves: Any, # For debug_mode and use_structured_output flags
     is_structured: bool = False,
     response_model: Optional[Any] = None # e.g., LocalAssistantResponse from minion_models
 ) -> Dict[str, Any]:
@@ -85,12 +70,12 @@ def parse_minion_local_response(
     return {"answer": response_text, "confidence": "MEDIUM", "key_points": None, "citations": None, "parse_error": None}
 
 async def execute_minion_protocol(
-    valves: ValvesType,
+    valves: Any,
     query: str,
     context: str,
     # These would be imported or passed if this function calls them:
-    call_claude_func: Any, # Placeholder for common_api_calls.call_claude
-    call_ollama_func: Any, # Placeholder for common_api_calls.call_ollama
+    call_claude_func: Callable, # Placeholder for common_api_calls.call_claude
+    call_ollama_func: Callable, # Placeholder for common_api_calls.call_ollama
     local_assistant_response_model: Any, # Placeholder for minion_models.LocalAssistantResponse
     calculate_minion_token_savings_func: Callable[..., Dict[str, Any]] # Added new parameter
 ) -> str:
@@ -261,7 +246,7 @@ If you are instructed to provide a JSON response (e.g., by a schema appended to 
     output_parts.append(f"- **Conversation rounds:** {len(conversation_history) // 2}") # Each round has assistant and user message
     output_parts.append(f"- **Context size:** {len(context):,} characters")
     output_parts.append(f"")
-    output_parts.append(f"## 💰 Token Savings Analysis ({valves.remote_model})") # type: ignore
+    output_parts.append(f"## 💰 Token Savings Analysis ({valves.remote_model})") 
     output_parts.append(f"- **Traditional approach:** ~{stats.get('traditional_tokens', 0):,} tokens")
     output_parts.append(f"- **Minion approach:** ~{stats.get('minion_tokens', 0):,} tokens")
     output_parts.append(f"- **💰 Token Savings:** ~{stats.get('percentage_savings', 0.0):.1f}%")

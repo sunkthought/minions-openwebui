@@ -1,35 +1,8 @@
 import traceback
 from typing import List, Dict, Any, Callable, Awaitable
 
-# Placeholder for actual Valves type (e.g., from .minions_valves import MinionsValves)
-ValvesType = Any 
-# Placeholder for actual TaskResult model (e.g., from .minions_models import TaskResult)
-TaskResultModelType = Any
-
-# Define a more specific type for the 'self' object if possible,
-# to hint at available methods and 'valves' attribute for MinionS.
-class MinionsPipeInstance:
-    valves: ValvesType
-    # Context extraction methods (placeholders for functions from common_context_utils)
-    extract_context_from_messages: Callable[[List[Dict[str, Any]]], str]
-    extract_context_from_files: Callable[[ValvesType, List[Dict[str, Any]]], Awaitable[str]]
-    # Protocol execution method (placeholder for function from minions_protocol_logic)
-    execute_minions_protocol: Callable[..., Awaitable[str]] # Args: valves, query, context, api_calls, models, logic_helpers
-    # API call function (placeholder for function from common_api_calls)
-    call_claude_api: Callable[[ValvesType, str], Awaitable[str]]
-    call_ollama_api: Callable # Placeholder
-    # Models
-    task_result_model: TaskResultModelType
-    # Protocol logic helpers (placeholders for functions from minions_protocol_logic)
-    parse_tasks_func: Callable
-    create_chunks_func: Callable
-    execute_tasks_on_chunks_func: Callable
-    parse_local_response_func: Callable
-    calculate_token_savings_func: Callable
-
-
 async def _call_claude_directly_minions_helper(
-    pipe_self: MinionsPipeInstance, # Provides access to self.valves and call_claude_api
+    pipe_self: Any, # Provides access to self.valves and call_claude_api
     query: str
 ) -> str:
     """
@@ -39,7 +12,7 @@ async def _call_claude_directly_minions_helper(
     return await pipe_self.call_claude_api(pipe_self.valves, f"Please answer this question: {query}")
 
 async def minions_pipe(
-    self: MinionsPipeInstance, # Instance of the specific MinionS Pipe class
+    self: Any, # Instance of the specific MinionS Pipe class
     body: Dict[str, Any],
     __user__: Dict[str, Any], 
     __request__: Any, # fastapi.Request, type hinted as Any
@@ -52,7 +25,7 @@ async def minions_pipe(
     and access to helper functions for context extraction, protocol execution, etc.
     """
     try:
-        if not self.valves.anthropic_api_key: # type: ignore
+        if not self.valves.anthropic_api_key:
             return "❌ **Error:** Please configure your Anthropic API key in the function settings."
 
         messages = body.get("messages", [])
@@ -65,8 +38,10 @@ async def minions_pipe(
         context_from_files = await self.extract_context_from_files(self.valves, __files__)
 
         all_context_parts = []
-        if context_from_messages: all_context_parts.append(f"=== CONVERSATION CONTEXT ===\n{context_from_messages}")
-        if context_from_files: all_context_parts.append(f"=== UPLOADED DOCUMENTS ===\n{context_from_files}")
+        if context_from_messages: 
+            all_context_parts.append(f"=== CONVERSATION CONTEXT ===\n{context_from_messages}")
+        if context_from_files: 
+            all_context_parts.append(f"=== UPLOADED DOCUMENTS ===\n{context_from_files}")
         context = "\n\n".join(all_context_parts) if all_context_parts else ""
 
         if not context:
@@ -94,5 +69,5 @@ async def minions_pipe(
         return result
 
     except Exception as e:
-        error_details = traceback.format_exc() if (hasattr(self.valves, 'debug_mode') and self.valves.debug_mode) else str(e) # type: ignore
+        error_details = traceback.format_exc() if (hasattr(self.valves, 'debug_mode') and self.valves.debug_mode) else str(e)
         return f"❌ **Error in MinionS protocol:** {error_details}"
