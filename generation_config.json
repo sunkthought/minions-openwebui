@@ -1,0 +1,91 @@
+{
+  "minion_default": {
+    "description": "Default Minion function using Claude for conversational collaboration.",
+    "output_filename_template": "{profile_name}_function.py",
+    "target_pipe_class_name": "MinionPipe",
+    "target_pipe_name_in_init": "Minion v0.3.0",
+    "target_pipe_id_in_init": "minion-claude-generated",
+    "header_placeholders": {
+      "TITLE": "Minion Protocol Integration for Open WebUI (Generated)",
+      "AUTHOR": "Wil Everts and the @SunkThought team (Generated)",
+      "VERSION": "0.3.0",
+      "DESCRIPTION": "Basic Minion protocol - conversational collaboration between local and remote models.",
+      "REQUIRED_OPEN_WEBUI_VERSION": "0.5.0"
+    },
+    "partials_concat_order": [
+      "common_header.py",
+      "common_imports.py",
+      "minion_models.py",
+      "minion_valves.py",
+      "common_api_calls.py",
+      "common_context_utils.py",
+      "minion_token_savings.py",
+      "minion_protocol_logic.py",
+      "common_pipe_utils.py",
+      "minion_pipe_method.py"
+    ],
+    "specific_imports_map": {
+      "LocalAssistantResponse": "minion_models",
+      "MinionValves": "minion_valves",
+      "calculate_minion_token_savings": "minion_token_savings",
+      "execute_minion_protocol": "minion_protocol_logic",
+      "build_minion_conversation_context": "minion_protocol_logic",
+      "is_minion_final_answer": "minion_protocol_logic",
+      "parse_minion_local_response": "minion_protocol_logic",
+      "minion_pipe": "minion_pipe_method"
+    },
+    "execute_protocol_dependencies_map": {
+      "call_claude_func": "call_claude",
+      "call_ollama_func": "call_ollama",
+      "local_assistant_response_model": "LocalAssistantResponse",
+      "calculate_minion_token_savings_func": "calculate_minion_token_savings"
+    }
+  },
+  "minions_default": {
+    "description": "Default MinionS function using Claude for task decomposition.",
+    "output_filename_template": "{profile_name}_function.py",
+    "target_pipe_class_name": "MinionsPipe",
+    "target_pipe_name_in_init": "MinionS v0.3.0",
+    "target_pipe_id_in_init": "minions-claude-generated",
+    "header_placeholders": {
+      "TITLE": "MinionS Protocol Integration for Open WebUI (Generated)",
+      "AUTHOR": "Wil Everts and the @SunkThought team (Generated)",
+      "VERSION": "0.3.0",
+      "DESCRIPTION": "MinionS protocol - task decomposition and parallel processing between local and cloud models.",
+      "REQUIRED_OPEN_WEBUI_VERSION": "0.5.0"
+    },
+    "partials_concat_order": [
+      "common_header.py",
+      "common_imports.py",
+      "minions_models.py",
+      "minions_valves.py",
+      "common_api_calls.py",
+      "common_context_utils.py",
+      "minions_token_savings.py",
+      "minions_protocol_logic.py",
+      "common_pipe_utils.py",
+      "minions_pipe_method.py"
+    ],
+    "specific_imports_map": {
+      "TaskResult": "minions_models",
+      "MinionsValves": "minions_valves",
+      "calculate_minions_token_savings": "minions_token_savings",
+      "execute_minions_protocol": "minions_protocol_logic",
+      "parse_minions_tasks": "minions_protocol_logic",
+      "create_minions_chunks": "minions_protocol_logic",
+      "execute_minions_tasks_on_chunks": "minions_protocol_logic",
+      "parse_minions_local_response": "minions_protocol_logic",
+      "minions_pipe": "minions_pipe_method"
+    },
+    "execute_protocol_dependencies_map": {
+      "call_claude_func": "call_claude",
+      "call_ollama_func": "call_ollama",
+      "task_result_model": "TaskResult",
+      "calculate_token_savings_func": "calculate_minions_token_savings",
+      "parse_tasks_func": "parse_minions_tasks",
+      "create_chunks_func": "create_minions_chunks",
+      "execute_tasks_on_chunks_func": "execute_minions_tasks_on_chunks",
+      "parse_local_response_func": "parse_minions_local_response"
+    }
+  }
+}

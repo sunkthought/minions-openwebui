@@ -191,38 +191,7 @@ Task: {task}'''
         "total_chunk_processing_timeouts": total_chunk_processing_timeouts
     }
 
-def calculate_minions_token_savings(
-    valves: ValvesType,
-    decomposition_prompts: List[str], 
-    synthesis_prompts: List[str],
-    all_results_summary_for_claude: str, 
-    final_response_claude: str, 
-    context_length: int, 
-    query_length: int
-    # total_chunks_processed_local and total_tasks_executed_local are more for operational stats, not direct token cost of Claude
-) -> Dict[str, Any]:
-    """Calculates token savings for the MinionS protocol, focusing on remote model calls."""
-    chars_per_token = 3.5 
-    traditional_tokens_claude = int((context_length + query_length) / chars_per_token)
-    
-    minions_tokens_claude = 0
-    for p_list in [decomposition_prompts, synthesis_prompts]:
-        for p_content in p_list:
-            minions_tokens_claude += int(len(p_content) / chars_per_token)
-            
-    minions_tokens_claude += int(len(all_results_summary_for_claude) / chars_per_token)
-    minions_tokens_claude += int(len(final_response_claude) / chars_per_token)
-    
-    token_savings_claude = traditional_tokens_claude - minions_tokens_claude
-    percentage_savings_claude = (token_savings_claude / traditional_tokens_claude * 100) if traditional_tokens_claude > 0 else 0
-    
-    return {
-        'traditional_tokens_claude': traditional_tokens_claude,
-        'minions_tokens_claude': minions_tokens_claude,
-        'token_savings_claude': token_savings_claude,
-        'percentage_savings_claude': percentage_savings_claude,
-        'total_decomposition_rounds': len(decomposition_prompts)
-    }
+# calculate_minions_token_savings has been moved to partials/minions_token_savings.py
 
 async def execute_minions_protocol(
     valves: ValvesType,
@@ -236,7 +205,8 @@ async def execute_minions_protocol(
     create_chunks_func: Callable[[ValvesType, str], List[str]],
     execute_tasks_on_chunks_func: Callable[..., Awaitable[Dict[str, Any]]],
     parse_local_response_func: Callable[..., Dict[str, Any]],
-    calculate_token_savings_func: Callable[..., Dict[str, Any]]
+    # calculate_token_savings_func parameter is already here from the previous step, no change needed to signature.
+    calculate_token_savings_func: Callable[..., Dict[str, Any]] 
 ) -> str:
     """Executes the MinionS (multi-task, multi-round) protocol."""
     conversation_log: List[str] = []
@@ -386,11 +356,15 @@ Final Answer:'''
     output_parts.append(f"## 🎯 Final Answer")
     output_parts.append(final_answer)
 
+    # Call site for calculate_token_savings_func, arguments adjusted based on the new standalone function
     stats = calculate_token_savings_func(
-        valves, decomposition_prompts_history, synthesis_prompts_history,
-        scratchpad_content, # Using scratchpad as summary for Claude if it provided final answer early
+        decomposition_prompts_history, 
+        synthesis_prompts_history,
+        scratchpad_content, 
         final_answer, 
-        len(context), len(query)
+        len(context), 
+        len(query)
+        # removed 'valves' as it's not in the new function's signature
     )
     
     successful_local_tasks = len([r for r in all_round_results_aggregated if r['status'] == 'success'])
