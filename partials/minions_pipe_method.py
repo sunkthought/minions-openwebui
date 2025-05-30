@@ -1,14 +1,28 @@
-async def _call_claude_directly(valves: Any, query: str, call_claude: Callable) -> str:
+import asyncio
+from typing import Any, List, Callable, Dict # Added Dict
+from fastapi import Request # Added Request
+
+from .common_api_calls import call_claude, call_ollama
+# create_chunks removed from this import, execute_tasks_on_chunks, calculate_token_savings remain
+from .minions_protocol_logic import execute_tasks_on_chunks, calculate_token_savings 
+from .common_file_processing import create_chunks # Added direct import for create_chunks
+from .minions_models import TaskResult
+from .common_context_utils import extract_context_from_messages, extract_context_from_files
+from .minions_decomposition_logic import decompose_task # Removed duplicate
+from .minions_prompts import get_minions_synthesis_claude_prompt
+
+
+async def _call_claude_directly(valves: Any, query: str, call_claude_func: Callable) -> str: # Renamed call_claude to call_claude_func for clarity
     """Fallback to direct Claude call when no context is available"""
-    return await call_claude(valves, f"Please answer this question: {query}")
+    return await call_claude_func(valves, f"Please answer this question: {query}")
 
 async def _execute_minions_protocol(
     valves: Any,
     query: str,
     context: str,
     call_claude: Callable,
-    call_ollama: Callable,
-    TaskResult: Any
+    call_ollama_func: Callable, # Renamed call_ollama to call_ollama_func for clarity
+    TaskResultModel: Any # Renamed TaskResult to TaskResultModel for clarity
 ) -> str:
     """Execute the MinionS protocol"""
     conversation_log = []
@@ -38,7 +52,7 @@ async def _execute_minions_protocol(
         if valves.debug_mode: 
             start_time_claude = asyncio.get_event_loop().time()
         try:
-            final_response = await _call_claude_directly(valves, query, call_claude)
+            final_response = await _call_claude_directly(valves, query, call_claude_func=call_claude) # Pass the imported call_claude
             if valves.debug_mode:
                 end_time_claude = asyncio.get_event_loop().time()
                 time_taken_claude = end_time_claude - start_time_claude
@@ -65,46 +79,51 @@ async def _execute_minions_protocol(
         
         if valves.show_conversation:
             conversation_log.append(f"### 🎯 Round {current_round + 1}/{valves.max_rounds} - Task Decomposition Phase")
-        
-        decomposition_prompt = f'''You are a supervisor LLM in a multi-round process. Your goal is to answer: "{query}"
-Context has been split into {len(chunks)} chunks. A local LLM will process these chunks for each task you define.
-Scratchpad (previous findings): {scratchpad_content if scratchpad_content else "Nothing yet."}
 
-Based on the scratchpad and the original query, identify up to {valves.max_tasks_per_round} specific, simple tasks for the local assistant.
-If the information in the scratchpad is sufficient to answer the query, respond ONLY with the exact phrase "FINAL ANSWER READY." followed by the comprehensive answer.
-Otherwise, list the new tasks clearly. Ensure tasks are actionable. Avoid redundant tasks.
-Format tasks as a simple list (e.g., 1. Task A, 2. Task B).'''
+        # Call the new decompose_task function
+        # Note: call_claude is the function passed into _execute_minions_protocol, originally from common_api_calls
+        tasks, claude_response_for_decomposition = await decompose_task(
+            valves=valves,
+            call_claude_func=call_claude, # This is the call_claude_func _execute_minions_protocol received
+            query=query,
+            scratchpad_content=scratchpad_content,
+            num_chunks=len(chunks),
+            max_tasks_per_round=valves.max_tasks_per_round,
+            current_round=current_round + 1,
+            conversation_log=conversation_log, # For logging within decompose_task
+            debug_log=debug_log # For logging within decompose_task
+        )
         
-        decomposition_prompts_history.append(decomposition_prompt)
-        
-        start_time_claude_decomp = 0
-        if valves.debug_mode:
-            start_time_claude_decomp = asyncio.get_event_loop().time()
-        try:
-            claude_response = await call_claude(valves, decomposition_prompt)
-            if valves.debug_mode:
-                end_time_claude_decomp = asyncio.get_event_loop().time()
-                time_taken_claude_decomp = end_time_claude_decomp - start_time_claude_decomp
-                debug_log.append(f"⏱️ Claude call (Decomposition Round {current_round+1}) took {time_taken_claude_decomp:.2f}s. (Debug Mode)")
-            if valves.show_conversation:
-                conversation_log.append(f"**🤖 Claude (Decomposition - Round {current_round + 1}):**\n{claude_response}\n")
-        except Exception as e:
-            conversation_log.append(f"❌ Error calling Claude for decomposition in round {current_round + 1}: {e}")
-            break
+        # Store the decomposition prompt that was used (if needed for history, though decompose_task doesn't return it directly)
+        # For now, we assume decompose_task handles its own logging of the prompt.
+        # If decomposition_prompts_history is crucial, decompose_task would need to return the prompt.
+        # For this refactor, let's assume it's not essential for this list or it's handled/logged sufficiently by decompose_task.
+        # decomposition_prompts_history.append(decomposition_prompt) # This was the old way
 
-        if "FINAL ANSWER READY." in claude_response:
-            final_response = claude_response.split("FINAL ANSWER READY.", 1)[1].strip()
+        # Handle Claude communication errors from decompose_task
+        if claude_response_for_decomposition.startswith("CLAUDE_ERROR:"):
+            error_message = claude_response_for_decomposition.replace("CLAUDE_ERROR: ", "")
+            # conversation_log is already updated by decompose_task in case of error
+            # if valves.show_conversation and not error_message in conversation_log[-1]: # Avoid duplicate log
+            #    conversation_log.append(error_message)
+            final_response = f"MinionS protocol failed during task decomposition: {error_message}"
+            break # Exit round processing
+
+        # Log the raw Claude response if conversation is shown (now that we have it back)
+        if valves.show_conversation:
+            conversation_log.append(f"**🤖 Claude (Decomposition - Round {current_round + 1}):**\n{claude_response_for_decomposition}\n")
+
+        # Check for "FINAL ANSWER READY."
+        if "FINAL ANSWER READY." in claude_response_for_decomposition:
+            final_response = claude_response_for_decomposition.split("FINAL ANSWER READY.", 1)[1].strip()
             claude_provided_final_answer = True
-            if valves.show_conversation:
+            if valves.show_conversation: # This log is fine here
                 conversation_log.append(f"**🤖 Claude indicates final answer is ready in round {current_round + 1}.**")
             scratchpad_content += f"\n\n**Round {current_round + 1}:** Claude provided final answer."
             break
-
-        tasks = parse_tasks(claude_response, valves.max_tasks_per_round)
-        if valves.debug_mode:
-            debug_log.append(f"   Identified {len(tasks)} tasks for Round {current_round + 1}. (Debug Mode)")
-            for task_idx, task_item in enumerate(tasks):
-                debug_log.append(f"    Task {task_idx+1} (Round {current_round+1}): {task_item[:100]}... (Debug Mode)")
+        
+        # tasks list is already parsed by decompose_task
+        # debug_log is also updated by decompose_task regarding parsed tasks
 
         if not tasks:
             if valves.show_conversation:
@@ -118,7 +137,7 @@ Format tasks as a simple list (e.g., 1. Task A, 2. Task B).'''
         
         execution_details = await execute_tasks_on_chunks(
             tasks, chunks, conversation_log if valves.show_conversation else debug_log, 
-            current_round + 1, valves, call_ollama, TaskResult
+            current_round + 1, valves, call_ollama_func, TaskResultModel # Pass renamed parameters
         )
         current_round_task_results = execution_details["results"]
         round_chunk_attempts = execution_details["total_chunk_processing_attempts"]
@@ -172,20 +191,15 @@ Format tasks as a simple list (e.g., 1. Task A, 2. Task B).'''
             if not synthesis_input_summary:
                 synthesis_input_summary = "No definitive information was found by local models. The original query was: " + query
             
-            synthesis_prompt = f'''Based on all the information gathered across multiple rounds, provide a comprehensive answer to the original query: "{query}"
-
-GATHERED INFORMATION:
-{synthesis_input_summary if synthesis_input_summary else "No specific information was extracted by local models."}
-
-If the gathered information is insufficient, explain what's missing or state that the answer cannot be provided.
-Final Answer:'''
+            # Call the new function for synthesis prompt
+            synthesis_prompt = get_minions_synthesis_claude_prompt(query, synthesis_input_summary, valves)
             synthesis_prompts_history.append(synthesis_prompt)
             
             start_time_claude_synth = 0
             if valves.debug_mode:
                 start_time_claude_synth = asyncio.get_event_loop().time()
             try:
-                final_response = await call_claude(valves, synthesis_prompt)
+                final_response = await call_claude(valves, synthesis_prompt) # Uses the imported call_claude via outer scope
                 if valves.debug_mode:
                     end_time_claude_synth = asyncio.get_event_loop().time()
                     time_taken_claude_synth = end_time_claude_synth - start_time_claude_synth
@@ -241,48 +255,58 @@ async def minions_pipe_method(
     body: dict,
     __user__: dict,
     __request__: Request,
-    __files__: List[dict] = [],
+    __files__: List[Dict[str, Any]] = [], # Made files list more specific
     __pipe_id__: str = "minions-claude",
 ) -> str:
     """Execute the MinionS protocol with Claude"""
     try:
         # Validate configuration
-        if not pipe_self.valves.anthropic_api_key:
-            return "❌ **Error:** Please configure your Anthropic API key in the function settings."
+        # Ensure valves related to ollama are also checked if call_ollama is to be used.
+        # For now, assuming primary validation is on anthropic_api_key for Claude-centric pipe.
+        if not pipe_self.valves.anthropic_api_key: # or not pipe_self.valves.ollama_api_url (if that's a valve)
+            return "❌ **Error:** Please configure your Anthropic API key (and Ollama settings if applicable) in the function settings."
 
         # Extract user message and context
-        messages = body.get("messages", [])
+        messages: List[Dict[str, Any]] = body.get("messages", []) # Typed messages
         if not messages:
             return "❌ **Error:** No messages provided."
 
-        user_query = messages[-1]["content"]
+        user_query: str = messages[-1]["content"] # Typed user_query
 
         # Extract context from messages AND uploaded files
-        context_from_messages = extract_context_from_messages(messages[:-1])
-        context_from_files = await extract_context_from_files(pipe_self.valves, __files__)
+        context_from_messages: str = extract_context_from_messages(messages[:-1])
+        context_from_files: str = await extract_context_from_files(pipe_self.valves, __files__)
 
         # Combine all context sources
-        all_context = []
+        all_context_parts: List[str] = [] # Typed all_context_parts
         if context_from_messages:
-            all_context.append(f"=== CONVERSATION CONTEXT ===\n{context_from_messages}")
+            all_context_parts.append(f"=== CONVERSATION CONTEXT ===\n{context_from_messages}")
         if context_from_files:
-            all_context.append(f"=== UPLOADED DOCUMENTS ===\n{context_from_files}")
+            all_context_parts.append(f"=== UPLOADED DOCUMENTS ===\n{context_from_files}")
 
-        context = "\n\n".join(all_context) if all_context else ""
+        context: str = "\n\n".join(all_context_parts) if all_context_parts else "" # Typed context
 
+        # If no context, make a direct call to Claude using the imported `call_claude`
         if not context:
+            # Pass the imported call_claude to _call_claude_directly
+            direct_response = await _call_claude_directly(pipe_self.valves, user_query, call_claude_func=call_claude)
             return (
                 "ℹ️ **Note:** No significant context detected. Using standard Claude response.\n\n"
-                + await _call_claude_directly(pipe_self.valves, user_query, call_claude)
+                + direct_response
             )
 
-        # Execute the MinionS protocol
-        result = await _execute_minions_protocol(
-            pipe_self.valves, user_query, context, call_claude, call_ollama, TaskResult
+        # Execute the MinionS protocol, passing the imported call_claude and call_ollama
+        result: str = await _execute_minions_protocol(
+            pipe_self.valves, 
+            user_query, 
+            context, 
+            call_claude_func=call_claude, # Pass imported call_claude 
+            call_ollama_func=call_ollama, # Pass imported call_ollama
+            TaskResultModel=TaskResult    # Pass imported TaskResult
         )
         return result
 
     except Exception as e:
-        import traceback
-        error_details = traceback.format_exc() if pipe_self.valves.debug_mode else str(e)
+        import traceback # Keep import here as it's conditional
+        error_details: str = traceback.format_exc() if pipe_self.valves.debug_mode else str(e)
         return f"❌ **Error in MinionS protocol:** {error_details}"

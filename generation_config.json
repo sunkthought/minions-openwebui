@@ -19,6 +19,8 @@
       "minion_valves.py",
       "common_api_calls.py",
       "common_context_utils.py",
+      "common_file_processing.py",
+      "minion_prompts.py",
       "minion_protocol_logic.py",
       "minion_pipe_method.py"
     ],
@@ -45,6 +47,9 @@
       "minions_valves.py",
       "common_api_calls.py",
       "common_context_utils.py",
+      "common_file_processing.py",
+      "minions_prompts.py",
+      "minions_decomposition_logic.py",
       "minions_protocol_logic.py",
       "minions_pipe_method.py"
     ],
