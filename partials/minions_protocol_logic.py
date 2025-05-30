@@ -1,22 +1,7 @@
 import asyncio
 import json
-from typing import List, Optional, Dict, Any, Callable
 
-# Placeholder for actual Valves type from minions_valves.py
-# from .minions_valves import MinionsValves as ValvesType
-ValvesType = Any 
-
-# Placeholder for actual TaskResult model from minions_models.py
-# from .minions_models import TaskResult
-class TaskResultModel(Dict): # Basic Dict as placeholder
-    pass
-
-# Placeholder for API call functions from common_api_calls.py
-# async def call_claude(valves: ValvesType, prompt: str) -> str: ...
-# async def call_ollama(valves: ValvesType, prompt: str, use_json: bool, schema: Optional[Any]) -> str: ...
-
-
-def parse_minions_tasks(valves: ValvesType, claude_response: str) -> List[str]:
+def parse_minions_tasks(valves, claude_response: str) -> List[str]:
     """Parses tasks from the remote model's (Claude) response for MinionS protocol."""
     lines = claude_response.split("\n")
     tasks = []
@@ -30,7 +15,7 @@ def parse_minions_tasks(valves: ValvesType, claude_response: str) -> List[str]:
                 tasks.append(task_content)
     return tasks[:valves.max_tasks_per_round]
 
-def create_minions_chunks(valves: ValvesType, context: str) -> List[str]:
+def create_minions_chunks(valves, context: str) -> List[str]:
     """Creates chunks from the context string based on chunk_size valve."""
     if not context:
         return []
@@ -47,9 +32,9 @@ def create_minions_chunks(valves: ValvesType, context: str) -> List[str]:
 
 def parse_minions_local_response(
     response_text: str, 
-    valves: ValvesType, # For debug_mode and use_structured_output flags
+    valves, 
     is_structured: bool = False,
-    task_result_model: Optional[Any] = None # e.g., TaskResult from minions_models
+    task_result_model: Optional = None
 ) -> Dict[str, Any]:
     """
     Parses the local model's response for MinionS, supporting both text and structured (JSON) formats.
@@ -58,16 +43,13 @@ def parse_minions_local_response(
     if is_structured and valves.use_structured_output and task_result_model:
         try:
             parsed_json = json.loads(response_text)
-            # validated_model = task_result_model(**parsed_json) # Actual Pydantic validation
-            # model_dict = validated_model.dict()
-            # For now, as task_result_model is Any (placeholder)
             if isinstance(parsed_json, dict):
                 model_dict = parsed_json
                 model_dict['parse_error'] = None
                 # Crucial for MinionS: Check if the structured response indicates "not found"
-                if model_dict.get('answer') is None and model_dict.get('explanation') is not None : # Check if answer is explicitly null
+                if model_dict.get('answer') is None and model_dict.get('explanation') is not None:
                     model_dict['_is_none_equivalent'] = True
-                else: # If answer has content, or if explanation itself is missing (treat as non-conclusive for "none")
+                else:
                     model_dict['_is_none_equivalent'] = False
                 return model_dict
             else:
@@ -82,14 +64,14 @@ def parse_minions_local_response(
     return {"answer": response_text, "explanation": response_text, "confidence": "MEDIUM", "citation": None, "parse_error": None, "_is_none_equivalent": is_none_equivalent_text}
 
 async def execute_minions_tasks_on_chunks(
-    valves: ValvesType,
+    valves,
     tasks: List[str], 
     chunks: List[str], 
-    conversation_log: List[str], # For logging progress directly
+    conversation_log: List[str],
     current_round: int,
-    call_ollama_func: Callable, # common_api_calls.call_ollama
-    task_result_model: Any, # minions_models.TaskResult
-    parse_local_response_func: Callable # parse_minions_local_response
+    call_ollama_func,
+    task_result_model,
+    parse_local_response_func
 ) -> Dict[str, Any]:
     """Executes sub-tasks on document chunks using the local model."""
     overall_task_results = []
@@ -119,9 +101,9 @@ Task: {task}'''
             else:
                 local_prompt_text += "\n\nProvide a brief, specific answer based ONLY on the text provided above. If no relevant information is found in THIS SPECIFIC TEXT, respond with the single word \"NONE\"."
             
-            start_time_ollama_local = 0 # Renamed to avoid conflict
+            start_time_ollama_local = 0
             if valves.debug_mode:
-                if valves.show_conversation: # Avoid double logging if not showing full convo
+                if valves.show_conversation:
                     conversation_log.append(f"   🔄 Task {task_idx + 1} - Trying chunk {chunk_idx + 1}/{len(chunks)} (size: {len(chunk)} chars)... (Debug Mode)")
                 start_time_ollama_local = asyncio.get_event_loop().time()
 
@@ -129,7 +111,7 @@ Task: {task}'''
                 response_str = await asyncio.wait_for(
                     call_ollama_func(
                         valves,
-                        local_prompt_text, # Use the fully formed prompt
+                        local_prompt_text,
                         use_json=True, 
                         schema=task_result_model 
                     ),
@@ -163,8 +145,8 @@ Task: {task}'''
                 if valves.show_conversation:
                     conversation_log.append(f"   ⏰ Task {task_idx + 1} - Chunk {chunk_idx + 1} timed out after {valves.timeout_local}s")
                 if valves.debug_mode:
-                    end_time_ollama_local = asyncio.get_event_loop().time() # type: ignore
-                    time_taken_ollama_local = end_time_ollama_local - start_time_ollama_local # type: ignore
+                    end_time_ollama_local = asyncio.get_event_loop().time()
+                    time_taken_ollama_local = end_time_ollama_local - start_time_ollama_local
                     if valves.show_conversation:
                          conversation_log.append(f"   ⏱️ Task {task_idx+1}, Chunk {chunk_idx+1} TIMEOUT after {time_taken_ollama_local:.2f}s. (Debug Mode)")
             except Exception as e:
@@ -176,7 +158,7 @@ Task: {task}'''
             overall_task_results.append({"task": task, "result": aggregated_result_for_task, "status": "success"})
             if valves.show_conversation:
                 conversation_log.append(f"**💻 Local Model (Aggregated for Task {task_idx + 1}, Round {current_round}):** Found info in {num_relevant_chunks_found}/{len(chunks)} chunk(s). First result snippet: {results_for_this_task_from_chunks[0][:100]}...")
-        elif chunk_timeout_count_for_task == len(chunks) and len(chunks) > 0 : # Only if all chunks for this task timed out
+        elif chunk_timeout_count_for_task == len(chunks) and len(chunks) > 0:
             overall_task_results.append({"task": task, "result": f"Timeout on all {len(chunks)} chunks", "status": "timeout_all_chunks"})
             if valves.show_conversation:
                 conversation_log.append(f"**💻 Local Model (Task {task_idx + 1}, Round {current_round}):** All {len(chunks)} chunks timed out.")
@@ -191,22 +173,18 @@ Task: {task}'''
         "total_chunk_processing_timeouts": total_chunk_processing_timeouts
     }
 
-# calculate_minions_token_savings has been moved to partials/minions_token_savings.py
-
 async def execute_minions_protocol(
-    valves: ValvesType,
+    valves,
     query: str, 
     context: str,
-    call_claude_func: Callable, # common_api_calls.call_claude
-    call_ollama_func: Callable, # common_api_calls.call_ollama
-    task_result_model: Any,     # minions_models.TaskResult
-    # Functions from this file, passed for clarity or if they were in different modules
-    parse_tasks_func: Callable[[ValvesType, str], List[str]],
-    create_chunks_func: Callable[[ValvesType, str], List[str]],
-    execute_tasks_on_chunks_func: Callable[..., Awaitable[Dict[str, Any]]],
-    parse_local_response_func: Callable[..., Dict[str, Any]],
-    # calculate_token_savings_func parameter is already here from the previous step, no change needed to signature.
-    calculate_token_savings_func: Callable[..., Dict[str, Any]] 
+    call_claude_func,
+    call_ollama_func,
+    task_result_model,
+    parse_tasks_func,
+    create_chunks_func,
+    execute_tasks_on_chunks_func,
+    parse_local_response_func,
+    calculate_token_savings_func
 ) -> str:
     """Executes the MinionS (multi-task, multi-round) protocol."""
     conversation_log: List[str] = []
@@ -223,25 +201,20 @@ async def execute_minions_protocol(
     overall_start_time = 0.0
     if valves.debug_mode:
         overall_start_time = asyncio.get_event_loop().time()
-        debug_log.append(f"🔍 **Debug Info (MinionS Protocol v0.2.0):**\n- Query: {query[:100]}...\n- Context length: {len(context)} chars")
+        debug_log.append(f"🔍 **Debug Info (MinionS Protocol v0.3.0):**\n- Query: {query[:100]}...\n- Context length: {len(context)} chars")
         debug_log.append(f"**⏱️ Overall process started. (Debug Mode)**")
 
     chunks = create_chunks_func(valves, context)
     if not chunks and context:
         return "❌ **Error:** Context provided, but failed to create any processable chunks. Check chunk_size/max_chunks."
     
-    # Direct call if no context/chunks - This part can be handled by the main pipe method before calling this execute function
-    # For now, keeping it to show full logic.
-    if not context: # Simplified from original, as chunk creation handles empty context
+    if not context:
         if valves.show_conversation: conversation_log.append("ℹ️ No context to process with MinionS. Attempting direct call to remote model.")
         try:
-            # This direct call logic might better reside in the main pipe method
-            final_answer = await call_claude_func(valves, f"Please answer this question: {query}") # Direct query
-            # ... (build simple output for direct call)
+            final_answer = await call_claude_func(valves, f"Please answer this question: {query}")
             return f"## 🎯 Final Answer (Direct)\n{final_answer}"
         except Exception as e:
             return f"❌ **Error in direct remote model call:** {str(e)}"
-
 
     for current_round in range(valves.max_rounds):
         if valves.debug_mode: 
@@ -281,7 +254,6 @@ Format tasks as a simple list (e.g., 1. Task A, 2. Task B).'''
         tasks = parse_tasks_func(valves, claude_response_text)
         if valves.debug_mode:
             debug_log.append(f"   Identified {len(tasks)} tasks for Round {current_round + 1}. (Debug Mode)")
-            # ... (logging individual tasks)
 
         if not tasks:
             if valves.show_conversation: conversation_log.append(f"**🤖 Remote model provided no new tasks in round {current_round + 1}. Proceeding to final synthesis.**")
@@ -296,7 +268,7 @@ Format tasks as a simple list (e.g., 1. Task A, 2. Task B).'''
             call_ollama_func, task_result_model, parse_local_response_func
         )
         current_round_task_results = execution_details["results"]
-        # ... (handle timeout stats and warnings as in original)
+
         if execution_details["total_chunk_processing_attempts"] > 0:
             timeout_percentage = (execution_details["total_chunk_processing_timeouts"] / execution_details["total_chunk_processing_attempts"]) * 100
             log_msg = f"**📈 Round {current_round + 1} Local Model Timeout Stats:** {execution_details['total_chunk_processing_timeouts']}/{execution_details['total_chunk_processing_attempts']} chunk calls timed out ({timeout_percentage:.1f}%)."
@@ -307,7 +279,6 @@ Format tasks as a simple list (e.g., 1. Task A, 2. Task B).'''
                 if valves.show_conversation: conversation_log.append(warn_msg)
                 if valves.debug_mode: debug_log.append(warn_msg)
                 scratchpad_content += f"\n\n**Note from Round {current_round + 1}:** High local model timeout rate ({timeout_percentage:.1f}%)."
-
 
         round_summary_parts = [f"- {'✅' if r['status'] == 'success' else '❓'} Task: {r['task']}, Result: {r['result'][:100]}..." for r in current_round_task_results]
         if round_summary_parts: scratchpad_content += f"\n\n**Results from Round {current_round + 1}:**\n" + "\n".join(round_summary_parts)
@@ -356,7 +327,6 @@ Final Answer:'''
     output_parts.append(f"## 🎯 Final Answer")
     output_parts.append(final_answer)
 
-    # Call site for calculate_token_savings_func, arguments adjusted based on the new standalone function
     stats = calculate_token_savings_func(
         decomposition_prompts_history, 
         synthesis_prompts_history,
@@ -364,14 +334,13 @@ Final Answer:'''
         final_answer, 
         len(context), 
         len(query)
-        # removed 'valves' as it's not in the new function's signature
     )
     
     successful_local_tasks = len([r for r in all_round_results_aggregated if r['status'] == 'success'])
     tasks_all_chunks_timed_out = len([r for r in all_round_results_aggregated if r['status'] == 'timeout_all_chunks'])
 
     output_parts.extend([
-        f"\n## 📊 MinionS Efficiency Stats (v0.2.0)",
+        f"\n## 📊 MinionS Efficiency Stats (v0.3.0)",
         f"- **Protocol:** MinionS (Multi-Round)",
         f"- **Rounds executed:** {stats.get('total_decomposition_rounds', 0)}/{valves.max_rounds}",
         f"- **Total tasks for local model:** {total_tasks_executed_local}",

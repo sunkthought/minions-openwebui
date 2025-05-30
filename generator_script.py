@@ -67,8 +67,7 @@ def extract_content_after_imports(content: str) -> str:
     return '\n'.join(content_lines)
 
 def generate_pipe_class(profile: Dict[str, Any]) -> str:
-    """Generate the final Pipe class definition."""
-    class_name = profile["target_pipe_class_name"]
+    """Generate the final Function class definition for Open WebUI."""
     pipe_name = profile["target_pipe_name_in_init"]
     pipe_id = profile["target_pipe_id_in_init"]
     
@@ -108,13 +107,22 @@ def generate_pipe_class(profile: Dict[str, Any]) -> str:
                 attr_name = func_name.replace("_func", "") + "_func"
             other_assignments.append(f"        self.{attr_name} = {func_name}")
     
-    pipe_class = f'''
-# --- Final Pipe Class Definition ---
-class {class_name}(PipeBase):
+    function_class = f'''
+# --- Final Function Class Definition for Open WebUI ---
+class Function:
+    class Valves({valves_class}):
+        pass
+
     def __init__(self):
-        super().__init__(name="{pipe_name}", id="{pipe_id}")
-        # Initialize valves with the correct specific Valves class
-        self.valves = {valves_class}()
+        self.valves = self.Valves()
+
+    def pipes(self) -> List[Dict[str, Any]]:
+        local_model_name = getattr(self.valves, 'local_model', 'local_model')
+        remote_model_name = getattr(self.valves, 'remote_model', 'remote_model')
+        return [{{
+            "id": "{pipe_id}",
+            "name": "{pipe_name} (" + local_model_name + " + " + remote_model_name + ")",
+        }}]
 
     async def pipe(self, body: Dict[str, Any], __user__: Dict[str, Any], __request__: Any, __files__: List[Dict[str, Any]] = [], __pipe_id__: str = ""):
         # Assign common utilities (available globally due to concatenation)
@@ -140,9 +148,9 @@ class {class_name}(PipeBase):
             __pipe_id__ if __pipe_id__ else "{pipe_id}"
         )
 
-# --- End of Final Pipe Class Definition ---'''
+# --- End of Final Function Class Definition ---'''
     
-    return pipe_class
+    return function_class
 
 def generate_function_file(profile_name: str, config: Dict[str, Any], partials_dir: str, output_dir: str) -> str:
     """Generate a complete function file from partials based on the profile."""
@@ -196,9 +204,9 @@ def generate_function_file(profile_name: str, config: Dict[str, Any], partials_d
         file_parts.append(clean_content)
         file_parts.append(f"# --- End of content from: {partial_filename} ---\n")
     
-    # 4. Generate and add the final Pipe class
-    pipe_class_code = generate_pipe_class(profile)
-    file_parts.append(pipe_class_code)
+    # 4. Generate and add the final Function class
+    function_class_code = generate_pipe_class(profile)
+    file_parts.append(function_class_code)
     
     # 5. Combine all parts
     complete_content = "\n".join(file_parts)

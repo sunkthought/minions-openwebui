@@ -2,13 +2,12 @@
   "minion_default": {
     "description": "Default Minion function using Claude for conversational collaboration.",
     "output_filename_template": "{profile_name}_function.py",
-    "target_pipe_class_name": "MinionPipe",
-    "target_pipe_name_in_init": "Minion v0.3.0",
+    "target_pipe_name_in_init": "Minion v0.2.1",
     "target_pipe_id_in_init": "minion-claude-generated",
     "header_placeholders": {
       "TITLE": "Minion Protocol (Conversational)",
       "AUTHOR": "Wil Everts and the @SunkThought team",
-      "VERSION": "0.3.0",
+      "VERSION": "0.2.1",
       "DESCRIPTION": "Conversational Minion protocol for collaboration between local and remote models.",
       "REQUIRED_OPEN_WEBUI_VERSION": "0.5.0"
     },
@@ -19,7 +18,6 @@
       "minion_valves.py",
       "common_api_calls.py",
       "common_context_utils.py",
-      "common_pipe_utils.py",
       "minion_token_savings.py",
       "minion_protocol_logic.py",
       "minion_pipe_method.py"
@@ -34,13 +32,12 @@
   "minions_default": {
     "description": "Default MinionS function using Claude for task decomposition.",
     "output_filename_template": "{profile_name}_function.py",
-    "target_pipe_class_name": "MinionsPipe",
-    "target_pipe_name_in_init": "MinionS v0.3.0",
+    "target_pipe_name_in_init": "MinionS v0.2.1",
     "target_pipe_id_in_init": "minions-claude-generated",
     "header_placeholders": {
       "TITLE": "MinionS Protocol (Task Decomposition)",
       "AUTHOR": "Wil Everts and the @SunkThought team",
-      "VERSION": "0.3.0",
+      "VERSION": "0.2.1",
       "DESCRIPTION": "MinionS protocol for task decomposition and parallel processing.",
       "REQUIRED_OPEN_WEBUI_VERSION": "0.5.0"
     },
@@ -51,7 +48,6 @@
       "minions_valves.py",
       "common_api_calls.py",
       "common_context_utils.py",
-      "common_pipe_utils.py",
       "minions_token_savings.py",
       "minions_protocol_logic.py",
       "minions_pipe_method.py"

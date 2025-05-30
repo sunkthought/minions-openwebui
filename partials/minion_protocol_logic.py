@@ -1,13 +1,7 @@
 import asyncio
 import json
-from typing import List, Optional, Dict, Any, Tuple, Callable
 
-# All code is self-contained, no external imports needed
-
-def build_minion_conversation_context(
-    history: List[Tuple[str, str]], 
-    original_query: str
-) -> str:
+def build_minion_conversation_context(history: List[Tuple[str, str]], original_query: str) -> str:
     """Builds the prompt context for the remote model based on conversation history."""
     context_parts = [
         f"You are a supervisor LLM collaborating with a trusted local AI assistant to answer the user's ORIGINAL QUESTION: \"{original_query}\"",
@@ -22,15 +16,13 @@ def build_minion_conversation_context(
         else: # Local model's response
             context_parts.append(f"The local assistant responded with information from the document: \"{message}\"")
 
-    context_parts.extend(
-        [
-            "",
-            "REMINDER: The local assistant's responses are factual information extracted directly from the document.",
-            "Based on ALL information provided by the local assistant so far, can you now provide a complete and comprehensive answer to the user's ORIGINAL QUESTION?",
-            "If YES: Respond ONLY with the exact phrase 'FINAL ANSWER READY.' followed by your comprehensive final answer. Ensure your answer directly addresses the original query using the information gathered.",
-            "If NO: Ask ONE more specific, targeted question to the local assistant to obtain the remaining information you need from the document. Be precise. Do not ask for the document itself or express that you cannot see it.",
-        ]
-    )
+    context_parts.extend([
+        "",
+        "REMINDER: The local assistant's responses are factual information extracted directly from the document.",
+        "Based on ALL information provided by the local assistant so far, can you now provide a complete and comprehensive answer to the user's ORIGINAL QUESTION?",
+        "If YES: Respond ONLY with the exact phrase 'FINAL ANSWER READY.' followed by your comprehensive final answer. Ensure your answer directly addresses the original query using the information gathered.",
+        "If NO: Ask ONE more specific, targeted question to the local assistant to obtain the remaining information you need from the document. Be precise. Do not ask for the document itself or express that you cannot see it.",
+    ])
     return "\n".join(context_parts)
 
 def is_minion_final_answer(response: str) -> bool:
@@ -39,49 +31,39 @@ def is_minion_final_answer(response: str) -> bool:
 
 def parse_minion_local_response(
     response_text: str, 
-    valves: Any, # For debug_mode and use_structured_output flags
+    valves, 
     is_structured: bool = False,
-    response_model: Optional[Any] = None # e.g., LocalAssistantResponse from minion_models
+    response_model: Optional = None
 ) -> Dict[str, Any]:
     """
     Parses the local model's response, supporting both text and structured (JSON) formats.
-    `response_model` should be the Pydantic model to validate against if structured.
     """
     if is_structured and valves.use_structured_output and response_model:
         try:
             parsed_json = json.loads(response_text)
-            # validated_model = response_model(**parsed_json) # This is how it would work with the actual model
-            # model_dict = validated_model.dict()
-            # For now, just returning the parsed_json as dict if it's a dict
             if isinstance(parsed_json, dict):
                  model_dict = parsed_json
                  model_dict['parse_error'] = None
                  return model_dict
-            else: # Not a dict, treat as parsing failure for structured
+            else:
                  raise ValueError("Parsed JSON is not a dictionary.")
-
         except Exception as e:
             if valves.debug_mode:
-                # In a real app, use logging instead of print
                 print(f"DEBUG: Failed to parse structured output in Minion: {e}. Response was: {response_text[:500]}")
             return {"answer": response_text, "confidence": "LOW", "key_points": None, "citations": None, "parse_error": str(e)}
     
-    # Fallback for non-structured processing or when use_structured_output is False
     return {"answer": response_text, "confidence": "MEDIUM", "key_points": None, "citations": None, "parse_error": None}
 
 async def execute_minion_protocol(
-    valves: Any,
+    valves,
     query: str,
     context: str,
-    # These would be imported or passed if this function calls them:
-    call_claude_func: Callable, # Placeholder for common_api_calls.call_claude
-    call_ollama_func: Callable, # Placeholder for common_api_calls.call_ollama
-    local_assistant_response_model: Any, # Placeholder for minion_models.LocalAssistantResponse
-    calculate_minion_token_savings_func: Callable[..., Dict[str, Any]] # Added new parameter
+    call_claude_func,
+    call_ollama_func,
+    local_assistant_response_model,
+    calculate_minion_token_savings_func
 ) -> str:
-    """
-    Executes the Minion conversational protocol.
-    """
+    """Executes the Minion conversational protocol."""
     conversation_log = []
     debug_log = []
     conversation_history: List[Tuple[str, str]] = []
@@ -91,7 +73,7 @@ async def execute_minion_protocol(
     overall_start_time = 0
     if valves.debug_mode:
         overall_start_time = asyncio.get_event_loop().time()
-        debug_log.append(f"🔍 **Debug Info (Minion Protocol v0.2.0):**")
+        debug_log.append(f"🔍 **Debug Info (Minion Protocol v0.3.0):**")
         debug_log.append(f"  - Query: {query[:100]}...")
         debug_log.append(f"  - Context length: {len(context)} chars")
         debug_log.append(f"  - Max rounds: {valves.max_rounds}")
@@ -198,7 +180,7 @@ If you are instructed to provide a JSON response (e.g., by a schema appended to 
         elif not local_response_data.get("answer") and not local_response_data.get("parse_error"):
              response_for_claude = "Local model provided no answer."
 
-        conversation_history.append(("user", response_for_claude)) # 'user' here refers to the local model acting as user to Claude
+        conversation_history.append(("user", response_for_claude))
         if valves.show_conversation:
             conversation_log.append(f"**💻 Local Model ({valves.local_model}):**")
             if valves.use_structured_output and local_response_data.get("parse_error") is None:
@@ -238,12 +220,12 @@ If you are instructed to provide a JSON response (e.g., by a schema appended to 
     output_parts.append(f"## 🎯 Final Answer")
     output_parts.append(actual_final_answer)
 
-    stats = calculate_minion_token_savings_func(conversation_history, context, query) # Use the passed function
+    stats = calculate_minion_token_savings_func(conversation_history, context, query)
     output_parts.append(f"\n## 📊 Efficiency Stats")
     output_parts.append(f"- **Protocol:** Minion (conversational)")
     output_parts.append(f"- **Remote model:** {valves.remote_model}")
     output_parts.append(f"- **Local model:** {valves.local_model}")
-    output_parts.append(f"- **Conversation rounds:** {len(conversation_history) // 2}") # Each round has assistant and user message
+    output_parts.append(f"- **Conversation rounds:** {len(conversation_history) // 2}")
     output_parts.append(f"- **Context size:** {len(context):,} characters")
     output_parts.append(f"")
     output_parts.append(f"## 💰 Token Savings Analysis ({valves.remote_model})") 
