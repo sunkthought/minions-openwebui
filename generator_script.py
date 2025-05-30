@@ -1,291 +1,248 @@
 #!/usr/bin/env python3
 """
 Generator script for Minion/MinionS Open WebUI functions.
-Assembles partials into complete, single-file functions for Open WebUI.
+Assembles partial files into complete function files based on profiles in generation_config.json.
 """
 
 import argparse
 import json
 import os
-import sys
-from typing import Dict, Any, List
+from pathlib import Path
+from typing import Dict, List, Any
 
 def load_config(config_file: str) -> Dict[str, Any]:
-    """Load the generation configuration from JSON file."""
-    try:
-        with open(config_file, 'r') as f:
-            return json.load(f)
-    except FileNotFoundError:
-        print(f"Error: Configuration file '{config_file}' not found.")
-        sys.exit(1)
-    except json.JSONDecodeError as e:
-        print(f"Error: Invalid JSON in configuration file: {e}")
-        sys.exit(1)
+    """Load the generation configuration."""
+    with open(config_file, 'r') as f:
+        return json.load(f)
 
-def read_partial_file(partials_dir: str, filename: str) -> str:
-    """Read content from a partial file."""
+def load_partial(partials_dir: str, filename: str) -> str:
+    """Load content from a partial file."""
     filepath = os.path.join(partials_dir, filename)
-    try:
-        with open(filepath, 'r', encoding='utf-8') as f:
-            content = f.read()
-        return content
-    except FileNotFoundError:
-        print(f"Error: Partial file '{filepath}' not found.")
-        sys.exit(1)
-    except Exception as e:
-        print(f"Error reading '{filepath}': {e}")
-        sys.exit(1)
+    with open(filepath, 'r') as f:
+        return f.read()
 
-def apply_header_placeholders(header_content: str, placeholders: Dict[str, str]) -> str:
-    """Replace placeholders in header content with actual values."""
-    result = header_content
-    for placeholder, value in placeholders.items():
-        result = result.replace(f"{{{placeholder}}}", value)
-    return result
+def replace_placeholders(content: str, placeholders: Dict[str, str]) -> str:
+    """Replace placeholders in content."""
+    for key, value in placeholders.items():
+        content = content.replace(f"{{{key}}}", value)
+    return content
 
-def extract_content_after_imports(content: str) -> str:
-    """Extract content after import statements, preserving the actual code."""
-    lines = content.split('\n')
-    content_lines = []
-    in_imports = True
+def generate_imports(profile: Dict[str, Any]) -> str:
+    """Generate import statements based on the profile's specific_imports_map."""
+    imports = []
     
-    for line in lines:
-        stripped = line.strip()
-        
-        # Skip empty lines and comments at the start
-        if in_imports and (not stripped or stripped.startswith('#')):
-            continue
-            
-        # Skip import statements
-        if in_imports and (stripped.startswith('import ') or stripped.startswith('from ')):
-            continue
-            
-        # Once we hit non-import content, include everything
-        in_imports = False
-        content_lines.append(line)
+    # Group imports by module
+    imports_by_module = {}
+    for import_name, module_name in profile.get("specific_imports_map", {}).items():
+        if module_name not in imports_by_module:
+            imports_by_module[module_name] = []
+        imports_by_module[module_name].append(import_name)
     
-    return '\n'.join(content_lines)
+    # Generate import statements
+    for module, items in imports_by_module.items():
+        if len(items) == 1:
+            imports.append(f"from {module} import {items[0]}")
+        else:
+            imports.append(f"from {module} import {', '.join(sorted(items))}")
+    
+    return '\n'.join(imports)
 
-def generate_pipe_class(profile: Dict[str, Any]) -> str:
-    """Generate the final Function class definition for Open WebUI."""
-    pipe_name = profile["target_pipe_name_in_init"]
-    pipe_id = profile["target_pipe_id_in_init"]
+def generate_pipe_class(profile: Dict[str, Any], function_type: str) -> str:
+    """Generate the final Pipe class definition."""
+    class_name = profile.get("target_pipe_class_name", "Pipe")
+    pipe_name = profile.get("target_pipe_name_in_init", "Generated Pipe")
+    pipe_id = profile.get("target_pipe_id_in_init", "generated-pipe")
     
-    # Determine the function type from profile name or config
-    function_type = "minion" if "minion" in profile.get("description", "").lower() and "minions" not in profile.get("description", "").lower() else "minions"
+    # Determine which valves class to use
+    valves_class = "MinionValves" if function_type == "minion" else "MinionsValves"
     
-    # Get the valves class name and pipe method name
+    # Determine which pipe method to call
+    pipe_method = "minion_pipe" if function_type == "minion" else "minions_pipe"
+    
+    # Build the execute protocol dependencies setup
+    deps_setup = []
+    for arg_name, global_name in profile.get("execute_protocol_dependencies_map", {}).items():
+        deps_setup.append(f"        self.{arg_name} = {global_name}")
+    
+    # Additional setup for protocol-specific functions
     if function_type == "minion":
-        valves_class = "MinionValves"
-        pipe_method = "minion_pipe"
         main_protocol_func = "execute_minion_protocol"
     else:
-        valves_class = "MinionsValves"
-        pipe_method = "minions_pipe"
         main_protocol_func = "execute_minions_protocol"
+        # MinionS needs additional helper functions
+        deps_setup.extend([
+            "        self.parse_tasks_func = parse_minions_tasks",
+            "        self.create_chunks_func = create_minions_chunks", 
+            "        self.execute_tasks_on_chunks_func = execute_minions_tasks_on_chunks",
+            "        self.parse_local_response_func = parse_minions_local_response"
+        ])
     
-    # Build the dependency assignments
-    dependency_assignments = []
-    for arg_name, global_func_name in profile.get("execute_protocol_dependencies_map", {}).items():
-        dependency_assignments.append(f"        self.{arg_name} = {global_func_name}")
+    deps_setup_str = '\n'.join(deps_setup)
     
-    # Additional protocol logic imports for MinionS
-    other_assignments = []
-    if function_type == "minions":
-        other_logic_funcs = [
-            "parse_minions_tasks", "create_minions_chunks", 
-            "execute_minions_tasks_on_chunks", "parse_minions_local_response"
-        ]
-        for func_name in other_logic_funcs:
-            if func_name.startswith("parse_minions_"):
-                attr_name = func_name.replace("parse_minions_", "parse_").replace("_func", "") + "_func"
-            elif func_name.startswith("create_minions_"):
-                attr_name = func_name.replace("create_minions_", "create_").replace("_func", "") + "_func"
-            elif func_name.startswith("execute_minions_"):
-                attr_name = func_name.replace("execute_minions_", "execute_").replace("_func", "") + "_func"
-            else:
-                attr_name = func_name.replace("_func", "") + "_func"
-            other_assignments.append(f"        self.{attr_name} = {func_name}")
-    
-    function_class = f'''
-# --- Final Function Class Definition for Open WebUI ---
-class Function:
+    class_def = f'''
+class Pipe:
     class Valves({valves_class}):
         pass
 
     def __init__(self):
         self.valves = self.Valves()
+        self.name = "{pipe_name}"
 
-    def pipes(self) -> List[Dict[str, Any]]:
-        local_model_name = getattr(self.valves, 'local_model', 'local_model')
-        remote_model_name = getattr(self.valves, 'remote_model', 'remote_model')
-        return [{{
-            "id": "{pipe_id}",
-            "name": "{pipe_name} (" + local_model_name + " + " + remote_model_name + ")",
-        }}]
+    def pipes(self):
+        """Define the available models"""
+        return [
+            {{
+                "id": "{pipe_id}",
+                "name": f" ({{self.valves.local_model}} + {{self.valves.remote_model}})",
+            }}
+        ]
 
-    async def pipe(self, body: Dict[str, Any], __user__: Dict[str, Any], __request__: Any, __files__: List[Dict[str, Any]] = [], __pipe_id__: str = ""):
-        # Assign common utilities (available globally due to concatenation)
-        self.extract_context_from_messages = extract_context_from_messages 
-        self.extract_context_from_files = extract_context_from_files
-        self.call_claude_api = call_claude 
-        self.call_ollama_api = call_ollama
+    async def pipe(
+        self,
+        body: dict,
+        __user__: dict,
+        __request__: Request,
+        __files__: List[dict] = [],
+        __pipe_id__: str = "{pipe_id}",
+    ) -> str:
+        """Execute the {'Minion' if function_type == 'minion' else 'MinionS'} protocol with Claude"""
         
-        # Assign the main protocol execution function
+        # Set up references to functions needed by the pipe method
+        self.extract_context_from_messages = extract_context_from_messages
+        self.extract_context_from_files = extract_context_from_files
+        self.call_claude_api = call_claude
+        self.call_ollama_api = call_ollama
         self.{main_protocol_func} = {main_protocol_func}
         
-        # Assign dependencies for the main protocol execution function
-{chr(10).join(dependency_assignments)}
-{chr(10).join(other_assignments)}
+        # Protocol-specific dependencies
+{deps_setup_str}
         
-        # Call the main standalone pipe method
+        # Call the main pipe method
         return await {pipe_method}(
-            self, 
-            body, 
-            __user__, 
-            __request__, 
-            __files__, 
-            __pipe_id__ if __pipe_id__ else "{pipe_id}"
-        )
+            self,
+            body,
+            __user__,
+            __request__,
+            __files__,
+            __pipe_id__
+        )'''
+    
+    return class_def
 
-# --- End of Final Function Class Definition ---'''
+def generate_function(profile: Dict[str, Any], partials_dir: str, function_type: str) -> str:
+    """Generate a complete function file from partials."""
+    output_parts = []
     
-    return function_class
-
-def generate_function_file(profile_name: str, config: Dict[str, Any], partials_dir: str, output_dir: str) -> str:
-    """Generate a complete function file from partials based on the profile."""
+    # 1. Process header
+    header_content = load_partial(partials_dir, "common_header.py")
+    header_content = replace_placeholders(header_content, profile["header_placeholders"])
+    output_parts.append(header_content)
     
-    if profile_name not in config:
-        print(f"Error: Profile '{profile_name}' not found in configuration.")
-        sys.exit(1)
+    # 2. Load common imports
+    imports_content = load_partial(partials_dir, "common_imports.py")
+    output_parts.append(imports_content)
     
-    profile = config[profile_name]
-    print(f"Generating function using profile: {profile_name}")
-    print(f"Description: {profile['description']}")
+    # 3. Generate specific imports
+    specific_imports = generate_imports(profile)
+    if specific_imports:
+        output_parts.append(specific_imports)
     
-    # Create output directory if it doesn't exist
-    os.makedirs(output_dir, exist_ok=True)
-    
-    # Generate output filename
-    output_filename = profile["output_filename_template"].format(profile_name=profile_name)
-    output_path = os.path.join(output_dir, output_filename)
-    
-    # Start building the complete file content
-    file_parts = []
-    
-    # 1. Process header with placeholders
-    header_content = read_partial_file(partials_dir, "common_header.py")
-    formatted_header = apply_header_placeholders(header_content, profile["header_placeholders"])
-    file_parts.append(formatted_header)
-    file_parts.append("\n# Dynamically Generated Header End\n")
-    
-    # 2. Add common imports (exactly as they are)
-    imports_content = read_partial_file(partials_dir, "common_imports.py")
-    file_parts.append("# --- Start of content from: common_imports.py ---")
-    file_parts.append(imports_content)
-    file_parts.append("# --- End of content from: common_imports.py ---\n")
-    
-    # 3. Process each partial file in the specified order
-    for partial_filename in profile["partials_concat_order"]:
-        # Skip header and imports as we've already processed them
-        if partial_filename in ["common_header.py", "common_imports.py"]:
+    # 4. Load all partials in order (skip header and imports as they're handled above)
+    for partial_file in profile["partials_concat_order"]:
+        if partial_file in ["common_header.py", "common_imports.py"]:
             continue
-            
-        print(f"  Processing partial: {partial_filename}")
         
-        # Read the partial content
-        partial_content = read_partial_file(partials_dir, partial_filename)
-        
-        # Extract content after import statements
-        clean_content = extract_content_after_imports(partial_content)
-        
-        # Add section markers for clarity
-        file_parts.append(f"# --- Start of content from: {partial_filename} ---")
-        file_parts.append(clean_content)
-        file_parts.append(f"# --- End of content from: {partial_filename} ---\n")
+        content = load_partial(partials_dir, partial_file)
+        output_parts.append(content)
     
-    # 4. Generate and add the final Function class
-    function_class_code = generate_pipe_class(profile)
-    file_parts.append(function_class_code)
+    # 5. Generate the final Pipe class
+    pipe_class = generate_pipe_class(profile, function_type)
+    output_parts.append(pipe_class)
     
-    # 5. Combine all parts
-    complete_content = "\n".join(file_parts)
-    
-    # 6. Write to output file
-    try:
-        with open(output_path, 'w', encoding='utf-8') as f:
-            f.write(complete_content)
-        print(f"Successfully generated: {output_path}")
-        return output_path
-    except Exception as e:
-        print(f"Error writing output file '{output_path}': {e}")
-        sys.exit(1)
+    # Join all parts with double newlines
+    return "\n\n".join(output_parts)
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Generate Minion/MinionS function files from partials.",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  python generator_script.py minion_default
-  python generator_script.py minions_default --output_dir ./my_functions/
-  python generator_script.py minion_default --config_file custom_config.json
-        """
+        description="Generate Minion/MinionS function files from partials."
     )
-    
     parser.add_argument(
-        "profile", 
-        help="Profile name from the configuration file (e.g., 'minion_default', 'minions_default')"
+        "function_type",
+        choices=["minion", "minions"],
+        help="Type of function to generate"
+    )
+    parser.add_argument(
+        "--profile",
+        help="Profile name from config (defaults to minion_default or minions_default)"
     )
     parser.add_argument(
         "--config_file",
         default="generation_config.json",
-        help="Path to the generation configuration JSON file (default: generation_config.json)"
+        help="Path to configuration file"
     )
     parser.add_argument(
         "--partials_dir",
         default="partials",
-        help="Directory containing partial files (default: partials)"
+        help="Directory containing partial files"
     )
     parser.add_argument(
         "--output_dir",
         default="generated_functions",
-        help="Directory to save generated function files (default: generated_functions)"
-    )
-    parser.add_argument(
-        "--list-profiles",
-        action="store_true",
-        help="List available profiles and exit"
+        help="Output directory for generated files"
     )
     
     args = parser.parse_args()
     
     # Load configuration
-    config = load_config(args.config_file)
+    try:
+        config = load_config(args.config_file)
+    except Exception as e:
+        print(f"Error loading config file: {e}")
+        return 1
     
-    # Handle list profiles option
-    if args.list_profiles:
-        print("Available profiles:")
-        for profile_name, profile_data in config.items():
-            print(f"  {profile_name}: {profile_data.get('description', 'No description')}")
-        return
+    # Determine profile to use
+    if args.profile:
+        profile_name = args.profile
+    else:
+        profile_name = f"{args.function_type}_default"
     
-    # Validate inputs
-    if not os.path.isdir(args.partials_dir):
-        print(f"Error: Partials directory '{args.partials_dir}' does not exist.")
-        sys.exit(1)
+    if profile_name not in config:
+        print(f"Error: Profile '{profile_name}' not found in config")
+        print(f"Available profiles: {', '.join(config.keys())}")
+        return 1
     
-    # Generate the function file
-    output_path = generate_function_file(
-        args.profile, 
-        config, 
-        args.partials_dir, 
-        args.output_dir
-    )
+    profile = config[profile_name]
     
-    print(f"\n✅ Function generation complete!")
-    print(f"📁 Output file: {output_path}")
-    print(f"📋 You can now copy this file to your Open WebUI functions directory.")
+    # Create output directory if needed
+    Path(args.output_dir).mkdir(parents=True, exist_ok=True)
+    
+    # Generate the function
+    try:
+        print(f"Generating {args.function_type} function using profile '{profile_name}'...")
+        function_content = generate_function(profile, args.partials_dir, args.function_type)
+        
+        # Determine output filename
+        output_filename = profile["output_filename_template"].format(
+            profile_name=profile_name,
+            function_type=args.function_type
+        )
+        output_path = os.path.join(args.output_dir, output_filename)
+        
+        # Write the file
+        with open(output_path, 'w') as f:
+            f.write(function_content)
+        
+        print(f"Successfully generated: {output_path}")
+        print(f"Profile used: {profile_name}")
+        print(f"Description: {profile.get('description', 'No description')}")
+        
+    except Exception as e:
+        print(f"Error generating function: {e}")
+        import traceback
+        traceback.print_exc()
+        return 1
+    
+    return 0
 
 if __name__ == "__main__":
-    main()
+    exit(main())

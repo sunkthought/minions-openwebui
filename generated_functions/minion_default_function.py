@@ -12,18 +12,16 @@ license: MIT License
 """
 
 
-# Dynamically Generated Header End
-
-# --- Start of content from: common_imports.py ---
 import asyncio
 import aiohttp
 import json
 from typing import List, Optional, Dict, Any, Tuple, Callable, Awaitable
 from pydantic import BaseModel, Field
 from fastapi import Request # type: ignore
-# --- End of content from: common_imports.py ---
 
-# --- Start of content from: minion_models.py ---
+from typing import List, Optional
+from pydantic import BaseModel, Field
+
 class LocalAssistantResponse(BaseModel):
     """
     Structured response format for the local assistant in the Minion (conversational) protocol.
@@ -53,9 +51,9 @@ class LocalAssistantResponse(BaseModel):
         #     }
         # }
 
-# --- End of content from: minion_models.py ---
 
-# --- Start of content from: minion_valves.py ---
+from pydantic import BaseModel, Field
+
 class MinionValves(BaseModel):
     """
     Configuration settings (valves) specifically for the Minion (conversational) pipe.
@@ -111,9 +109,12 @@ class MinionValves(BaseModel):
     class Config:
         extra = "ignore"
 
-# --- End of content from: minion_valves.py ---
 
-# --- Start of content from: common_api_calls.py ---
+import aiohttp
+import json
+from typing import Optional
+from pydantic import BaseModel
+
 async def call_claude(
     valves: BaseModel,  # Or a more specific type if Valves is shareable
     prompt: str
@@ -204,9 +205,7 @@ async def call_ollama(
                     print(f"Unexpected Ollama API response format: {result}")
                 raise Exception("Unexpected response format from Ollama API or no response field.")
 
-# --- End of content from: common_api_calls.py ---
 
-# --- Start of content from: common_context_utils.py ---
 def extract_context_from_messages(messages: List[Dict[str, Any]]) -> str:
     """Extract context from conversation history"""
     context_parts = []
@@ -274,9 +273,9 @@ async def extract_context_from_files(valves, files: List[Dict[str, Any]]) -> str
         if hasattr(valves, 'debug_mode') and valves.debug_mode:
             return f"[File extraction error: {str(e)}]"
         return ""
-# --- End of content from: common_context_utils.py ---
 
-# --- Start of content from: minion_token_savings.py ---
+from typing import List, Dict, Any, Tuple
+
 def calculate_minion_token_savings(
     conversation_history: List[Tuple[str, str]], 
     context: str, 
@@ -324,9 +323,10 @@ def calculate_minion_token_savings(
         'percentage_savings': percentage_savings
     }
 
-# --- End of content from: minion_token_savings.py ---
 
-# --- Start of content from: minion_protocol_logic.py ---
+import asyncio
+import json
+
 def build_minion_conversation_context(history: List[Tuple[str, str]], original_query: str) -> str:
     """Builds the prompt context for the remote model based on conversation history."""
     context_parts = [
@@ -560,9 +560,9 @@ If you are instructed to provide a JSON response (e.g., by a schema appended to 
     output_parts.append(f"- **💰 Token Savings:** ~{stats.get('percentage_savings', 0.0):.1f}%")
     
     return "\n".join(output_parts)
-# --- End of content from: minion_protocol_logic.py ---
 
-# --- Start of content from: minion_pipe_method.py ---
+import traceback
+
 async def _call_claude_directly_helper(pipe_self, query: str) -> str:
     """
     Fallback to direct Claude call when no context is available.
@@ -626,50 +626,54 @@ async def minion_pipe(
     except Exception as e:
         error_details = traceback.format_exc() if (hasattr(self.valves, 'debug_mode') and self.valves.debug_mode) else str(e)
         return f"❌ **Error in Minion protocol:** {error_details}"
-# --- End of content from: minion_pipe_method.py ---
 
 
-# --- Final Function Class Definition for Open WebUI ---
-class Function:
+class Pipe:
     class Valves(MinionValves):
         pass
 
     def __init__(self):
         self.valves = self.Valves()
+        self.name = "Minion v0.2.1"
 
-    def pipes(self) -> List[Dict[str, Any]]:
-        local_model_name = getattr(self.valves, 'local_model', 'local_model')
-        remote_model_name = getattr(self.valves, 'remote_model', 'remote_model')
-        return [{
-            "id": "minion-claude-generated",
-            "name": "Minion v0.2.1 (" + local_model_name + " + " + remote_model_name + ")",
-        }]
+    def pipes(self):
+        """Define the available models"""
+        return [
+            {
+                "id": "minion-claude-generated",
+                "name": f" ({self.valves.local_model} + {self.valves.remote_model})",
+            }
+        ]
 
-    async def pipe(self, body: Dict[str, Any], __user__: Dict[str, Any], __request__: Any, __files__: List[Dict[str, Any]] = [], __pipe_id__: str = ""):
-        # Assign common utilities (available globally due to concatenation)
-        self.extract_context_from_messages = extract_context_from_messages 
-        self.extract_context_from_files = extract_context_from_files
-        self.call_claude_api = call_claude 
-        self.call_ollama_api = call_ollama
+    async def pipe(
+        self,
+        body: dict,
+        __user__: dict,
+        __request__: Request,
+        __files__: List[dict] = [],
+        __pipe_id__: str = "minion-claude-generated",
+    ) -> str:
+        """Execute the Minion protocol with Claude"""
         
-        # Assign the main protocol execution function
+        # Set up references to functions needed by the pipe method
+        self.extract_context_from_messages = extract_context_from_messages
+        self.extract_context_from_files = extract_context_from_files
+        self.call_claude_api = call_claude
+        self.call_ollama_api = call_ollama
         self.execute_minion_protocol = execute_minion_protocol
         
-        # Assign dependencies for the main protocol execution function
+        # Protocol-specific dependencies
         self.call_claude_api = call_claude
         self.call_ollama_api = call_ollama
         self.local_assistant_response_model = LocalAssistantResponse
         self.calculate_minion_token_savings_func = calculate_minion_token_savings
-
         
-        # Call the main standalone pipe method
+        # Call the main pipe method
         return await minion_pipe(
-            self, 
-            body, 
-            __user__, 
-            __request__, 
-            __files__, 
-            __pipe_id__ if __pipe_id__ else "minion-claude-generated"
+            self,
+            body,
+            __user__,
+            __request__,
+            __files__,
+            __pipe_id__
         )
-
-# --- End of Final Function Class Definition ---
