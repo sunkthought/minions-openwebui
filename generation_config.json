@@ -3,7 +3,7 @@
     "description": "Default Minion function using Claude for conversational collaboration.",
     "output_filename_template": "{profile_name}_function.py",
     "target_pipe_class_name": "MinionPipe",
-    "target_pipe_name_in_init": "Minion v0.3.0",
+    "target_pipe_name_in_init": "Minion v0.2.1",
     "target_pipe_id_in_init": "minion-claude-generated",
     "header_placeholders": {
       "TITLE": "Minion Protocol Integration for Open WebUI (Generated)",
@@ -45,7 +45,7 @@
     "description": "Default MinionS function using Claude for task decomposition.",
     "output_filename_template": "{profile_name}_function.py",
     "target_pipe_class_name": "MinionsPipe",
-    "target_pipe_name_in_init": "MinionS v0.3.0",
+    "target_pipe_name_in_init": "MinionS v0.2.1",
     "target_pipe_id_in_init": "minions-claude-generated",
     "header_placeholders": {
       "TITLE": "MinionS Protocol Integration for Open WebUI (Generated)",
