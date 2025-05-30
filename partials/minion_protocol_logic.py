@@ -1,8 +1,37 @@
 import asyncio
 import json
+from typing import List, Dict, Any, Tuple, Callable
 
-def build_minion_conversation_context(history: List[Tuple[str, str]], original_query: str) -> str:
-    """Builds the prompt context for the remote model based on conversation history."""
+def _calculate_token_savings(conversation_history: List[Tuple[str, str]], context: str, query: str) -> dict:
+    """Calculate token savings for the Minion protocol"""
+    chars_per_token = 3.5
+    
+    # Traditional approach: entire context + query sent to Claude
+    traditional_tokens = int((len(context) + len(query)) / chars_per_token)
+    
+    # Minion approach: only conversation messages sent to Claude
+    conversation_content = " ".join(
+        [msg[1] for msg in conversation_history if msg[0] == "assistant"]
+    )
+    minion_tokens = int(len(conversation_content) / chars_per_token)
+    
+    # Calculate savings
+    token_savings = traditional_tokens - minion_tokens
+    percentage_savings = (
+        (token_savings / traditional_tokens * 100) if traditional_tokens > 0 else 0
+    )
+    
+    return {
+        'traditional_tokens': traditional_tokens,
+        'minion_tokens': minion_tokens,
+        'token_savings': token_savings,
+        'percentage_savings': percentage_savings
+    }
+
+def _build_conversation_context(
+    history: List[tuple], original_query: str
+) -> str:
+    """Build conversation context for Claude"""
     context_parts = [
         f"You are a supervisor LLM collaborating with a trusted local AI assistant to answer the user's ORIGINAL QUESTION: \"{original_query}\"",
         "The local assistant has full access to the source document and has been providing factual information extracted from it.",
@@ -11,69 +40,62 @@ def build_minion_conversation_context(history: List[Tuple[str, str]], original_q
     ]
 
     for role, message in history:
-        if role == "assistant": # Remote model's previous message
+        if role == "assistant":  # Claude's previous message
             context_parts.append(f"You previously asked the local assistant: \"{message}\"")
-        else: # Local model's response
+        else:  # Local model's response
             context_parts.append(f"The local assistant responded with information from the document: \"{message}\"")
 
-    context_parts.extend([
-        "",
-        "REMINDER: The local assistant's responses are factual information extracted directly from the document.",
-        "Based on ALL information provided by the local assistant so far, can you now provide a complete and comprehensive answer to the user's ORIGINAL QUESTION?",
-        "If YES: Respond ONLY with the exact phrase 'FINAL ANSWER READY.' followed by your comprehensive final answer. Ensure your answer directly addresses the original query using the information gathered.",
-        "If NO: Ask ONE more specific, targeted question to the local assistant to obtain the remaining information you need from the document. Be precise. Do not ask for the document itself or express that you cannot see it.",
-    ])
+    context_parts.extend(
+        [
+            "",
+            "REMINDER: The local assistant's responses are factual information extracted directly from the document.",
+            "Based on ALL information provided by the local assistant so far, can you now provide a complete and comprehensive answer to the user's ORIGINAL QUESTION?",
+            "If YES: Respond ONLY with the exact phrase 'FINAL ANSWER READY.' followed by your comprehensive final answer. Ensure your answer directly addresses the original query using the information gathered.",
+            "If NO: Ask ONE more specific, targeted question to the local assistant to obtain the remaining information you need from the document. Be precise. Do not ask for the document itself or express that you cannot see it.",
+        ]
+    )
     return "\n".join(context_parts)
 
-def is_minion_final_answer(response: str) -> bool:
-    """Checks if the response from the remote model contains the final answer marker."""
+def _is_final_answer(response: str) -> bool:
+    """Check if response contains the specific final answer marker."""
     return "FINAL ANSWER READY." in response
 
-def parse_minion_local_response(
-    response_text: str, 
-    valves, 
-    is_structured: bool = False,
-    response_model: Optional = None
-) -> Dict[str, Any]:
-    """
-    Parses the local model's response, supporting both text and structured (JSON) formats.
-    """
-    if is_structured and valves.use_structured_output and response_model:
+def _parse_local_response(response: str, is_structured: bool, use_structured_output: bool, debug_mode: bool) -> Dict:
+    """Parse local model response, supporting both text and structured formats."""
+    if is_structured and use_structured_output:
         try:
-            parsed_json = json.loads(response_text)
-            if isinstance(parsed_json, dict):
-                 model_dict = parsed_json
-                 model_dict['parse_error'] = None
-                 return model_dict
-            else:
-                 raise ValueError("Parsed JSON is not a dictionary.")
+            parsed_json = json.loads(response)
+            validated_model = LocalAssistantResponse(**parsed_json)
+            model_dict = validated_model.dict()
+            model_dict['parse_error'] = None
+            return model_dict
         except Exception as e:
-            if valves.debug_mode:
-                print(f"DEBUG: Failed to parse structured output in Minion: {e}. Response was: {response_text[:500]}")
-            return {"answer": response_text, "confidence": "LOW", "key_points": None, "citations": None, "parse_error": str(e)}
+            if debug_mode:
+                print(f"DEBUG: Failed to parse structured output in Minion: {e}. Response was: {response[:500]}")
+            return {"answer": response, "confidence": "LOW", "key_points": None, "citations": None, "parse_error": str(e)}
     
-    return {"answer": response_text, "confidence": "MEDIUM", "key_points": None, "citations": None, "parse_error": None}
+    # Fallback for non-structured processing
+    return {"answer": response, "confidence": "MEDIUM", "key_points": None, "citations": None, "parse_error": None}
 
-async def execute_minion_protocol(
-    valves,
-    query: str,
+async def _execute_minion_protocol(
+    valves: Any,
+    query: str, 
     context: str,
-    call_claude_func,
-    call_ollama_func,
-    local_assistant_response_model,
-    calculate_minion_token_savings_func
+    call_claude: Callable,
+    call_ollama: Callable,
+    LocalAssistantResponse: Any
 ) -> str:
-    """Executes the Minion conversational protocol."""
+    """Execute the Minion protocol"""
     conversation_log = []
     debug_log = []
-    conversation_history: List[Tuple[str, str]] = []
-    actual_final_answer = "No final answer was explicitly provided by the remote model."
+    conversation_history = []
+    actual_final_answer = "No final answer was explicitly provided by Claude."
     claude_declared_final = False
 
     overall_start_time = 0
     if valves.debug_mode:
         overall_start_time = asyncio.get_event_loop().time()
-        debug_log.append(f"🔍 **Debug Info (Minion Protocol v0.3.0):**")
+        debug_log.append(f"🔍 **Debug Info (Minion v0.2.0):**")
         debug_log.append(f"  - Query: {query[:100]}...")
         debug_log.append(f"  - Context length: {len(context)} chars")
         debug_log.append(f"  - Max rounds: {valves.max_rounds}")
@@ -109,76 +131,86 @@ Start by asking your first question to the local assistant to begin gathering in
         if valves.show_conversation:
             conversation_log.append(f"### 🔄 Round {round_num + 1}")
 
-        claude_prompt_for_this_round = initial_claude_prompt if round_num == 0 else build_minion_conversation_context(conversation_history, query)
+        claude_prompt_for_this_round = ""
+        if round_num == 0:
+            claude_prompt_for_this_round = initial_claude_prompt
+        else:
+            claude_prompt_for_this_round = _build_conversation_context(
+                conversation_history, query
+            )
         
         claude_response = ""
         try:
-            if valves.debug_mode: start_time_claude = asyncio.get_event_loop().time()
-            claude_response = await call_claude_func(valves, claude_prompt_for_this_round)
+            if valves.debug_mode: 
+                start_time_claude = asyncio.get_event_loop().time()
+            claude_response = await call_claude(valves, claude_prompt_for_this_round)
             if valves.debug_mode:
                 end_time_claude = asyncio.get_event_loop().time()
                 time_taken_claude = end_time_claude - start_time_claude
-                debug_log.append(f"  ⏱️ Remote model call in round {round_num + 1} took {time_taken_claude:.2f}s. (Debug Mode)")
+                debug_log.append(f"  ⏱️ Claude call in round {round_num + 1} took {time_taken_claude:.2f}s. (Debug Mode)")
         except Exception as e:
-            error_message = f"❌ Error calling remote model in round {round_num + 1}: {e}"
+            error_message = f"❌ Error calling Claude in round {round_num + 1}: {e}"
             conversation_log.append(error_message)
-            if valves.debug_mode: debug_log.append(f"  {error_message} (Debug Mode)")
-            actual_final_answer = "Minion protocol failed due to remote model API error."
-            break 
+            if valves.debug_mode: 
+                debug_log.append(f"  {error_message} (Debug Mode)")
+            actual_final_answer = "Minion protocol failed due to Claude API error."
+            break
 
         conversation_history.append(("assistant", claude_response))
         if valves.show_conversation:
-            conversation_log.append(f"**🤖 Remote Model ({valves.remote_model}):**")
+            conversation_log.append(f"**🤖 Claude ({valves.remote_model}):**")
             conversation_log.append(f"{claude_response}\n")
 
-        if is_minion_final_answer(claude_response):
+        if _is_final_answer(claude_response):
             actual_final_answer = claude_response.split("FINAL ANSWER READY.", 1)[1].strip()
             claude_declared_final = True
             if valves.show_conversation:
-                conversation_log.append(f"✅ **Remote model indicates FINAL ANSWER READY.**\n")
+                conversation_log.append(f"✅ **Claude indicates FINAL ANSWER READY.**\n")
             if valves.debug_mode:
-                debug_log.append(f"  🏁 Remote model declared FINAL ANSWER READY in round {round_num + 1}. (Debug Mode)")
+                debug_log.append(f"  🏁 Claude declared FINAL ANSWER READY in round {round_num + 1}. (Debug Mode)")
             break
 
-        local_prompt = f"""You have access to the full context below. The remote model ({valves.remote_model}) is collaborating with you to answer a user's question.
+        local_prompt = f"""You have access to the full context below. Claude (Anthropic's AI) is collaborating with you to answer a user's question.
 CONTEXT:
 {context}
-ORIGINAL USER QUESTION: {query}
-REMOTE MODEL'S REQUEST TO YOU: {claude_response}
-Please provide a helpful, accurate response based ONLY on the CONTEXT provided above. Extract relevant information that answers the remote model's specific request. Be concise but thorough.
+ORIGINAL QUESTION: {query}
+CLAUDE'S REQUEST: {claude_response}
+Please provide a helpful, accurate response based on the context you have access to. Extract relevant information that answers Claude's specific question. Be concise but thorough.
 If you are instructed to provide a JSON response (e.g., by a schema appended to this prompt), ensure your entire response is ONLY that valid JSON object, without any surrounding text, explanations, or markdown formatting like ```json ... ```."""
         
         local_response_str = ""
         try:
-            if valves.debug_mode: start_time_ollama = asyncio.get_event_loop().time()
-            local_response_str = await call_ollama_func(
+            if valves.debug_mode: 
+                start_time_ollama = asyncio.get_event_loop().time()
+            local_response_str = await call_ollama(
                 valves,
                 local_prompt,
-                use_json=True, 
-                schema=local_assistant_response_model 
+                use_json=True,
+                schema=LocalAssistantResponse
             )
-            local_response_data = parse_minion_local_response(
+            local_response_data = _parse_local_response(
                 local_response_str,
-                valves,
                 is_structured=True,
-                response_model=local_assistant_response_model
+                use_structured_output=valves.use_structured_output,
+                debug_mode=valves.debug_mode
             )
             if valves.debug_mode:
                 end_time_ollama = asyncio.get_event_loop().time()
                 time_taken_ollama = end_time_ollama - start_time_ollama
-                debug_log.append(f"  ⏱️ Local model call in round {round_num + 1} took {time_taken_ollama:.2f}s. (Debug Mode)")
+                debug_log.append(f"  ⏱️ Local LLM call in round {round_num + 1} took {time_taken_ollama:.2f}s. (Debug Mode)")
         except Exception as e:
-            error_message = f"❌ Error calling local model in round {round_num + 1}: {e}"
+            error_message = f"❌ Error calling Local LLM in round {round_num + 1}: {e}"
             conversation_log.append(error_message)
-            if valves.debug_mode: debug_log.append(f"  {error_message} (Debug Mode)")
-            actual_final_answer = "Minion protocol failed due to local model API error."
-            break 
+            if valves.debug_mode: 
+                debug_log.append(f"  {error_message} (Debug Mode)")
+            actual_final_answer = "Minion protocol failed due to Local LLM API error."
+            break
 
-        response_for_claude = local_response_data.get("answer", "Error: Could not extract answer from local model.")
+        response_for_claude = local_response_data.get("answer", "Error: Could not extract answer from local LLM.")
         if valves.use_structured_output and local_response_data.get("parse_error") and valves.debug_mode:
-            response_for_claude += f" (Local model response parse error: {local_response_data['parse_error']})"
+            response_for_claude += f" (Local LLM response parse error: {local_response_data['parse_error']})"
         elif not local_response_data.get("answer") and not local_response_data.get("parse_error"):
-             response_for_claude = "Local model provided no answer."
+            response_for_claude = "Local LLM provided no answer."
 
         conversation_history.append(("user", response_for_claude))
         if valves.show_conversation:
@@ -197,11 +229,10 @@ If you are instructed to provide a JSON response (e.g., by a schema appended to 
             debug_log.append(f"**🏁 Completed Round {round_num + 1}. Cumulative time: {current_cumulative_time:.2f}s. (Debug Mode)**\n")
     
     if not claude_declared_final and conversation_history:
-        last_claude_msg_tuple = next((msg for msg in reversed(conversation_history) if msg[0] == "assistant"), None)
-        last_claude_msg = last_claude_msg_tuple[1] if last_claude_msg_tuple else "No suitable final message from remote model found."
-        actual_final_answer = f"Max rounds reached. Remote model's last message was: \"{last_claude_msg}\""
+        last_claude_msg = conversation_history[-1][1] if conversation_history[-1][0] == "assistant" else (conversation_history[-2][1] if len(conversation_history) > 1 and conversation_history[-2][0] == "assistant" else "No suitable final message from Claude found.")
+        actual_final_answer = f"Max rounds reached. Claude's last message was: \"{last_claude_msg}\""
         if valves.show_conversation:
-            conversation_log.append(f"⚠️ Max rounds reached. Using remote model's last message as the result.\n")
+            conversation_log.append(f"⚠️ Max rounds reached. Using Claude's last message as the result.\n")
 
     if valves.debug_mode:
         total_execution_time = asyncio.get_event_loop().time() - overall_start_time
@@ -220,7 +251,7 @@ If you are instructed to provide a JSON response (e.g., by a schema appended to 
     output_parts.append(f"## 🎯 Final Answer")
     output_parts.append(actual_final_answer)
 
-    stats = calculate_minion_token_savings_func(conversation_history, context, query)
+    stats = _calculate_token_savings(conversation_history, context, query)
     output_parts.append(f"\n## 📊 Efficiency Stats")
     output_parts.append(f"- **Protocol:** Minion (conversational)")
     output_parts.append(f"- **Remote model:** {valves.remote_model}")
@@ -228,9 +259,9 @@ If you are instructed to provide a JSON response (e.g., by a schema appended to 
     output_parts.append(f"- **Conversation rounds:** {len(conversation_history) // 2}")
     output_parts.append(f"- **Context size:** {len(context):,} characters")
     output_parts.append(f"")
-    output_parts.append(f"## 💰 Token Savings Analysis ({valves.remote_model})") 
-    output_parts.append(f"- **Traditional approach:** ~{stats.get('traditional_tokens', 0):,} tokens")
-    output_parts.append(f"- **Minion approach:** ~{stats.get('minion_tokens', 0):,} tokens")
-    output_parts.append(f"- **💰 Token Savings:** ~{stats.get('percentage_savings', 0.0):.1f}%")
+    output_parts.append(f"## 💰 Token Savings Analysis ({valves.remote_model})")
+    output_parts.append(f"- **Traditional approach:** ~{stats['traditional_tokens']:,} tokens")
+    output_parts.append(f"- **Minion approach:** ~{stats['minion_tokens']:,} tokens")
+    output_parts.append(f"- **💰 Token Savings:** ~{stats['percentage_savings']:.1f}%")
     
     return "\n".join(output_parts)

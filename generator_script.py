@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 Generator script for Minion/MinionS Open WebUI functions.
 Assembles partial files into complete function files based on profiles in generation_config.json.
@@ -27,29 +26,8 @@ def replace_placeholders(content: str, placeholders: Dict[str, str]) -> str:
         content = content.replace(f"{{{key}}}", value)
     return content
 
-def generate_imports(profile: Dict[str, Any]) -> str:
-    """Generate import statements based on the profile's specific_imports_map."""
-    imports = []
-    
-    # Group imports by module
-    imports_by_module = {}
-    for import_name, module_name in profile.get("specific_imports_map", {}).items():
-        if module_name not in imports_by_module:
-            imports_by_module[module_name] = []
-        imports_by_module[module_name].append(import_name)
-    
-    # Generate import statements
-    for module, items in imports_by_module.items():
-        if len(items) == 1:
-            imports.append(f"from {module} import {items[0]}")
-        else:
-            imports.append(f"from {module} import {', '.join(sorted(items))}")
-    
-    return '\n'.join(imports)
-
 def generate_pipe_class(profile: Dict[str, Any], function_type: str) -> str:
     """Generate the final Pipe class definition."""
-    class_name = profile.get("target_pipe_class_name", "Pipe")
     pipe_name = profile.get("target_pipe_name_in_init", "Generated Pipe")
     pipe_id = profile.get("target_pipe_id_in_init", "generated-pipe")
     
@@ -57,27 +35,7 @@ def generate_pipe_class(profile: Dict[str, Any], function_type: str) -> str:
     valves_class = "MinionValves" if function_type == "minion" else "MinionsValves"
     
     # Determine which pipe method to call
-    pipe_method = "minion_pipe" if function_type == "minion" else "minions_pipe"
-    
-    # Build the execute protocol dependencies setup
-    deps_setup = []
-    for arg_name, global_name in profile.get("execute_protocol_dependencies_map", {}).items():
-        deps_setup.append(f"        self.{arg_name} = {global_name}")
-    
-    # Additional setup for protocol-specific functions
-    if function_type == "minion":
-        main_protocol_func = "execute_minion_protocol"
-    else:
-        main_protocol_func = "execute_minions_protocol"
-        # MinionS needs additional helper functions
-        deps_setup.extend([
-            "        self.parse_tasks_func = parse_minions_tasks",
-            "        self.create_chunks_func = create_minions_chunks", 
-            "        self.execute_tasks_on_chunks_func = execute_minions_tasks_on_chunks",
-            "        self.parse_local_response_func = parse_minions_local_response"
-        ])
-    
-    deps_setup_str = '\n'.join(deps_setup)
+    pipe_method = "minion_pipe" if function_type == "minion" else "minions_pipe_method"
     
     class_def = f'''
 class Pipe:
@@ -106,26 +64,7 @@ class Pipe:
         __pipe_id__: str = "{pipe_id}",
     ) -> str:
         """Execute the {'Minion' if function_type == 'minion' else 'MinionS'} protocol with Claude"""
-        
-        # Set up references to functions needed by the pipe method
-        self.extract_context_from_messages = extract_context_from_messages
-        self.extract_context_from_files = extract_context_from_files
-        self.call_claude_api = call_claude
-        self.call_ollama_api = call_ollama
-        self.{main_protocol_func} = {main_protocol_func}
-        
-        # Protocol-specific dependencies
-{deps_setup_str}
-        
-        # Call the main pipe method
-        return await {pipe_method}(
-            self,
-            body,
-            __user__,
-            __request__,
-            __files__,
-            __pipe_id__
-        )'''
+        return await {pipe_method}(self, body, __user__, __request__, __files__, __pipe_id__)'''
     
     return class_def
 
@@ -138,24 +77,15 @@ def generate_function(profile: Dict[str, Any], partials_dir: str, function_type:
     header_content = replace_placeholders(header_content, profile["header_placeholders"])
     output_parts.append(header_content)
     
-    # 2. Load common imports
-    imports_content = load_partial(partials_dir, "common_imports.py")
-    output_parts.append(imports_content)
-    
-    # 3. Generate specific imports
-    specific_imports = generate_imports(profile)
-    if specific_imports:
-        output_parts.append(specific_imports)
-    
-    # 4. Load all partials in order (skip header and imports as they're handled above)
+    # 2. Load all partials in order
     for partial_file in profile["partials_concat_order"]:
-        if partial_file in ["common_header.py", "common_imports.py"]:
-            continue
+        if partial_file == "common_header.py":
+            continue  # Already processed
         
         content = load_partial(partials_dir, partial_file)
         output_parts.append(content)
     
-    # 5. Generate the final Pipe class
+    # 3. Generate the final Pipe class
     pipe_class = generate_pipe_class(profile, function_type)
     output_parts.append(pipe_class)
     
