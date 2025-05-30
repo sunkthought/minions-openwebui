@@ -8,7 +8,7 @@
     "header_placeholders": {
       "TITLE": "Minion Protocol Integration for Open WebUI (Generated)",
       "AUTHOR": "Wil Everts and the @SunkThought team (Generated)",
-      "VERSION": "0.3.0",
+      "VERSION": "0.2.1",
       "DESCRIPTION": "Basic Minion protocol - conversational collaboration between local and remote models.",
       "REQUIRED_OPEN_WEBUI_VERSION": "0.5.0"
     },
@@ -50,7 +50,7 @@
     "header_placeholders": {
       "TITLE": "MinionS Protocol Integration for Open WebUI (Generated)",
       "AUTHOR": "Wil Everts and the @SunkThought team (Generated)",
-      "VERSION": "0.3.0",
+      "VERSION": "0.2.1",
       "DESCRIPTION": "MinionS protocol - task decomposition and parallel processing between local and cloud models.",
       "REQUIRED_OPEN_WEBUI_VERSION": "0.5.0"
     },
