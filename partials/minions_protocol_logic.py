@@ -17,11 +17,19 @@ def parse_local_response(response: str, is_structured: bool, use_structured_outp
         try:
             parsed_json = json.loads(response)
 
-            # Fallback for 'answer' field if it's a list or dict
             answer_content = parsed_json.get('answer')
-            if isinstance(answer_content, (list, dict)):
-                logger.warning("Local LLM provided a list/dict for 'answer' field; converting to JSON string.")
-                parsed_json['answer'] = json.dumps(answer_content) # Stringify it
+
+            if answer_content is not None and not isinstance(answer_content, str):
+                logger.warning(f"Local LLM provided non-string for 'answer' (type: {type(answer_content).__name__}); attempting conversion.")
+                try:
+                    parsed_json['answer'] = json.dumps(answer_content)
+                    logger.info(f"Successfully converted 'answer' of type {type(answer_content).__name__} to JSON string.")
+                except TypeError as te:
+                    logger.error(f"Could not json.dumps answer_content of type {type(answer_content).__name__}: {te}. Falling back to str() conversion.")
+                    parsed_json['answer'] = str(answer_content)
+            elif answer_content is None: # Explicitly ensure 'answer' key exists if it was None or not present
+                parsed_json['answer'] = None
+            # If answer_content is already a string, it will pass through unmodified.
 
             validated_model = TaskResultModel(**parsed_json)
             model_dict = validated_model.dict()
