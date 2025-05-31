@@ -59,10 +59,6 @@ class MinionsValves(BaseModel):
         default=False, 
         description="Enable JSON structured output for local model responses (requires local model to support JSON mode and the TaskResult schema)."
     )
-    enable_code_decomposition: bool = Field(
-        default=False,
-        description="Enable code-based task decomposition using LLM-generated Python code."
-    )
 
     class Config:
         extra = "ignore" # Ignore any extra fields passed to the model
