@@ -70,7 +70,7 @@ async def _execute_minion_protocol(
     overall_start_time = 0
     if valves.debug_mode:
         overall_start_time = asyncio.get_event_loop().time()
-        debug_log.append(f"🔍 **Debug Info (Minion v0.2.6):**")
+        debug_log.append(f"🔍 **Debug Info (Minion v0.2.0):**")
         debug_log.append(f"  - Query: {query[:100]}...")
         debug_log.append(f"  - Context length: {len(context)} chars")
         debug_log.append(f"  - Max rounds: {valves.max_rounds}")
