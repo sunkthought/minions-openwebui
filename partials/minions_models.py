@@ -1,6 +1,16 @@
 from typing import Optional
 from pydantic import BaseModel, Field
 
+class JobManifest(BaseModel):
+    """
+    Defines the structure for a job manifest, outlining a specific task
+    to be performed by a local model.
+    """
+    task_id: str
+    chunk_id: Optional[int] = None
+    task_description: str
+    advice: Optional[str] = None
+
 class TaskResult(BaseModel):
     """
     Structured response format for individual task execution by a local model
@@ -8,6 +18,7 @@ class TaskResult(BaseModel):
     This model defines the expected output structure when a local model completes
     a sub-task defined by the remote model.
     """
+    task_id: str # Added task_id to TaskResult
     explanation: str = Field(
         description="Brief explanation of the findings or the process taken to answer the task."
     )

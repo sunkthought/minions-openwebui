@@ -12,9 +12,12 @@ required_open_webui_version: 0.5.0
 
 import asyncio
 import aiohttp
-from typing import Dict, List
+from typing import Dict, List, Any, Optional # Added Any, Optional
 from pydantic import BaseModel, Field
 from fastapi import Request # type: ignore
+import logging # Added logging
+from .partials.minions_models import JobManifest # Added JobManifest
+from .partials.minions_prompts import get_minions_code_generation_claude_prompt # Added code-gen prompt
 
 class Pipe:
     class Valves(BaseModel):
@@ -57,6 +60,7 @@ class Pipe:
     def __init__(self):
         self.valves = self.Valves()
         self.name = "MinionS v0.1.0"
+        self.logger = logging.getLogger(__name__) # Added logger
 
     def pipes(self):
         """Define the available models"""
@@ -124,6 +128,7 @@ class Pipe:
 
         conversation_log = []
         debug_log = []
+        actual_initial_claude_prompt_text: str = "" # Stores the text of the first prompt to Claude
 
         try:
             if self.valves.debug_mode:
@@ -134,16 +139,62 @@ class Pipe:
                 debug_log.append(debug_info)
 
             conversation_log.append("### 🎯 Task Decomposition Phase")
+            job_manifests: List[JobManifest] = []
 
-            # Step 1: Task decomposition by Claude
-            decomposition_prompt = f"""You are the acting supervisor in an agentic workflow. You are collaborating with a local AI assistant that has access to full context/documents, but you don't have direct access to them.
+            if self.valves.enable_code_decomposition:
+                self.logger.info("Using code-based task decomposition.")
+                conversation_log.append("🤖 Using Code-Based Task Decomposition")
+                context_summary = context[:500] + "..." if len(context) > 500 else context
+
+                # This is the actual first prompt text in this branch
+                actual_initial_claude_prompt_text = get_minions_code_generation_claude_prompt(
+                    query=query,
+                    context_summary=context_summary,
+                    valves=self.valves,
+                    job_manifest_model_name="JobManifest"
+                )
+
+                try:
+                    generated_code = await asyncio.wait_for(
+                        self._call_claude(actual_initial_claude_prompt_text), timeout=45.0 # Increased timeout for code gen
+                    )
+                    conversation_log.append(f"**🤖 Claude (Code Generation):**\n```python\n{generated_code}\n```\n")
+                    if self.valves.debug_mode:
+                        self.logger.debug(f"Raw generated code:\n{generated_code}")
+                        debug_log.append(f"**Raw Generated Code:**\n```python\n{generated_code}\n```")
+
+                    job_manifests = self._execute_generated_code(generated_code)
+                    self.logger.info(f"Successfully generated {len(job_manifests)} tasks via code.")
+                    conversation_log.append(f"✅ Successfully generated {len(job_manifests)} tasks via code.")
+
+                except asyncio.TimeoutError:
+                    self.logger.error("Code generation timed out.")
+                    conversation_log.append("❌ **Error:** Code generation for tasks timed out.")
+                    # Potentially fall back to natural language or return error
+                    return "❌ **Error:** Code generation for task decomposition timed out."
+                except ValueError as e: # Errors from _execute_generated_code
+                    self.logger.error(f"Error executing generated code: {e}")
+                    conversation_log.append(f"❌ **Error:** Could not execute generated task code: {e}")
+                    # Potentially fall back or return error
+                    return f"❌ **Error:** Failed to process generated task code: {e}"
+                except Exception as e:
+                    self.logger.error(f"Unexpected error during code-based decomposition: {e}")
+                    conversation_log.append(f"❌ **Error:** Unexpected error in code-based decomposition: {e}")
+                    return f"❌ **Error:** Unexpected error during code-based task decomposition: {e}"
+
+            else:
+                self.logger.info("Using natural language task decomposition.")
+                conversation_log.append("🗣️ Using Natural Language Task Decomposition")
+                # Step 1: Task decomposition by Claude (Natural Language)
+                # This is the actual first prompt text in this branch
+                actual_initial_claude_prompt_text = f"""You are the acting supervisor in an agentic workflow. You are collaborating with a local AI assistant that has access to full context/documents, but you don't have direct access to them.
 
 Your goal: Answer this question: "{query}"
 
 The local assistant can see this context (you cannot): [CONTEXT: {len(context)} characters of text including uploaded documents]
 
 Please ask the local assistant specific, focused questions to gather the information you need. Be direct and precise in your requests. Ask only what you need to answer the original question.
-            
+
 Break down this question into no more than {self.valves.max_tasks_per_round} simple, specific tasks. If tasks must happen **in sequence**, do **not** include them all in this round; move to a subsequent round to handle later steps.
 
 Create simple tasks that can be answered to help answer the User's question. Format as a simple list:
@@ -153,20 +204,32 @@ Create simple tasks that can be answered to help answer the User's question. For
 
 Keep tasks simple and focused on extracting specific information to help answer the larger query."""
 
-            try:
-                claude_response = await asyncio.wait_for(
-                    self._call_claude(decomposition_prompt), timeout=30.0
-                )
-                conversation_log.append(f"**🤖 Claude (Task Decomposition):**")
-                conversation_log.append(f"{claude_response}\n")
-            except asyncio.TimeoutError:
-                return "❌ **Error:** Task decomposition timed out. Try using the 'minion' protocol instead."
+                try:
+                    claude_response = await asyncio.wait_for(
+                        self._call_claude(actual_initial_claude_prompt_text), timeout=30.0
+                    )
+                    conversation_log.append(f"**🤖 Claude (Task Decomposition):**\n{claude_response}\n")
+                except asyncio.TimeoutError:
+                    self.logger.error("Natural language task decomposition timed out.")
+                    return "❌ **Error:** Task decomposition timed out. Try using the 'minion' protocol instead."
 
-            # Parse tasks
-            tasks = self._parse_tasks(claude_response)
+                parsed_task_strings = self._parse_tasks(claude_response)
+                job_manifests = []
+                for i, task_desc_str in enumerate(parsed_task_strings):
+                    job_manifests.append(JobManifest(task_id=f"task_{i+1}", task_description=task_desc_str, chunk_id=None, advice=None))
+                self.logger.info(f"Successfully generated {len(job_manifests)} tasks via natural language.")
+                conversation_log.append(f"✅ Successfully generated {len(job_manifests)} tasks via natural language.")
+
+            if not job_manifests:
+                self.logger.warning("No tasks were generated from decomposition.")
+                conversation_log.append("⚠️ No tasks were generated. Synthesis will be based on the original query and context directly.")
+                # Fallback: if no tasks, synthesis will effectively just use the full context.
+                # Or, return a message indicating no tasks could be derived.
+                # For now, proceed, and synthesis will be basic.
 
             if self.valves.debug_mode:
-                debug_log.append(f"**Parsed tasks:** {tasks}")
+                task_descriptions_for_log = [jm.task_description for jm in job_manifests]
+                debug_log.append(f"**Parsed/Generated JobManifests (descriptions):** {task_descriptions_for_log}")
 
             conversation_log.append("### ⚡ Parallel Execution Phase")
 
@@ -182,11 +245,12 @@ Keep tasks simple and focused on extracting specific information to help answer 
                 )
 
             # Execute tasks in parallel across chunks
-            task_results = await self._execute_tasks_on_chunks(tasks, chunks, conversation_log)
+            # TODO: _execute_tasks_on_chunks will need to be updated to accept List[JobManifest]
+            task_results = await self._execute_tasks_on_chunks(job_manifests, chunks, conversation_log)
 
             # Check if we had too many timeouts
-            timeout_count = sum(1 for r in task_results if r["result"] == "Timeout")
-            if timeout_count >= len(tasks) * 2:
+            timeout_count = sum(1 for r in task_results if r["result"] == "Timeout") # This might need adjustment based on task_results structure
+            if timeout_count >= len(job_manifests) * 2: # Adjusted from len(tasks)
                 conversation_log.append(
                     "\n⚠️ **Too many local model timeouts detected. Consider increasing timeout or using simpler models.**"
                 )
@@ -194,16 +258,35 @@ Keep tasks simple and focused on extracting specific information to help answer 
             conversation_log.append("\n### 🔄 Synthesis Phase")
 
             # Step 3: Synthesis
-            results_summary = "\n".join(
-                [f"- {r['task']}: {r['result']}" for r in task_results]
-            )
+            results_summary_parts = []
+            if not task_results:
+                results_summary_parts.append("No tasks were executed, or no results were produced.")
+            else:
+                for r_idx, r_item in enumerate(task_results):
+                    task_id = r_item.get('task_id', f'N/A_{r_idx}')
+                    description = r_item.get('task_description', 'No description provided.')
+                    result_text = r_item.get('result', 'No result returned.')
 
-            synthesis_prompt = f"""Combine these task results into a complete answer for: {query}
+                    description_summary = description[:100] + "..." if len(description) > 100 else description
+                    # Ensure result_text is a string before slicing
+                    result_text_str = str(result_text)
+                    result_summary = result_text_str[:300] + "..." if len(result_text_str) > 300 else result_text_str
 
-RESULTS:
-{results_summary}
+                    results_summary_parts.append(f"Task ID: {task_id}\nDescription: {description_summary}\nResult: {result_summary}\n---")
+            results_summary = "\n".join(results_summary_parts)
 
-Provide a clear, comprehensive answer based on the information found:"""
+            if self.valves.debug_mode:
+                self.logger.debug(f"Results summary for synthesis:\n{results_summary}")
+
+
+            synthesis_prompt = f"""Based on the following information gathered from various tasks, provide a comprehensive answer to the original query: "{query}"
+
+GATHERED INFORMATION:
+{results_summary if results_summary else "No specific information was extracted or tasks executed."}
+
+If the gathered information is insufficient or no tasks were performed, explain what's missing or state that the answer cannot be provided based on the available results.
+Final Answer:"""
+            # The duplicated simpler synthesis_prompt that was here has been removed.
 
             try:
                 final_response = await asyncio.wait_for(
@@ -233,13 +316,14 @@ Provide a clear, comprehensive answer based on the information found:"""
 
             # Calculate stats
             stats = self._calculate_token_savings_minions(
-                decomposition_prompt, synthesis_prompt, results_summary, 
+                actual_initial_claude_prompt_text, # This now holds the correct first prompt
+                synthesis_prompt, results_summary,
                 final_response, context, query
             )
             
-            total_tasks = len(tasks)
+            total_tasks = len(job_manifests) # Adjusted from len(tasks)
             successful_tasks = len(
-                [r for r in task_results if "not found" not in r["result"].lower() and r["result"] != "Timeout"]
+                [r for r in task_results if "not found" not in r["result"].lower() and r["result"] != "Timeout"] # This might need adjustment
             )
 
             output_parts.append(f"\n## 📊 MinionS Efficiency Stats")
@@ -311,74 +395,111 @@ Provide a clear, comprehensive answer based on the information found:"""
         return chunks[:self.valves.max_chunks]
 
     async def _execute_tasks_on_chunks(
-        self, tasks: List[str], chunks: List[str], conversation_log: List[str]
+        self, tasks: List[JobManifest], chunks: List[str], conversation_log: List[str]
     ) -> List[Dict[str, str]]:
-        """Execute tasks in parallel across document chunks"""
+        """Execute tasks defined by JobManifest objects in parallel across document chunks."""
         task_results = []
+        total_chunks_in_document = len(chunks)
 
-        for task_idx, task in enumerate(tasks):
-            conversation_log.append(f"**📋 Task {task_idx + 1}:** {task}")
+        for task_idx, manifest in enumerate(tasks):
+            conversation_log.append(f"**📋 Task {task_idx + 1} (ID: {manifest.task_id}):** {manifest.task_description}")
+            self.logger.info(f"Executing task ID {manifest.task_id}: {manifest.task_description}")
 
-            best_result = None
+            best_result_for_task = "Information not found" # Default if no chunk yields a better answer
+            processed_at_least_one_chunk = False
 
-            # Try chunks in order
-            for chunk_idx, chunk in enumerate(chunks):
-                # Simplified prompt for faster processing
-                local_prompt = f"""Text to analyze:
-{chunk[:3000]}
+            selected_chunks_with_indices: List[tuple[int, str]] = []
+            if manifest.chunk_id is not None and 0 <= manifest.chunk_id < total_chunks_in_document:
+                selected_chunks_with_indices = [(manifest.chunk_id, chunks[manifest.chunk_id])]
+                if self.valves.debug_mode:
+                    self.logger.debug(f"Task {manifest.task_id} targeting specific chunk_id: {manifest.chunk_id}.")
+                conversation_log.append(f"   ℹ️ Task targets specific chunk: {manifest.chunk_id + 1}")
+            else:
+                if manifest.chunk_id is not None: # Invalid chunk_id
+                    self.logger.warning(f"Task {manifest.task_id} had invalid chunk_id: {manifest.chunk_id}. Applying to all chunks.")
+                    conversation_log.append(f"   ⚠️ Task had invalid chunk_id {manifest.chunk_id}, applying to all chunks.")
+                selected_chunks_with_indices = list(enumerate(chunks))
+                if self.valves.debug_mode:
+                    self.logger.debug(f"Task {manifest.task_id} applying to all {len(selected_chunks_with_indices)} chunks.")
+                # conversation_log.append(f"   ℹ️ Task will be applied to all {len(selected_chunks_with_indices)} chunks.")
 
-Task: {task}
 
-Provide a brief, specific answer based on this text. If no relevant information, say "NONE"."""
+            for original_chunk_idx, chunk_content in selected_chunks_with_indices:
+                processed_at_least_one_chunk = True
+
+                prompt_intro = f"Text to analyze (Chunk {original_chunk_idx + 1}/{total_chunks_in_document} of document):"
+                if manifest.chunk_id is not None: # This means it was a targeted chunk_id
+                    prompt_intro = f"Text to analyze (Specifically targeted Chunk {original_chunk_idx + 1}/{total_chunks_in_document} of document based on task assignment):"
+
+                # Use self.valves.chunk_size for ensuring prompt doesn't get too big if chunk_content is massive
+                # However, chunks are already created with self.valves.chunk_size. If this is for Ollama context window, it's different.
+                # For now, assuming chunk_content is already appropriately sized.
+                # Using [:self.valves.chunk_size] might truncate an already sized chunk if not careful.
+                # The original code used [:3000], let's stick to a defined limit for safety.
+                # Consider making this limit a valve if necessary.
+                max_chars_for_prompt = 4000 # Example internal limit for local model prompt text portion
+
+                local_prompt = f'''{prompt_intro}
+---BEGIN TEXT---
+{chunk_content[:max_chars_for_prompt]}
+---END TEXT---
+
+Task: {manifest.task_description}
+'''
+                if manifest.advice:
+                    local_prompt += f"\nHint: {manifest.advice}"
+
+                local_prompt += "\n\nProvide a brief, specific answer based ONLY on the text provided above. If no relevant information is found in THIS SPECIFIC TEXT, respond with the single word \"NONE\"."
 
                 try:
                     if self.valves.debug_mode:
-                        conversation_log.append(
-                            f"   🔄 Trying chunk {chunk_idx + 1} (size: {len(chunk)} chars)..."
-                        )
+                        self.logger.debug(f"   Task {manifest.task_id} trying chunk {original_chunk_idx + 1} (size: {len(chunk_content)} chars).")
+                        conversation_log.append(f"   🔄 Task '{manifest.task_description[:30].ellipsis() if len(manifest.task_description)>30 else manifest.task_description}...' on chunk {original_chunk_idx + 1}...")
 
-                    result = await asyncio.wait_for(
-                        self._call_ollama(local_prompt),
-                        timeout=self.valves.timeout_local,
+                    ollama_response = await asyncio.wait_for(
+                        self._call_ollama(local_prompt), timeout=self.valves.timeout_local
                     )
 
                     if self.valves.debug_mode:
-                        conversation_log.append(
-                            f"   ✅ Chunk {chunk_idx + 1} completed: {result[:100]}..."
-                        )
+                        self.logger.debug(f"   Task {manifest.task_id} chunk {original_chunk_idx + 1} completed. Response: {ollama_response[:100]}...")
+                        conversation_log.append(f"   ✅ Chunk {original_chunk_idx + 1} response: {ollama_response[:100].ellipsis() if len(ollama_response)>100 else ollama_response}...")
 
-                    if "NONE" not in result.upper() and len(result.strip()) > 5:
-                        best_result = result
-                        conversation_log.append(
-                            f"**💻 Local Model (chunk {chunk_idx + 1}):** {result[:150]}..."
-                        )
-                        break  # Found result, move to next task
-                    else:
-                        conversation_log.append(
-                            f"   ℹ️ Chunk {chunk_idx + 1}: No relevant info found"
-                        )
+                    # Check if response indicates information was found
+                    if "NONE" not in ollama_response.upper() and len(ollama_response.strip()) > 2: # Added len check
+                        best_result_for_task = ollama_response
+                        self.logger.info(f"   Task {manifest.task_id} found relevant info in chunk {original_chunk_idx + 1}.")
+                        conversation_log.append(f"**💻 Local Model (Task '{manifest.task_description[:30].ellipsis() if len(manifest.task_description)>30 else manifest.task_description}...', Chunk {original_chunk_idx+1}):** {ollama_response[:100].ellipsis() if len(ollama_response)>100 else ollama_response}...")
+                        # If task was for a specific chunk, or if we take the first good answer for global tasks
+                        break
                 except asyncio.TimeoutError:
-                    conversation_log.append(
-                        f"   ⏰ Chunk {chunk_idx + 1} timed out after {self.valves.timeout_local}s"
-                    )
-                    continue
+                    self.logger.warning(f"   Task {manifest.task_id} on chunk {original_chunk_idx + 1} timed out after {self.valves.timeout_local}s.")
+                    conversation_log.append(f"   ⏰ Task '{manifest.task_description[:30].ellipsis() if len(manifest.task_description)>30 else manifest.task_description}...' on chunk {original_chunk_idx + 1} timed out.")
+                    if best_result_for_task == "Information not found": # Prioritize timeout message if no info found yet
+                         best_result_for_task = "Timeout"
                 except Exception as e:
-                    conversation_log.append(
-                        f"   ❌ Chunk {chunk_idx + 1} error: {str(e)}"
-                    )
-                    if self.valves.debug_mode:
-                        conversation_log.append(f"      Full error: {repr(e)}")
-                    continue
+                    self.logger.error(f"   Task {manifest.task_id} on chunk {original_chunk_idx + 1} error: {e}")
+                    conversation_log.append(f"   ❌ Task '{manifest.task_description[:30].ellipsis() if len(manifest.task_description)>30 else manifest.task_description}...' on chunk {original_chunk_idx + 1} error: {e}")
+                    if best_result_for_task == "Information not found": # Prioritize error message
+                        best_result_for_task = f"Error: {e}"
 
-            if best_result:
-                task_results.append({"task": task, "result": best_result})
-            else:
-                conversation_log.append(
-                    f"**💻 Local Model:** No relevant information found"
-                )
-                task_results.append(
-                    {"task": task, "result": "Information not found"}
-                )
+            if not processed_at_least_one_chunk and manifest.chunk_id is not None:
+                # This case means a specific chunk_id was requested but was invalid (e.g., out of bounds)
+                self.logger.warning(f"Task {manifest.task_id} requested specific chunk {manifest.chunk_id} which was not processed (total chunks: {total_chunks_in_document}).")
+                conversation_log.append(f"   ⚠️ Task {manifest.task_id} could not be processed as requested chunk {manifest.chunk_id} is invalid.")
+                best_result_for_task = "Invalid chunk requested"
+
+
+            task_results.append({
+                "task_id": manifest.task_id,
+                "task_description": manifest.task_description, # Keep for easier summary later
+                "result": best_result_for_task
+            })
+
+            if best_result_for_task == "Information not found" and processed_at_least_one_chunk:
+                 conversation_log.append(f"**💻 Local Model (Task '{manifest.task_description[:30].ellipsis() if len(manifest.task_description)>30 else manifest.task_description}...'):** No relevant information found across applicable chunks.")
+            elif best_result_for_task == "Timeout" and processed_at_least_one_chunk : # Check processed_at_least_one_chunk
+                 conversation_log.append(f"**💻 Local Model (Task '{manifest.task_description[:30].ellipsis() if len(manifest.task_description)>30 else manifest.task_description}...'):** Timed out without finding information.")
+
 
         return task_results
 
@@ -415,6 +536,81 @@ Provide a brief, specific answer based on this text. If no relevant information,
             'token_savings': token_savings,
             'percentage_savings': percentage_savings
         }
+
+    def _execute_generated_code(self, generated_code: str) -> List[JobManifest]:
+        """
+        Safely executes LLM-generated Python code expected to define a list of JobManifest objects.
+        """
+        local_scope: Dict[str, Any] = {"JobManifest": JobManifest, "job_manifests": []}
+
+        # Strip markdown code block fences if present
+        code_to_execute = generated_code.strip()
+        if code_to_execute.startswith("```python"):
+            code_to_execute = code_to_execute[9:] # Remove ```python
+            if code_to_execute.strip().endswith("```"):
+                code_to_execute = code_to_execute.strip()[:-3] # Remove ```
+        elif code_to_execute.startswith("```"): # Handle if just ``` not ```python
+            code_to_execute = code_to_execute[3:]
+            if code_to_execute.strip().endswith("```"):
+                code_to_execute = code_to_execute.strip()[:-3]
+
+        code_to_execute = code_to_execute.strip()
+
+        try:
+            # Execute the generated code
+            exec(code_to_execute, {"JobManifest": JobManifest, "__builtins__": {}}, local_scope)
+
+            result = local_scope.get("job_manifests")
+
+            if isinstance(result, list) and all(isinstance(item, JobManifest) for item in result):
+                if not result: # Empty list is valid if LLM decides no tasks needed
+                    self.logger.info("Generated code produced an empty list of JobManifests.")
+                return result
+            elif result is None and code_to_execute.startswith("[") and code_to_execute.endswith("]"):
+                # Fallback: try to eval if the code itself is a list literal
+                # This is a secondary attempt if 'job_manifests' variable wasn't assigned.
+                self.logger.info("No 'job_manifests' variable found, attempting to eval code as list literal.")
+                try:
+                    # Ensure JobManifest is available in the eval context as well
+                    # Restricted builtins for safety.
+                    eval_result = eval(code_to_execute, {"JobManifest": JobManifest, "__builtins__": {"list": list, "dict": dict}}, {}) # Provide common builtins
+                    if isinstance(eval_result, list) and all(isinstance(item, JobManifest) for item in eval_result):
+                        if not eval_result:
+                             self.logger.info("Evaluated code produced an empty list of JobManifests.")
+                        return eval_result
+                    else:
+                        self.logger.warning(f"Evaluated code did not produce a List[JobManifest]. Type: {type(eval_result)}")
+                        raise ValueError("Generated code, when evaluated, did not produce a list of JobManifest objects.")
+                except Exception as e_eval:
+                    self.logger.error(f"Error evaluating generated code as a list literal: {e_eval}")
+                    # Log the problematic code if it's not too long for privacy/security
+                    logged_code = code_to_execute[:500] + "..." if len(code_to_execute) > 500 else code_to_execute
+                    self.logger.debug(f"Problematic code for eval: {logged_code}")
+                    raise ValueError(f"Generated code could not be executed to find 'job_manifests' nor evaluated as a list literal. Eval error: {e_eval}") from e_eval
+            elif result is not None:
+                # 'job_manifests' was assigned, but not List[JobManifest]
+                self.logger.warning(f"Generated code assigned 'job_manifests', but it was not List[JobManifest]. Type: {type(result)}")
+                raise ValueError(f"Generated code assigned 'job_manifests', but it was not a list of JobManifest objects. Found type: {type(result)}")
+            else:
+                # 'job_manifests' is None and code doesn't look like a list literal
+                self.logger.warning("Generated code did not assign to 'job_manifests' and does not appear to be a direct list literal.")
+                raise ValueError("Generated code did not produce a list of JobManifest objects, and 'job_manifests' variable was not found or correctly assigned.")
+
+        except SyntaxError as e:
+            self.logger.error(f"Syntax error in generated code: {e}")
+            logged_code = code_to_execute[:500] + "..." if len(code_to_execute) > 500 else code_to_execute
+            self.logger.debug(f"Problematic code for syntax error: {logged_code}")
+            raise ValueError(f"Syntax error in generated code: {e}") from e
+        except NameError as e:
+            self.logger.error(f"Name error in generated code: {e}. Ensure JobManifest is correctly used and all necessary variables are defined if code isn't self-contained.")
+            logged_code = code_to_execute[:500] + "..." if len(code_to_execute) > 500 else code_to_execute
+            self.logger.debug(f"Problematic code for name error: {logged_code}")
+            raise ValueError(f"Name error in generated code: {e}. This might happen if the code tries to use undefined variables or modules other than JobManifest.") from e
+        except Exception as e:
+            self.logger.error(f"An unexpected error occurred during execution of generated code: {e}")
+            logged_code = code_to_execute[:500] + "..." if len(code_to_execute) > 500 else code_to_execute
+            self.logger.debug(f"Problematic code for general exception: {logged_code}")
+            raise ValueError(f"An unexpected error occurred during execution of generated code: {e}") from e
     
     async def _call_claude(self, prompt: str) -> str:
         """Call Anthropic Claude API"""
