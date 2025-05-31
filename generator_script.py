@@ -20,6 +20,38 @@ def load_partial(partials_dir: str, filename: str) -> str:
     with open(filepath, 'r') as f:
         return f.read()
 
+def process_partial_content(content: str, filename: str, all_partials: List[str]) -> str:
+    """Process partial content to handle imports correctly."""
+    lines = content.split('\n')
+    processed_lines = []
+    
+    # Get list of partial modules (without .py extension)
+    partial_modules = [p.replace('.py', '') for p in all_partials if p.endswith('.py')]
+    
+    skip_until_close = False
+    
+    for line in lines:
+        # Check if we're in a multi-line import that should be skipped
+        if skip_until_close:
+            if ')' in line:
+                skip_until_close = False
+            continue
+            
+        # Skip imports from other partials that will be concatenated
+        if line.strip().startswith('from .'):
+            # Extract module name
+            if ' import ' in line:
+                module_name = line.split('from .')[1].split(' import')[0].strip()
+                if module_name in partial_modules:
+                    # Check if it's a multi-line import
+                    if '(' in line and ')' not in line:
+                        skip_until_close = True
+                    continue
+        
+        processed_lines.append(line)
+    
+    return '\n'.join(processed_lines)
+
 def replace_placeholders(content: str, placeholders: Dict[str, str]) -> str:
     """Replace placeholders in content."""
     for key, value in placeholders.items():
@@ -72,18 +104,25 @@ def generate_function(profile: Dict[str, Any], partials_dir: str, function_type:
     """Generate a complete function file from partials."""
     output_parts = []
     
+    # Get all partials for processing
+    all_partials = profile["partials_concat_order"]
+    
     # 1. Process header
     header_content = load_partial(partials_dir, "common_header.py")
     header_content = replace_placeholders(header_content, profile["header_placeholders"])
     output_parts.append(header_content)
     
     # 2. Load all partials in order
-    for partial_file in profile["partials_concat_order"]:
+    for partial_file in all_partials:
         if partial_file == "common_header.py":
             continue  # Already processed
         
         content = load_partial(partials_dir, partial_file)
-        output_parts.append(content)
+        
+        # Process content to remove inter-partial imports
+        processed_content = process_partial_content(content, partial_file, all_partials)
+        
+        output_parts.append(processed_content)
     
     # 3. Generate the final Pipe class
     pipe_class = generate_pipe_class(profile, function_type)

@@ -2,12 +2,6 @@ import asyncio
 import json
 from typing import List, Dict, Any, Tuple, Callable
 
-from .minion_prompts import ( # Added imports
-    get_minion_initial_claude_prompt,
-    get_minion_conversation_claude_prompt,
-    get_minion_local_prompt
-)
-
 def _calculate_token_savings(conversation_history: List[Tuple[str, str]], context: str, query: str) -> dict:
     """Calculate token savings for the Minion protocol"""
     chars_per_token = 3.5
