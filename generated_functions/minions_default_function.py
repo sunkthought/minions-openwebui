@@ -5,7 +5,7 @@ author_url: https://github.com/SunkThought/minions-openwebui
 original_author: Copyright (c) 2025 Sabri Eyuboglu, Avanika Narayan, Dan Biderman, and the rest of the Minions team (@HazyResearch wrote the original MinionS Protocol paper and code examples on github that spawned this)
 original_author_url: https://github.com/HazyResearch/
 funding_url: https://github.com/HazyResearch/minions
-version: 0.2.1
+version: 0.2.2
 description: MinionS protocol - task decomposition and parallel processing between local and cloud models
 required_open_webui_version: 0.5.0
 license: MIT License
@@ -458,8 +458,6 @@ import asyncio
 import json
 from typing import List, Dict, Any, Callable # Removed Optional, Awaitable
 
-# Unused import: from .common_file_processing import create_chunks
-
 # parse_tasks function removed, will be part of minions_decomposition_logic.py
 
 # Removed create_chunks function from here
@@ -654,6 +652,8 @@ import asyncio
 from typing import Any, List, Callable, Dict
 from fastapi import Request
 
+
+
 async def _call_claude_directly(valves: Any, query: str, call_claude_func: Callable) -> str:
     """Fallback to direct Claude call when no context is available"""
     return await call_claude_func(valves, f"Please answer this question: {query}")
@@ -682,7 +682,7 @@ async def _execute_minions_protocol(
 
     overall_start_time = asyncio.get_event_loop().time()
     if valves.debug_mode:
-        debug_log.append(f"🔍 **Debug Info (MinionS v0.2.0):**\n- Query: {query[:100]}...\n- Context length: {len(context)} chars")
+        debug_log.append(f"🔍 **Debug Info (MinionS v0.2.6):**\n- Query: {query[:100]}...\n- Context length: {len(context)} chars")
         debug_log.append(f"**⏱️ Overall process started. (Debug Mode)**")
 
     chunks = create_chunks(context, valves.chunk_size, valves.max_chunks)
@@ -863,7 +863,7 @@ async def _execute_minions_protocol(
     total_successful_tasks = len([r for r in all_round_results_aggregated if r['status'] == 'success'])
     tasks_with_any_timeout = len([r for r in all_round_results_aggregated if r['status'] == 'timeout_all_chunks'])
 
-    output_parts.append(f"\n## 📊 MinionS Efficiency Stats (v0.2.0)")
+    output_parts.append(f"\n## 📊 MinionS Efficiency Stats (v0.2.6)")
     output_parts.append(f"- **Protocol:** MinionS (Multi-Round)")
     output_parts.append(f"- **Rounds executed:** {stats['total_rounds']}/{valves.max_rounds}")
     output_parts.append(f"- **Total tasks for local LLM:** {stats['total_tasks_executed_local']}")
@@ -944,7 +944,7 @@ class Pipe:
 
     def __init__(self):
         self.valves = self.Valves()
-        self.name = "MinionS v0.2.2"
+        self.name = "MinionS v0.2.2 (Multi-Round)"
 
     def pipes(self):
         """Define the available models"""
