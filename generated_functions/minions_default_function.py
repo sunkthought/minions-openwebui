@@ -944,7 +944,7 @@ class Pipe:
 
     def __init__(self):
         self.valves = self.Valves()
-        self.name = "MinionS v0.2.1 (Multi-Round)"
+        self.name = "MinionS v0.2.2"
 
     def pipes(self):
         """Define the available models"""
