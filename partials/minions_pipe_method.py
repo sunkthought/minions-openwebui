@@ -42,6 +42,7 @@ async def minions_pipe_method(
     debug_log: List[str] = []
     actual_initial_claude_prompt_text: str = ""
 
+
     try:
         if valves.debug_mode: logger.info("MinionS pipe method invoked.")
         if not valves.anthropic_api_key: return "❌ **Error:** Anthropic API key not configured."
@@ -106,7 +107,7 @@ async def minions_pipe_method(
                 job_manifests, chunks, conversation_log, valves, call_ollama, logger, TaskResult
             )
         elif not job_manifests: conversation_log.append("ℹ️ No tasks to execute.")
-        elif not chunks: conversation_log.append("ℹ️ No chunks to process.")
+        elif not chunks: conversation_log.append("ℹ️ No chunks to process."
 
         conversation_log.append("\n### 🔄 Synthesis")
         summary_parts = [f"ID: {r.get('task_id')}\nDesc: {_truncate_text(r.get('task_description',''),70)}\nRes: {_truncate_text(r.get('result',''),150)}\n---" for r in task_results]
