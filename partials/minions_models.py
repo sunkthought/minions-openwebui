@@ -28,7 +28,7 @@ class TaskResult(BaseModel):
     )
     answer: Optional[str] = Field(
         default=None, 
-        description="The specific information extracted or the answer to the sub-task. Should be None if the information is not found in the provided text chunk."
+        description="A concise textual summary directly answering the sub-task. This should be a plain string, not a complex object, list, or a JSON string unless the answer itself is inherently a JSON string meant to be stored as text."
     )
     confidence: str = Field(
         default="LOW", 

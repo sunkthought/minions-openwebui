@@ -29,8 +29,8 @@ async def minions_pipe_method(
     valves = pipe_instance.valves
 
     # --- Dynamically available components (post-concatenation by generator) ---
-    # JobManifest model class is expected to be globally available after concatenation.
-    # TaskResult = pipe_instance.TaskResult # For structured output, if used later
+    # JobManifest and TaskResult model classes are expected to be globally available.
+    # TaskResult = pipe_instance.TaskResult # This line removed/ensured not present.
 
     # Helper Functions from other partials (assumed global after concatenation):
     # _extract_context_from_messages, _extract_context_from_files, _create_chunks
@@ -101,9 +101,9 @@ async def minions_pipe_method(
         conversation_log.append(f"{len(chunks)} chunks created.")
         task_results: List[Dict[str, str]] = []
         if job_manifests and chunks:
-            # execute_tasks_on_chunks is assumed global, pass global call_ollama
+            # execute_tasks_on_chunks is assumed global, pass global call_ollama and TaskResult
             task_results = await execute_tasks_on_chunks(
-                job_manifests, chunks, conversation_log, valves, call_ollama, logger
+                job_manifests, chunks, conversation_log, valves, call_ollama, logger, TaskResult
             )
         elif not job_manifests: conversation_log.append("ℹ️ No tasks to execute.")
         elif not chunks: conversation_log.append("ℹ️ No chunks to process.")

@@ -11,11 +11,18 @@ def _truncate_text(text: str, max_length: int) -> str:
 
 # parse_local_response and calculate_token_savings are preserved from original file
 
-def parse_local_response(response: str, is_structured: bool, use_structured_output: bool, debug_mode: bool, TaskResultModel: Any) -> Dict:
+def parse_local_response(response: str, is_structured: bool, use_structured_output: bool, debug_mode: bool, TaskResultModel: Any, logger: logging.Logger) -> Dict:
     """Parse local model response, supporting both text and structured formats"""
     if is_structured and use_structured_output:
         try:
             parsed_json = json.loads(response)
+
+            # Fallback for 'answer' field if it's a list or dict
+            answer_content = parsed_json.get('answer')
+            if isinstance(answer_content, (list, dict)):
+                logger.warning("Local LLM provided a list/dict for 'answer' field; converting to JSON string.")
+                parsed_json['answer'] = json.dumps(answer_content) # Stringify it
+
             validated_model = TaskResultModel(**parsed_json)
             model_dict = validated_model.dict()
             model_dict['parse_error'] = None
@@ -26,8 +33,8 @@ def parse_local_response(response: str, is_structured: bool, use_structured_outp
             return model_dict
         except Exception as e:
             if debug_mode:
-                # Using print for debug mode in partials, logger might not be configured yet by main script
-                print(f"DEBUG: Failed to parse structured output in MinionS partial: {e}. Response was: {response[:500]}")
+                # Using logger now.
+                logger.debug(f"Failed to parse structured output or validation error: {e}. Response was: {response[:500]}")
             is_none_equivalent_fallback = response.strip().upper() == "NONE"
             return {"answer": response, "explanation": response, "confidence": "LOW", "citation": None, "parse_error": str(e), "_is_none_equivalent": is_none_equivalent_fallback}
     
@@ -39,10 +46,10 @@ async def execute_tasks_on_chunks(
     chunks: List[str],
     conversation_log: List[str], 
     # JobManifest_cls: Type, # Not strictly needed if tasks are already instances
-    # TaskResult_cls: Type, # For structured output, not used in this simplified version
     valves: Any,
     call_ollama_func: Callable[..., Awaitable[str]],
-    logger: logging.Logger
+    logger: logging.Logger,
+    TaskResult_cls: Type # Added for structured output
 ) -> List[Dict[str, str]]:
     """
     Execute tasks defined by JobManifest objects in parallel across document chunks.
@@ -96,8 +103,12 @@ Task: {task_description}
 '''
             if advice:
                 local_prompt += f"\nHint: {advice}"
-            
-            local_prompt += "\n\nProvide a brief, specific answer based ONLY on the text provided above. If no relevant information is found in THIS SPECIFIC TEXT, respond with the single word \"NONE\"."
+
+            # Adjust prompt if structured output is expected
+            if valves.use_structured_output:
+                local_prompt += f"\n\nProvide your answer ONLY as a valid JSON object matching the specified schema. If no relevant information is found in THIS SPECIFIC TEXT, ensure the 'answer' field in your JSON response is explicitly set to null."
+            else:
+                local_prompt += "\n\nProvide a brief, specific answer based ONLY on the text provided above. If no relevant information is found in THIS SPECIFIC TEXT, respond with the single word \"NONE\"."
 
             try:
                 task_desc_summary = _truncate_text(task_description, 30)
@@ -105,21 +116,60 @@ Task: {task_description}
                     logger.debug(f"   Task {task_id} trying chunk {original_chunk_idx + 1} (size: {len(chunk_content)} chars). Prompt: {_truncate_text(local_prompt,200)}...")
                     conversation_log.append(f"   🔄 Task '{task_desc_summary}' on chunk {original_chunk_idx + 1}...")
 
-                ollama_response = await asyncio.wait_for(
-                    call_ollama_func(valves, local_prompt),
+                response_str = await asyncio.wait_for(
+                    call_ollama_func(
+                        valves,
+                        local_prompt,
+                        use_json=valves.use_structured_output,
+                        schema=TaskResult_cls if valves.use_structured_output else None
+                        ),
                     timeout=valves.timeout_local
                 )
-                ollama_response_summary = _truncate_text(ollama_response, 100)
-                if valves.debug_mode:
-                    logger.debug(f"   Task {task_id} chunk {original_chunk_idx + 1} completed. Response: {ollama_response_summary}...")
-                    conversation_log.append(f"   ✅ Chunk {original_chunk_idx + 1} response: {ollama_response_summary}...")
 
-                if "NONE" not in ollama_response.upper() and len(ollama_response.strip()) > 2:
-                    best_result_for_task = ollama_response
-                    logger.info(f"   Task {task_id} found relevant info in chunk {original_chunk_idx + 1}.")
-                    conversation_log.append(f"**💻 Local Model (Task '{task_desc_summary}', Chunk {original_chunk_idx+1}):** {ollama_response_summary}...")
-                    if chunk_id_from_manifest is not None:
-                        break
+                current_result_text = "Information not found" # Default before parsing
+
+                if valves.use_structured_output:
+                    response_data = parse_local_response(
+                        response_str,
+                        is_structured=True, # We requested structured if use_structured_output is True
+                        use_structured_output=True, # Pass it along
+                        debug_mode=valves.debug_mode,
+                        TaskResultModel=TaskResult_cls,
+                        logger=logger
+                    )
+                    if valves.debug_mode:
+                        logger.debug(f"   Task {task_id} chunk {original_chunk_idx + 1} structured response parsed: {response_data}")
+
+                    if not response_data['_is_none_equivalent']:
+                        # Use 'answer' if available, otherwise 'explanation' as fallback text.
+                        # The 'result' for aggregation should be a simple string.
+                        current_result_text = response_data.get('answer') if response_data.get('answer') is not None else response_data.get('explanation', 'No explanation provided.')
+                        # Ensure current_result_text is a string, as 'answer' could have been (list,dict) then stringified by parse_local_response
+                        if not isinstance(current_result_text, str):
+                            current_result_text = str(current_result_text)
+
+                        logger.info(f"   Task {task_id} found relevant info (structured) in chunk {original_chunk_idx + 1}.")
+                        conversation_log.append(f"**💻 Local Model (Task '{task_desc_summary}', Chunk {original_chunk_idx+1}):** {_truncate_text(current_result_text, 100)}...")
+                        best_result_for_task = current_result_text # Update best result for this task
+                        if chunk_id_from_manifest is not None:
+                            break # Found result for specific chunk task
+                    else:
+                        # Structured response indicated no relevant info
+                        logger.info(f"   Task {task_id} (structured) found no relevant info in chunk {original_chunk_idx + 1}.")
+                else: # Plain text processing
+                    response_str_summary = _truncate_text(response_str, 100)
+                    if valves.debug_mode:
+                        logger.debug(f"   Task {task_id} chunk {original_chunk_idx + 1} plain text response: {response_str_summary}...")
+                        conversation_log.append(f"   ✅ Chunk {original_chunk_idx + 1} plain response: {response_str_summary}...")
+
+                    if "NONE" not in response_str.upper() and len(response_str.strip()) > 2:
+                        current_result_text = response_str
+                        logger.info(f"   Task {task_id} found relevant info (plain text) in chunk {original_chunk_idx + 1}.")
+                        conversation_log.append(f"**💻 Local Model (Task '{task_desc_summary}', Chunk {original_chunk_idx+1}):** {response_str_summary}...")
+                        best_result_for_task = current_result_text # Update best result for this task
+                        if chunk_id_from_manifest is not None:
+                            break # Found result for specific chunk task
+
             except asyncio.TimeoutError:
                 logger.warning(f"   Task {task_id} on chunk {original_chunk_idx + 1} timed out after {valves.timeout_local}s.")
                 conversation_log.append(f"   ⏰ Task '{task_desc_summary}' on chunk {original_chunk_idx + 1} timed out.")
