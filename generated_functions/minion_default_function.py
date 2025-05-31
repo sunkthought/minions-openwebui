@@ -5,7 +5,7 @@ author_url: https://github.com/SunkThought/minions-openwebui
 original_author: Copyright (c) 2025 Sabri Eyuboglu, Avanika Narayan, Dan Biderman, and the rest of the Minions team (@HazyResearch wrote the original MinionS Protocol paper and code examples on github that spawned this)
 original_author_url: https://github.com/HazyResearch/
 funding_url: https://github.com/HazyResearch/minions
-version: 0.2.1
+version: 0.2.2
 description: Basic Minion protocol - conversational collaboration between local and cloud models
 required_open_webui_version: 0.5.0
 license: MIT License
@@ -424,7 +424,7 @@ async def _execute_minion_protocol(
     overall_start_time = 0
     if valves.debug_mode:
         overall_start_time = asyncio.get_event_loop().time()
-        debug_log.append(f"🔍 **Debug Info (Minion v0.2.0):**")
+        debug_log.append(f"🔍 **Debug Info (Minion v0.2.6):**")
         debug_log.append(f"  - Query: {query[:100]}...")
         debug_log.append(f"  - Context length: {len(context)} chars")
         debug_log.append(f"  - Max rounds: {valves.max_rounds}")
@@ -650,7 +650,7 @@ class Pipe:
 
     def __init__(self):
         self.valves = self.Valves()
-        self.name = "Minion v0.2.1"
+        self.name = "Minion v0.2.6"
 
     def pipes(self):
         """Define the available models"""
