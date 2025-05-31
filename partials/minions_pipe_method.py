@@ -1,295 +1,155 @@
+import logging
 import asyncio
-from typing import Any, List, Callable, Dict
-from fastapi import Request
+import json
+from typing import List, Dict, Any, Optional
 
-from .common_api_calls import call_claude, call_ollama
-from .minions_protocol_logic import execute_tasks_on_chunks, calculate_token_savings
-from .common_file_processing import create_chunks
-from .minions_models import TaskResult
-from .common_context_utils import extract_context_from_messages, extract_context_from_files
-from .minions_decomposition_logic import decompose_task
-from .minions_prompts import get_minions_synthesis_claude_prompt
-
-
-async def _call_claude_directly(valves: Any, query: str, call_claude_func: Callable) -> str:
-    """Fallback to direct Claude call when no context is available"""
-    return await call_claude_func(valves, f"Please answer this question: {query}")
-
-async def _execute_minions_protocol(
-    valves: Any,
-    query: str,
-    context: str,
-    call_claude: Callable,  # Changed from call_claude_func
-    call_ollama: Callable,  # Changed from call_ollama_func
-    TaskResult: Any        # Changed from TaskResultModel
-) -> str:
-    """Execute the MinionS protocol"""
-    conversation_log = []
-    debug_log = []
-    scratchpad_content = ""
-    all_round_results_aggregated = []
-    decomposition_prompts_history = []
-    synthesis_prompts_history = []
-    final_response = "No answer could be synthesized."
-    claude_provided_final_answer = False
-    total_tasks_executed_local = 0
-    total_chunks_processed_for_stats = 0
-    total_chunk_processing_timeouts_accumulated = 0
-    synthesis_input_summary = ""
-
-    overall_start_time = asyncio.get_event_loop().time()
-    if valves.debug_mode:
-        debug_log.append(f"🔍 **Debug Info (MinionS v0.2.6):**\n- Query: {query[:100]}...\n- Context length: {len(context)} chars")
-        debug_log.append(f"**⏱️ Overall process started. (Debug Mode)**")
-
-    chunks = create_chunks(context, valves.chunk_size, valves.max_chunks)
-    if not chunks and context:
-        return "❌ **Error:** Context provided, but failed to create any processable chunks. Check chunk_size."
-    if not chunks and not context:
-        conversation_log.append("ℹ️ No context or chunks to process with MinionS. Attempting direct call.")
-        start_time_claude = 0
-        if valves.debug_mode: 
-            start_time_claude = asyncio.get_event_loop().time()
-        try:
-            final_response = await _call_claude_directly(valves, query, call_claude_func=call_claude)
-            if valves.debug_mode:
-                end_time_claude = asyncio.get_event_loop().time()
-                time_taken_claude = end_time_claude - start_time_claude
-                debug_log.append(f"⏱️ Claude direct call took {time_taken_claude:.2f}s. (Debug Mode)")
-            output_parts = []
-            if valves.show_conversation:
-                output_parts.append("## 🗣️ MinionS Collaboration (Direct Call)")
-                output_parts.extend(conversation_log)
-                output_parts.append("---")
-            if valves.debug_mode:
-                output_parts.append("### 🔍 Debug Log")
-                output_parts.extend(debug_log)
-                output_parts.append("---")
-            output_parts.append(f"## 🎯 Final Answer (Direct)\n{final_response}")
-            return "\n".join(output_parts)
-        except Exception as e:
-            return f"❌ **Error in direct Claude call:** {str(e)}"
-
-    total_chunks_processed_for_stats = len(chunks)
-
-    for current_round in range(valves.max_rounds):
-        if valves.debug_mode:
-            debug_log.append(f"**⚙️ Starting Round {current_round + 1}/{valves.max_rounds}... (Debug Mode)**")
-        
-        if valves.show_conversation:
-            conversation_log.append(f"### 🎯 Round {current_round + 1}/{valves.max_rounds} - Task Decomposition Phase")
-
-        # Call the new decompose_task function
-        tasks, claude_response_for_decomposition = await decompose_task(
-            valves=valves,
-            call_claude_func=call_claude,  # Using call_claude
-            query=query,
-            scratchpad_content=scratchpad_content,
-            num_chunks=len(chunks),
-            max_tasks_per_round=valves.max_tasks_per_round,
-            current_round=current_round + 1,
-            conversation_log=conversation_log,
-            debug_log=debug_log
-        )
-        
-        # Handle Claude communication errors from decompose_task
-        if claude_response_for_decomposition.startswith("CLAUDE_ERROR:"):
-            error_message = claude_response_for_decomposition.replace("CLAUDE_ERROR: ", "")
-            final_response = f"MinionS protocol failed during task decomposition: {error_message}"
-            break
-
-        # Log the raw Claude response if conversation is shown
-        if valves.show_conversation:
-            conversation_log.append(f"**🤖 Claude (Decomposition - Round {current_round + 1}):**\n{claude_response_for_decomposition}\n")
-
-        # Check for "FINAL ANSWER READY."
-        if "FINAL ANSWER READY." in claude_response_for_decomposition:
-            final_response = claude_response_for_decomposition.split("FINAL ANSWER READY.", 1)[1].strip()
-            claude_provided_final_answer = True
-            if valves.show_conversation:
-                conversation_log.append(f"**🤖 Claude indicates final answer is ready in round {current_round + 1}.**")
-            scratchpad_content += f"\n\n**Round {current_round + 1}:** Claude provided final answer."
-            break
-        
-        if not tasks:
-            if valves.show_conversation:
-                conversation_log.append(f"**🤖 Claude provided no new tasks in round {current_round + 1}. Proceeding to final synthesis.**")
-            break
-        
-        total_tasks_executed_local += len(tasks)
-        
-        if valves.show_conversation:
-            conversation_log.append(f"### ⚡ Round {current_round + 1} - Parallel Execution Phase (Processing {len(chunks)} chunks for {len(tasks)} tasks)")
-        
-        execution_details = await execute_tasks_on_chunks(
-            tasks, chunks, conversation_log if valves.show_conversation else debug_log, 
-            current_round + 1, valves, call_ollama, TaskResult  # Using correct names
-        )
-        current_round_task_results = execution_details["results"]
-        round_chunk_attempts = execution_details["total_chunk_processing_attempts"]
-        round_chunk_timeouts = execution_details["total_chunk_processing_timeouts"]
-
-        if round_chunk_attempts > 0:
-            timeout_percentage_this_round = (round_chunk_timeouts / round_chunk_attempts) * 100
-            log_msg_timeout_stat = f"**📈 Round {current_round + 1} Local LLM Timeout Stats:** {round_chunk_timeouts}/{round_chunk_attempts} chunk calls timed out ({timeout_percentage_this_round:.1f}%)."
-            if valves.show_conversation: 
-                conversation_log.append(log_msg_timeout_stat)
-            if valves.debug_mode: 
-                debug_log.append(log_msg_timeout_stat)
-
-            if timeout_percentage_this_round >= valves.max_round_timeout_failure_threshold_percent:
-                warning_msg = f"⚠️ **Warning:** Round {current_round + 1} exceeded local LLM timeout threshold of {valves.max_round_timeout_failure_threshold_percent}%. Results from this round may be incomplete or unreliable."
-                if valves.show_conversation: 
-                    conversation_log.append(warning_msg)
-                if valves.debug_mode: 
-                    debug_log.append(warning_msg)
-                scratchpad_content += f"\n\n**Note from Round {current_round + 1}:** High percentage of local model timeouts ({timeout_percentage_this_round:.1f}%) occurred, results for this round may be partial."
-        
-        round_summary_for_scratchpad_parts = []
-        for r_val in current_round_task_results:
-            status_icon = "✅" if r_val['status'] == 'success' else ("⏰" if 'timeout' in r_val['status'] else "❓")
-            summary_text = f"- {status_icon} Task: {r_val['task']}, Result: {r_val['result'][:200]}..." if r_val['status'] == 'success' else f"- {status_icon} Task: {r_val['task']}, Status: {r_val['result']}"
-            round_summary_for_scratchpad_parts.append(summary_text)
-        
-        if round_summary_for_scratchpad_parts:
-            scratchpad_content += f"\n\n**Results from Round {current_round + 1}:**\n" + "\n".join(round_summary_for_scratchpad_parts)
-        
-        all_round_results_aggregated.extend(current_round_task_results)
-        total_chunk_processing_timeouts_accumulated += round_chunk_timeouts
-
-        if valves.debug_mode:
-            current_cumulative_time = asyncio.get_event_loop().time() - overall_start_time
-            debug_log.append(f"**🏁 Completed Round {current_round + 1}. Cumulative time: {current_cumulative_time:.2f}s. (Debug Mode)**")
-
-        if current_round == valves.max_rounds - 1:
-            if valves.show_conversation:
-                conversation_log.append(f"**🏁 Reached max rounds ({valves.max_rounds}). Proceeding to final synthesis.**")
-
-    if not claude_provided_final_answer:
-        if valves.show_conversation:
-            conversation_log.append("\n### 🔄 Final Synthesis Phase")
-        if not all_round_results_aggregated:
-            final_response = "No information was gathered from the document by local models across the rounds."
-            if valves.show_conversation:
-                conversation_log.append(f"**🤖 Claude (Synthesis):** {final_response}")
-        else:
-            synthesis_input_summary = "\n".join([f"- Task: {r['task']}\n  Result: {r['result']}" for r in all_round_results_aggregated if r['status'] == 'success'])
-            if not synthesis_input_summary:
-                synthesis_input_summary = "No definitive information was found by local models. The original query was: " + query
-            
-            # Call the new function for synthesis prompt
-            synthesis_prompt = get_minions_synthesis_claude_prompt(query, synthesis_input_summary, valves)
-            synthesis_prompts_history.append(synthesis_prompt)
-            
-            start_time_claude_synth = 0
-            if valves.debug_mode:
-                start_time_claude_synth = asyncio.get_event_loop().time()
-            try:
-                final_response = await call_claude(valves, synthesis_prompt)
-                if valves.debug_mode:
-                    end_time_claude_synth = asyncio.get_event_loop().time()
-                    time_taken_claude_synth = end_time_claude_synth - start_time_claude_synth
-                    debug_log.append(f"⏱️ Claude call (Final Synthesis) took {time_taken_claude_synth:.2f}s. (Debug Mode)")
-                if valves.show_conversation:
-                    conversation_log.append(f"**🤖 Claude (Final Synthesis):**\n{final_response}")
-            except Exception as e:
-                if valves.show_conversation:
-                    conversation_log.append(f"❌ Error during final synthesis: {e}")
-                final_response = "Error during final synthesis. Raw findings might be available in conversation log."
-    
-    output_parts = []
-    if valves.show_conversation:
-        output_parts.append("## 🗣️ MinionS Collaboration (Multi-Round)")
-        output_parts.extend(conversation_log)
-        output_parts.append("---")
-    if valves.debug_mode:
-        output_parts.append("### 🔍 Debug Log")
-        output_parts.extend(debug_log)
-        output_parts.append("---")
-    output_parts.append(f"## 🎯 Final Answer")
-    output_parts.append(final_response)
-
-    summary_for_stats = synthesis_input_summary if not claude_provided_final_answer else scratchpad_content
-
-    stats = calculate_token_savings(
-        decomposition_prompts_history, synthesis_prompts_history,
-        summary_for_stats, final_response,
-        len(context), len(query), total_chunks_processed_for_stats, total_tasks_executed_local
-    )
-    
-    total_successful_tasks = len([r for r in all_round_results_aggregated if r['status'] == 'success'])
-    tasks_with_any_timeout = len([r for r in all_round_results_aggregated if r['status'] == 'timeout_all_chunks'])
-
-    output_parts.append(f"\n## 📊 MinionS Efficiency Stats (v0.2.6)")
-    output_parts.append(f"- **Protocol:** MinionS (Multi-Round)")
-    output_parts.append(f"- **Rounds executed:** {stats['total_rounds']}/{valves.max_rounds}")
-    output_parts.append(f"- **Total tasks for local LLM:** {stats['total_tasks_executed_local']}")
-    output_parts.append(f"- **Successful tasks (local):** {total_successful_tasks}")
-    output_parts.append(f"- **Tasks where all chunks timed out (local):** {tasks_with_any_timeout}")
-    output_parts.append(f"- **Total individual chunk processing timeouts (local):** {total_chunk_processing_timeouts_accumulated}")
-    output_parts.append(f"- **Chunks processed per task (local):** {stats['total_chunks_processed_local'] if stats['total_tasks_executed_local'] > 0 else 0}")
-    output_parts.append(f"- **Context size:** {len(context):,} characters")
-    output_parts.append(f"\n## 💰 Token Savings Analysis (Claude: {valves.remote_model})")
-    output_parts.append(f"- **Traditional single call (est.):** ~{stats['traditional_tokens_claude']:,} tokens")
-    output_parts.append(f"- **MinionS multi-round (Claude only):** ~{stats['minions_tokens_claude']:,} tokens")
-    output_parts.append(f"- **💰 Est. Claude Token savings:** ~{stats['percentage_savings_claude']:.1f}%")
-    
-    return "\n".join(output_parts)
+# Helper function for truncating text
+def _truncate_text(text: str, max_length: int) -> str:
+    if not isinstance(text, str):
+        text = str(text)
+    if len(text) > max_length:
+        return text[:max_length-3] + "..."
+    return text
 
 async def minions_pipe_method(
-    pipe_self: Any,
+    pipe_instance: Any,
     body: dict,
     __user__: dict,
-    __request__: Request,
-    __files__: List[Dict[str, Any]] = [],
-    __pipe_id__: str = "minions-claude",
+    __request__: 'Request', # Use string literal if Request might not be resolvable by linter in partial
+    __files__: List[dict],
+    __pipe_id__: str
+    # Removed default for files, added __user__, __request__, __pipe_id__
 ) -> str:
-    """Execute the MinionS protocol with Claude"""
+    """
+    Main MinionS protocol logic. This function orchestrates task decomposition,
+    execution, and synthesis using various helper functions and models that are
+    expected to be available in its scope after code generation and concatenation.
+    """
+    logger = logging.getLogger(__name__)
+    valves = pipe_instance.valves
+
+    # --- Dynamically available components (post-concatenation by generator) ---
+    # JobManifest and TaskResult model classes are expected to be globally available.
+    # TaskResult = pipe_instance.TaskResult # This line removed/ensured not present.
+
+    # Helper Functions from other partials (assumed global after concatenation):
+    # _extract_context_from_messages, _extract_context_from_files, _create_chunks
+    # get_minions_code_generation_claude_prompt
+    # _execute_generated_code, _parse_tasks_helper
+    # execute_tasks_on_chunks, calculate_token_savings
+
+    conversation_log: List[str] = []
+    debug_log: List[str] = []
+    actual_initial_claude_prompt_text: str = ""
+
+
     try:
-        # Validate configuration
-        if not pipe_self.valves.anthropic_api_key:
-            return "❌ **Error:** Please configure your Anthropic API key (and Ollama settings if applicable) in the function settings."
+        if valves.debug_mode: logger.info("MinionS pipe method invoked.")
+        if not valves.anthropic_api_key: return "❌ **Error:** Anthropic API key not configured."
 
-        # Extract user message and context
-        messages: List[Dict[str, Any]] = body.get("messages", [])
-        if not messages:
-            return "❌ **Error:** No messages provided."
+        messages = body.get("messages", [])
+        if not messages: return "❌ **Error:** No messages provided."
+        
+        user_query = messages[-1]["content"]
+        logger.info(f"User query: {_truncate_text(user_query, 100)}")
 
-        user_query: str = messages[-1]["content"]
+        context_from_messages = _extract_context_from_messages(messages[:-1], valves, logger)
+        context_from_files = await _extract_context_from_files(files, valves, logger)
+        all_context_parts = []
+        if context_from_messages: all_context_parts.append(f"=== CONVERSATION CONTEXT ===\n{context_from_messages}")
+        if context_from_files: all_context_parts.append(f"=== UPLOADED DOCUMENTS ===\n{context_from_files}")
+        context = "\n\n".join(all_context_parts)
 
-        # Extract context from messages AND uploaded files
-        context_from_messages: str = extract_context_from_messages(messages[:-1])
-        context_from_files: str = await extract_context_from_files(pipe_self.valves, __files__)
+        if not context: return "ℹ️ **Note:** No context provided for MinionS."
 
-        # Combine all context sources
-        all_context_parts: List[str] = []
-        if context_from_messages:
-            all_context_parts.append(f"=== CONVERSATION CONTEXT ===\n{context_from_messages}")
-        if context_from_files:
-            all_context_parts.append(f"=== UPLOADED DOCUMENTS ===\n{context_from_files}")
+        if valves.debug_mode:
+            debug_log.append(f"Query: {_truncate_text(user_query,100)}, Context len: {len(context)}")
 
-        context: str = "\n\n".join(all_context_parts) if all_context_parts else ""
+        conversation_log.append("### 🎯 Task Decomposition")
+        job_manifests: List[Any] = []
 
-        # If no context, make a direct call to Claude
-        if not context:
-            direct_response = await _call_claude_directly(pipe_self.valves, user_query, call_claude_func=call_claude)
-            return (
-                "ℹ️ **Note:** No significant context detected. Using standard Claude response.\n\n"
-                + direct_response
+        if valves.enable_code_decomposition:
+            conversation_log.append("🤖 Using Code-Based Decomposition")
+            actual_initial_claude_prompt_text = get_minions_code_generation_claude_prompt(
+                user_query, _truncate_text(context, 500), valves, "JobManifest"
             )
+            try:
+                generated_code = await asyncio.wait_for(call_claude(valves, actual_initial_claude_prompt_text), timeout=getattr(valves, 'timeout_claude_codegen', 45.0))
+                if valves.debug_mode: debug_log.append(f"Generated Code:\n{_truncate_text(generated_code,300)}...")
+                job_manifests = _execute_generated_code(generated_code, JobManifest, logger)
+                conversation_log.append(f"✅ Generated {len(job_manifests)} tasks via code.")
+            except Exception as e:
+                logger.error(f"Code Decomp Error: {e}", exc_info=valves.debug_mode)
+                return f"❌ **Error (Code Decomp):** {_truncate_text(str(e),100)}"
+        else:
+            conversation_log.append("🗣️ Using Natural Language Decomposition")
+            actual_initial_claude_prompt_text = f"Query: \"{user_query}\"\nContext len: {len(context)}.\nMax tasks: {valves.max_tasks_per_round}. List tasks."
+            try:
+                claude_response = await asyncio.wait_for(call_claude(valves, actual_initial_claude_prompt_text), timeout=getattr(valves, 'timeout_claude', 30.0))
+                if valves.debug_mode: debug_log.append(f"NL Decomp Response:\n{_truncate_text(claude_response,300)}...")
+                # _parse_tasks_helper is assumed global
+                parsed_task_strings = _parse_tasks_helper(claude_response, valves.max_tasks_per_round, debug_log, valves)
+                job_manifests = [JobManifest(task_id=f"task_{i+1}", task_description=d) for i, d in enumerate(parsed_task_strings)]
+                conversation_log.append(f"✅ Generated {len(job_manifests)} tasks via NL.")
+            except Exception as e:
+                logger.error(f"NL Decomp Error: {e}", exc_info=valves.debug_mode)
+                return f"❌ **Error (NL Decomp):** {_truncate_text(str(e),100)}"
 
-        # Execute the MinionS protocol with correct parameter names
-        result: str = await _execute_minions_protocol(
-            pipe_self.valves, 
-            user_query, 
-            context, 
-            call_claude,    # Changed from call_claude_func
-            call_ollama,    # Changed from call_ollama_func
-            TaskResult      # Changed from TaskResultModel
+        if not job_manifests: conversation_log.append("⚠️ No tasks generated.")
+
+        conversation_log.append("### 📄 Chunking & Execution")
+        chunks = _create_chunks(context, valves, logger) # Assumed global
+        conversation_log.append(f"{len(chunks)} chunks created.")
+        task_results: List[Dict[str, str]] = []
+        if job_manifests and chunks:
+            # execute_tasks_on_chunks is assumed global, pass global call_ollama and TaskResult
+            task_results = await execute_tasks_on_chunks(
+                job_manifests, chunks, conversation_log, valves, call_ollama, logger, TaskResult
+            )
+        elif not job_manifests: conversation_log.append("ℹ️ No tasks to execute.")
+        elif not chunks: conversation_log.append("ℹ️ No chunks to process."
+
+        conversation_log.append("\n### 🔄 Synthesis")
+        summary_parts = [f"ID: {r.get('task_id')}\nDesc: {_truncate_text(r.get('task_description',''),70)}\nRes: {_truncate_text(r.get('result',''),150)}\n---" for r in task_results]
+        results_summary = "\n".join(summary_parts) if summary_parts else "No task results."
+        synthesis_prompt = f"Query: \"{user_query}\"\nInfo:\n{results_summary}\nFinal Answer:"
+        try:
+            final_response = await asyncio.wait_for(call_claude(valves, synthesis_prompt), timeout=getattr(valves, 'timeout_claude_synthesis', 45.0))
+        except Exception as e:
+            logger.error(f"Synthesis Error: {e}", exc_info=valves.debug_mode)
+            final_response = f"❌ **Error (Synthesis):** {_truncate_text(str(e),100)}"
+
+        if valves.show_conversation or valves.debug_mode : # Add synth response to conv log if shown
+            conversation_log.append(f"**🤖 Claude (Synthesis):**\n{_truncate_text(final_response, 200)}...")
+
+        output_parts = []
+        if valves.show_conversation: output_parts.extend(["## 🗣️ MinionS Log", *conversation_log, "---"])
+        if valves.debug_mode: output_parts.extend(["## 🔍 Debug Log", *debug_log, "---"])
+        output_parts.append(f"## 🎯 Final Answer\n{final_response}")
+
+        # calculate_token_savings is assumed global
+        stats = calculate_token_savings(
+            [actual_initial_claude_prompt_text or "N/A"], [synthesis_prompt], results_summary,
+            final_response, len(context), len(user_query), len(chunks), len(job_manifests)
         )
-        return result
+        success_keywords = ["information not found", "timeout", "error", "invalid chunk requested"]
+        successful_count = sum(1 for r in task_results if r.get("result","").lower() not in success_keywords and r.get("result"))
 
+        output_parts.extend([
+            f"\n## 📊 MinionS Stats",
+            f"- Tasks: {len(job_manifests)} (Success: {successful_count})",
+            f"- Chunks: {len(chunks)}",
+            f"- Token Savings (Claude): ~{stats.get('percentage_savings_claude', 0):.0f}%"
+        ])
+        if valves.debug_mode: output_parts.extend([
+            f"- Claude Tokens (Traditional): ~{stats.get('traditional_tokens_claude',0):,}",
+            f"- Claude Tokens (MinionS): ~{stats.get('minions_tokens_claude',0):,}"
+        ])
+        return "\n\n".join(output_parts)
     except Exception as e:
-        import traceback
-        error_details: str = traceback.format_exc() if pipe_self.valves.debug_mode else str(e)
-        return f"❌ **Error in MinionS protocol:** {error_details}"
+        logger.critical(f"MinionS pipe critical error: {e}", exc_info=valves.debug_mode) # Log full exc_info if debug
+        return f"❌ **Fatal MinionS Error:** {_truncate_text(str(e),100)}"
+# Note: Placeholders for global context utilities (_extract_context_from_messages,
+# _extract_context_from_files, _create_chunks) are removed from here.
+# They are expected to be defined in other partial files (e.g., common_context_utils.py)
+# and made available in the global scope by the generator script.
