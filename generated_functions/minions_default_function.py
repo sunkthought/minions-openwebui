@@ -654,8 +654,6 @@ import asyncio
 from typing import Any, List, Callable, Dict
 from fastapi import Request
 
-
-
 async def _call_claude_directly(valves: Any, query: str, call_claude_func: Callable) -> str:
     """Fallback to direct Claude call when no context is available"""
     return await call_claude_func(valves, f"Please answer this question: {query}")
