@@ -1,4 +1,6 @@
 import asyncio
+import re # Added re
+from enum import Enum # Ensured Enum is present
 from typing import Any, List, Callable, Dict
 from fastapi import Request
 
@@ -9,7 +11,78 @@ from .minions_models import TaskResult, RoundMetrics # Import RoundMetrics
 from .common_context_utils import extract_context_from_messages, extract_context_from_files
 from .minions_decomposition_logic import decompose_task
 from .minions_prompts import get_minions_synthesis_claude_prompt
-from .common_query_utils import QueryComplexityClassifier, QueryComplexity # Import Query Complexity classes
+# Removed: from .common_query_utils import QueryComplexityClassifier, QueryComplexity
+
+# --- Content from common_query_utils.py START ---
+class QueryComplexity(Enum):
+    SIMPLE = "SIMPLE"
+    MEDIUM = "MEDIUM"
+    COMPLEX = "COMPLEX"
+
+class QueryComplexityClassifier:
+    def __init__(self, debug_mode: bool = False):
+        self.debug_mode = debug_mode
+        # Keywords indicating complexity
+        self.complex_keywords = [
+            "analyze", "compare", "contrast", "summarize", "explain in detail",
+            "discuss", "critique", "evaluate", "recommend", "predict", "what if",
+            "how does", "why does", "implications"
+        ]
+        self.medium_keywords = [
+            "list", "describe", "details of", "tell me about", "what are the"
+        ]
+        # Question words (simple ones often start fact-based questions)
+        self.simple_question_starters = ["what is", "who is", "when was", "where is", "define"]
+
+    def classify_query(self, query: str) -> QueryComplexity:
+        query_lower = query.lower().strip()
+        word_count = len(query_lower.split())
+
+        if self.debug_mode:
+            print(f"DEBUG QueryComplexityClassifier: Query='{query_lower}', WordCount={word_count}")
+
+        # Rule 1: Complex Keywords
+        for keyword in self.complex_keywords:
+            if keyword in query_lower:
+                if self.debug_mode:
+                    print(f"DEBUG QueryComplexityClassifier: Matched complex keyword '{keyword}'")
+                return QueryComplexity.COMPLEX
+
+        # Rule 2: Word Count for Complex
+        if word_count > 25:
+            if self.debug_mode:
+                print(f"DEBUG QueryComplexityClassifier: Matched complex by word count (>25)")
+            return QueryComplexity.COMPLEX
+
+        # Rule 3: Word Count for Simple (and simple question starters)
+        if word_count < 10:
+            is_simple_starter = any(query_lower.startswith(starter) for starter in self.simple_question_starters)
+            if is_simple_starter:
+                if self.debug_mode:
+                    print(f"DEBUG QueryComplexityClassifier: Matched simple by word count (<10) and starter.")
+                return QueryComplexity.SIMPLE
+
+        # Rule 4: Medium Keywords
+        for keyword in self.medium_keywords:
+            if keyword in query_lower:
+                if self.debug_mode:
+                    print(f"DEBUG QueryComplexityClassifier: Matched medium keyword '{keyword}'")
+                return QueryComplexity.MEDIUM
+
+        if word_count >= 10 and word_count <= 25:
+            if self.debug_mode:
+                print(f"DEBUG QueryComplexityClassifier: Matched medium by word count (10-25)")
+            return QueryComplexity.MEDIUM
+
+        if word_count < 10: # Default for short queries not caught by simple_question_starters
+             if self.debug_mode:
+                print(f"DEBUG QueryComplexityClassifier: Defaulting short query to MEDIUM (no simple starter)")
+             return QueryComplexity.MEDIUM
+
+        if self.debug_mode:
+            print(f"DEBUG QueryComplexityClassifier: Defaulting to MEDIUM (no other rules matched clearly)")
+        return QueryComplexity.MEDIUM
+# --- Content from common_query_utils.py END ---
 
 
 async def _call_claude_directly(valves: Any, query: str, call_claude_func: Callable) -> str:
