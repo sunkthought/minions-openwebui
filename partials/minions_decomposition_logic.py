@@ -31,23 +31,21 @@ def _parse_tasks_helper(claude_response: str, max_tasks: int, debug_log: List[st
 
 async def decompose_task(
     valves: Any,
-    call_claude_func: Callable[..., Awaitable[str]], # More specific callable type
+    call_claude_func: Callable[..., Awaitable[str]],
     query: str,
-    # context_len: int, # Replaced with scratchpad_content for more context
     scratchpad_content: str,
-    num_chunks: int, # For the prompt
+    num_chunks: int,
     max_tasks_per_round: int,
-    current_round: int, # For logging
-    conversation_log: List[str], # For logging if show_conversation
-    debug_log: List[str] # For detailed debug logging
-) -> List[str]:
+    current_round: int,
+    conversation_log: List[str],
+    debug_log: List[str]
+) -> Tuple[List[str], str, str]:  # Added third return value for the prompt
     """
     Constructs the decomposition prompt, calls Claude, and parses tasks.
+    Returns: (tasks, claude_response, decomposition_prompt)
     """
-    # This prompt construction will be based on the one in _execute_minions_protocol
-    # from minions_pipe_method.py
-    
-    decomposition_prompt = f'''You are a supervisor LLM in a multi-round process. Your goal is to answer: "{query}"
+    # Base decomposition prompt
+    base_decomposition_prompt = f'''You are a supervisor LLM in a multi-round process. Your goal is to answer: "{query}"
 Context has been split into {num_chunks} chunks. A local LLM will process these chunks for each task you define.
 Scratchpad (previous findings): {scratchpad_content if scratchpad_content else "Nothing yet."}
 
@@ -55,6 +53,9 @@ Based on the scratchpad and the original query, identify up to {max_tasks_per_ro
 If the information in the scratchpad is sufficient to answer the query, respond ONLY with the exact phrase "FINAL ANSWER READY." followed by the comprehensive answer.
 Otherwise, list the new tasks clearly. Ensure tasks are actionable. Avoid redundant tasks.
 Format tasks as a simple list (e.g., 1. Task A, 2. Task B).'''
+
+    # Enhance the prompt with task formulation guidance
+    decomposition_prompt = _enhance_decomposition_prompt(base_decomposition_prompt, valves)
 
     if valves.show_conversation:
         conversation_log.append(f"**🤖 Claude (Decomposition - Round {current_round}):** Sending prompt:\n```\n{decomposition_prompt}\n```")
@@ -73,15 +74,6 @@ Format tasks as a simple list (e.g., 1. Task A, 2. Task B).'''
             debug_log.append(f"   ⏱️ Claude call (Decomposition Round {current_round}) took {time_taken_claude_decomp:.2f}s.")
             debug_log.append(f"   [Debug] Claude response (Decomposition Round {current_round}):\n{claude_response}")
 
-        if valves.show_conversation:
-            # conversation_log.append(f"**🤖 Claude (Decomposition - Round {current_round}):**\n{claude_response}\n")
-            # This log is now handled by the caller (_execute_minions_protocol) to include the "FINAL ANSWER READY" check
-            pass
-
-        # The "FINAL ANSWER READY." check will be done by the caller (_execute_minions_protocol)
-        # as it affects control flow beyond just task parsing.
-        # This function will always try to parse tasks.
-
         tasks = _parse_tasks_helper(claude_response, max_tasks_per_round, debug_log, valves)
         
         if valves.debug_mode:
@@ -89,7 +81,7 @@ Format tasks as a simple list (e.g., 1. Task A, 2. Task B).'''
             for task_idx, task_item in enumerate(tasks):
                 debug_log.append(f"    Task {task_idx+1} (Round {current_round}): {task_item[:100]}...")
         
-        return tasks, claude_response # Return claude_response as well for "FINAL ANSWER READY" check
+        return tasks, claude_response, decomposition_prompt  # Return the prompt too
 
     except Exception as e:
         error_msg = f"❌ Error calling Claude for decomposition in round {current_round}: {e}"
@@ -97,5 +89,31 @@ Format tasks as a simple list (e.g., 1. Task A, 2. Task B).'''
             conversation_log.append(error_msg)
         if valves.debug_mode:
             debug_log.append(f"   {error_msg}")
-        # In case of error, return empty list of tasks and an error message string
-        return [], f"CLAUDE_ERROR: {error_msg}"
+        return [], f"CLAUDE_ERROR: {error_msg}", ""  # Return empty prompt on error
+    
+def _enhance_decomposition_prompt(base_prompt: str, valves: Any) -> str:
+    """
+    Enhances the decomposition prompt with additional guidance to ensure
+    tasks are formulated to receive string responses.
+    """
+    task_formulation_guidance = '''
+
+IMPORTANT TASK FORMULATION RULES:
+1. Each task should request information that can be expressed as plain text
+2. Avoid tasks that implicitly request structured data (like "Create a table of..." or "List with categories...")
+3. Instead of "Extract and categorize X by Y", use "Describe X including information about Y"
+4. Tasks should be answerable with narrative text, not data structures
+
+GOOD TASK EXAMPLES:
+- "Summarize the key advancements described in each Part, presenting them as a narrative"
+- "Describe the AI winters mentioned, including their timeframes and characteristics"
+- "Explain the progression of AI development across different periods"
+
+BAD TASK EXAMPLES (avoid these):
+- "Create a structured list of Parts with their key points"
+- "Extract and categorize advancements by Part number"
+- "Build a timeline table of AI winters"
+
+Remember: The local assistant will return text strings, not structured data.'''
+    
+    return base_prompt + task_formulation_guidance

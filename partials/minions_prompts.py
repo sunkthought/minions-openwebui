@@ -23,7 +23,6 @@ def get_minions_local_task_prompt(
     chunk_idx: int, 
     total_chunks: int, 
     valves: Any, 
-    # schema_json: Optional[str] = None # Not directly used as schema is handled by call_ollama, but prompt notes structure.
 ) -> str:
     """
     Returns the prompt for the local Ollama model for a specific task on a chunk 
@@ -38,9 +37,33 @@ def get_minions_local_task_prompt(
 Task: {task}'''
 
     if valves.use_structured_output:
-        # The schema_json parameter was considered, but the actual schema is passed to call_ollama,
-        # so the prompt only needs to instruct about JSON format generally if structured output is used.
-        prompt += f"\n\nProvide your answer ONLY as a valid JSON object matching the specified schema. If no relevant information is found in THIS SPECIFIC TEXT, ensure the 'answer' field in your JSON response is explicitly set to null (or None)."
+        # Enhanced instructions for structured output
+        prompt += f'''
+
+IMPORTANT: Provide your answer as a valid JSON object with the following structure:
+{{
+    "explanation": "Brief explanation of your findings",
+    "citation": "Direct quote from the text if applicable, or null",
+    "answer": "Your complete answer as a SINGLE STRING"
+}}
+
+CRITICAL RULES:
+1. The "answer" field MUST be a plain text string, NOT an object or array
+2. If you need to list multiple items, format them as a single string with clear separators (e.g., "Item 1: Description. Item 2: Description.")
+3. Do NOT create nested JSON structures within any field
+4. If no relevant information is found, set "answer" to null
+
+EXAMPLE of CORRECT format:
+{{
+    "explanation": "Found information about Parts I and II in the text",
+    "citation": "Part I discusses foundations...",
+    "answer": "Part I: Foundations of AI including Turing's work. Part II: Early AI systems like ELIZA."
+}}
+
+EXAMPLE of INCORRECT format (DO NOT DO THIS):
+{{
+    "answer": {{"Part I": "...", "Part II": "..."}}  // WRONG - answer must be a string!
+}}'''
     else:
         prompt += "\n\nProvide a brief, specific answer based ONLY on the text provided above. If no relevant information is found in THIS SPECIFIC TEXT, respond with the single word \"NONE\"."
     

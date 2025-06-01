@@ -5,7 +5,7 @@ author_url: https://github.com/SunkThought/minions-openwebui
 original_author: Copyright (c) 2025 Sabri Eyuboglu, Avanika Narayan, Dan Biderman, and the rest of the Minions team (@HazyResearch wrote the original MinionS Protocol paper and code examples on github that spawned this)
 original_author_url: https://github.com/HazyResearch/
 funding_url: https://github.com/HazyResearch/minions
-version: 0.2.2
+version: 0.3.0
 description: Basic Minion protocol - conversational collaboration between local and cloud models
 required_open_webui_version: 0.5.0
 license: MIT License
@@ -281,29 +281,28 @@ from typing import List, Tuple, Any
 def get_minion_initial_claude_prompt(query: str, context_len: int, valves: Any) -> str:
     """
     Returns the initial prompt for Claude in the Minion protocol.
-    Moved from _execute_minion_protocol in minion_protocol_logic.py.
     """
-    # It seems 'valves' is not strictly needed for this specific prompt's text content
-    # but keeping it in signature for consistency if other valve-dependent variants arise.
     return f"""Your primary goal is to answer the user's question: "{query}"
 
-To achieve this, you will collaborate with a local AI assistant. This local assistant has ALREADY READ and has FULL ACCESS to the relevant document ({context_len} characters long). The local assistant is a TRUSTED source that will provide you with factual information, summaries, and direct extractions FROM THE DOCUMENT in response to your questions.
+To achieve this, you will collaborate with a local AI assistant. This local assistant has ALREADY READ and has FULL ACCESS to the relevant document ({context_len} characters long). You will not be given the full document. Instead you are to ask the TRUSTED local assistant who can provide you with factual information, summaries, and direct extractions FROM THE DOCUMENT in response to your questions.
 
 Your role is to:
-1.  Formulate specific, focused questions to the local assistant to gather the necessary information from the document. Ask only what you need to build up the answer to the user's original query.
-2.  Receive and understand the information provided by the local assistant.
-3.  Synthesize this information to answer the user's original query.
+1. Ask SPECIFIC, TARGETED questions to extract concrete information from the document
+2. Request specific examples, quotes, or detailed descriptions rather than high-level overviews
+3. Build up enough specific information to answer the user's query comprehensively
 
 IMPORTANT INSTRUCTIONS:
-- DO NOT ask the local assistant to provide the entire document or large raw excerpts.
-- DO NOT express that you cannot see the document. Assume the local assistant provides accurate information from it.
-- Your questions should be aimed at extracting pieces of information that you can then synthesize.
+- DO NOT ask for general overviews or themes - ask for specific content
+- Request concrete details: names, dates, technologies, specific advancements
+- Ask for direct quotes or detailed descriptions from specific parts
+- If you need information from multiple parts, ask for each one specifically
 
-If, after receiving responses from the local assistant, you believe you have gathered enough information to comprehensively answer the user's original query ("{query}"), then respond ONLY with the exact phrase "FINAL ANSWER READY." followed by your detailed final answer.
-If you need more specific information from the document, ask the local assistant ONE more clear, targeted question. Do not use the phrase "FINAL ANSWER READY." yet.
+Example good questions:
+- "What specific technological advancements are described in Part III?"
+- "Can you provide the exact details about the AI winter mentioned in Part II, including dates and causes?"
+- "What are the specific building blocks or technologies mentioned in Part V?"
 
-Start by asking your first question to the local assistant to begin gathering information.
-"""
+Start by asking your first SPECIFIC question to begin gathering concrete information."""
 
 def get_minion_conversation_claude_prompt(history: List[Tuple[str, str]], original_query: str, valves: Any) -> str:
     """
@@ -338,17 +337,25 @@ def get_minion_conversation_claude_prompt(history: List[Tuple[str, str]], origin
 def get_minion_local_prompt(context: str, query: str, claude_request: str, valves: Any) -> str:
     """
     Returns the prompt for the local Ollama model in the Minion protocol.
-    Moved from _execute_minion_protocol in minion_protocol_logic.py.
     """
-    # 'valves' not strictly needed for this specific prompt's text content from original version
-    # but could be used for schema instructions if valves.use_structured_output was considered here.
-    # The original prompt did include a generic instruction about JSON.
     return f"""You have access to the full context below. Claude (Anthropic's AI) is collaborating with you to answer a user's question.
+
 CONTEXT:
 {context}
+
 ORIGINAL QUESTION: {query}
+
 CLAUDE'S REQUEST: {claude_request}
-Please provide a helpful, accurate response based on the context you have access to. Extract relevant information that answers Claude's specific question. Be concise but thorough.
+
+IMPORTANT INSTRUCTIONS:
+- Provide SPECIFIC, DETAILED information from the context
+- Include concrete examples, names, dates, and technical details
+- Quote directly from the text when relevant
+- If Claude asks about a specific part or section, provide detailed content from that section
+- Do not give vague overviews - provide substantial, specific information
+
+Please provide a helpful, accurate response based on the context you have access to. Extract relevant information that answers Claude's specific question. Be thorough and include all relevant details.
+
 If you are instructed to provide a JSON response (e.g., by a schema appended to this prompt), ensure your entire response is ONLY that valid JSON object, without any surrounding text, explanations, or markdown formatting like ```json ... ```."""
 
 
@@ -410,9 +417,9 @@ async def _execute_minion_protocol(
     valves: Any,
     query: str,
     context: str,
-    call_claude_func: Callable, # Renamed
-    call_ollama_func: Callable, # Renamed
-    LocalAssistantResponseModel: Any # Renamed
+    call_claude_func: Callable,
+    call_ollama_func: Callable,
+    LocalAssistantResponseModel: Any
 ) -> str:
     """Execute the Minion protocol"""
     conversation_log = []
@@ -433,8 +440,6 @@ async def _execute_minion_protocol(
         debug_log.append(f"  - Timeouts: Claude={valves.timeout_claude}s, Local={valves.timeout_local}s")
         debug_log.append(f"**⏱️ Overall process started. (Debug Mode)**\n")
 
-    # initial_claude_prompt construction removed, will call get_minion_initial_claude_prompt
-
     for round_num in range(valves.max_rounds):
         if valves.debug_mode:
             debug_log.append(f"**⚙️ Starting Round {round_num + 1}/{valves.max_rounds}... (Debug Mode)**")
@@ -444,19 +449,41 @@ async def _execute_minion_protocol(
 
         claude_prompt_for_this_round = ""
         if round_num == 0:
-            # Call the new function for initial prompt
             claude_prompt_for_this_round = get_minion_initial_claude_prompt(query, len(context), valves)
         else:
-            # Call the new function for conversation prompt
-            claude_prompt_for_this_round = get_minion_conversation_claude_prompt(
-                conversation_history, query, valves
-            )
+            # Check if this is the last round and force a final answer
+            is_last_round = (round_num == valves.max_rounds - 1)
+            if is_last_round:
+                # Override with a prompt that forces a final answer
+                claude_prompt_for_this_round = f"""You are a supervisor LLM collaborating with a trusted local AI assistant to answer the user's ORIGINAL QUESTION: "{query}"
+
+The local assistant has full access to the source document and has been providing factual information extracted from it.
+
+CONVERSATION SO FAR:
+"""
+                for role, message in conversation_history:
+                    if role == "assistant":
+                        claude_prompt_for_this_round += f"\nYou previously asked: \"{message}\""
+                    else:
+                        claude_prompt_for_this_round += f"\nLocal assistant responded: \"{message}\""
+                
+                claude_prompt_for_this_round += f"""
+
+THIS IS YOUR FINAL OPPORTUNITY TO ANSWER. You have gathered sufficient information through {round_num} rounds of questions.
+
+Based on ALL the information provided by the local assistant, you MUST now provide a comprehensive answer to the user's original question: "{query}"
+
+Respond with "FINAL ANSWER READY." followed by your synthesized answer. Do NOT ask any more questions."""
+            else:
+                claude_prompt_for_this_round = get_minion_conversation_claude_prompt(
+                    conversation_history, query, valves
+                )
         
         claude_response = ""
         try:
             if valves.debug_mode: 
                 start_time_claude = asyncio.get_event_loop().time()
-            claude_response = await call_claude_func(valves, claude_prompt_for_this_round) # Use call_claude_func
+            claude_response = await call_claude_func(valves, claude_prompt_for_this_round)
             if valves.debug_mode:
                 end_time_claude = asyncio.get_event_loop().time()
                 time_taken_claude = end_time_claude - start_time_claude
@@ -483,25 +510,28 @@ async def _execute_minion_protocol(
                 debug_log.append(f"  🏁 Claude declared FINAL ANSWER READY in round {round_num + 1}. (Debug Mode)")
             break
 
-        # local_prompt construction removed, will call get_minion_local_prompt
+        # Skip local model call if this was the last round and Claude provided final answer
+        if round_num == valves.max_rounds - 1:
+            continue
+
         local_prompt = get_minion_local_prompt(context, query, claude_response, valves)
         
         local_response_str = ""
         try:
             if valves.debug_mode: 
                 start_time_ollama = asyncio.get_event_loop().time()
-            local_response_str = await call_ollama_func( # Use call_ollama_func
+            local_response_str = await call_ollama_func(
                 valves,
                 local_prompt,
                 use_json=True,
-                schema=LocalAssistantResponseModel # Use LocalAssistantResponseModel
+                schema=LocalAssistantResponseModel
             )
             local_response_data = _parse_local_response(
                 local_response_str,
                 is_structured=True,
                 use_structured_output=valves.use_structured_output,
                 debug_mode=valves.debug_mode,
-                LocalAssistantResponseModel=LocalAssistantResponseModel # Pass LocalAssistantResponseModel
+                LocalAssistantResponseModel=LocalAssistantResponseModel
             )
             if valves.debug_mode:
                 end_time_ollama = asyncio.get_event_loop().time()
@@ -538,10 +568,11 @@ async def _execute_minion_protocol(
             debug_log.append(f"**🏁 Completed Round {round_num + 1}. Cumulative time: {current_cumulative_time:.2f}s. (Debug Mode)**\n")
     
     if not claude_declared_final and conversation_history:
+        # This shouldn't happen with the fix above, but keep as fallback
         last_claude_msg = conversation_history[-1][1] if conversation_history[-1][0] == "assistant" else (conversation_history[-2][1] if len(conversation_history) > 1 and conversation_history[-2][0] == "assistant" else "No suitable final message from Claude found.")
-        actual_final_answer = f"Max rounds reached. Claude's last message was: \"{last_claude_msg}\""
+        actual_final_answer = f"Protocol ended without explicit final answer. Claude's last response was: \"{last_claude_msg}\""
         if valves.show_conversation:
-            conversation_log.append(f"⚠️ Max rounds reached. Using Claude's last message as the result.\n")
+            conversation_log.append(f"⚠️ Protocol ended without Claude providing a final answer.\n")
 
     if valves.debug_mode:
         total_execution_time = asyncio.get_event_loop().time() - overall_start_time
@@ -650,7 +681,7 @@ class Pipe:
 
     def __init__(self):
         self.valves = self.Valves()
-        self.name = "Minion v0.2.2"
+        self.name = "Minion v0.3.0 (Conversational)"
 
     def pipes(self):
         """Define the available models"""

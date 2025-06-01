@@ -5,7 +5,7 @@ author_url: https://github.com/SunkThought/minions-openwebui
 original_author: Copyright (c) 2025 Sabri Eyuboglu, Avanika Narayan, Dan Biderman, and the rest of the Minions team (@HazyResearch wrote the original MinionS Protocol paper and code examples on github that spawned this)
 original_author_url: https://github.com/HazyResearch/
 funding_url: https://github.com/HazyResearch/minions
-version: 0.2.2
+version: 0.3.0
 description: MinionS protocol - task decomposition and parallel processing between local and cloud models
 required_open_webui_version: 0.5.0
 license: MIT License
@@ -327,7 +327,6 @@ def get_minions_local_task_prompt(
     chunk_idx: int, 
     total_chunks: int, 
     valves: Any, 
-    # schema_json: Optional[str] = None # Not directly used as schema is handled by call_ollama, but prompt notes structure.
 ) -> str:
     """
     Returns the prompt for the local Ollama model for a specific task on a chunk 
@@ -342,14 +341,37 @@ def get_minions_local_task_prompt(
 Task: {task}'''
 
     if valves.use_structured_output:
-        # The schema_json parameter was considered, but the actual schema is passed to call_ollama,
-        # so the prompt only needs to instruct about JSON format generally if structured output is used.
-        prompt += f"\n\nProvide your answer ONLY as a valid JSON object matching the specified schema. If no relevant information is found in THIS SPECIFIC TEXT, ensure the 'answer' field in your JSON response is explicitly set to null (or None)."
+        # Enhanced instructions for structured output
+        prompt += f'''
+
+IMPORTANT: Provide your answer as a valid JSON object with the following structure:
+{{
+    "explanation": "Brief explanation of your findings",
+    "citation": "Direct quote from the text if applicable, or null",
+    "answer": "Your complete answer as a SINGLE STRING"
+}}
+
+CRITICAL RULES:
+1. The "answer" field MUST be a plain text string, NOT an object or array
+2. If you need to list multiple items, format them as a single string with clear separators (e.g., "Item 1: Description. Item 2: Description.")
+3. Do NOT create nested JSON structures within any field
+4. If no relevant information is found, set "answer" to null
+
+EXAMPLE of CORRECT format:
+{{
+    "explanation": "Found information about Parts I and II in the text",
+    "citation": "Part I discusses foundations...",
+    "answer": "Part I: Foundations of AI including Turing's work. Part II: Early AI systems like ELIZA."
+}}
+
+EXAMPLE of INCORRECT format (DO NOT DO THIS):
+{{
+    "answer": {{"Part I": "...", "Part II": "..."}}  // WRONG - answer must be a string!
+}}'''
     else:
         prompt += "\n\nProvide a brief, specific answer based ONLY on the text provided above. If no relevant information is found in THIS SPECIFIC TEXT, respond with the single word \"NONE\"."
     
     return prompt
-
 
 from typing import List, Callable, Any, Dict # Added Dict
 import asyncio # Added asyncio as call_claude_func is async
@@ -384,23 +406,21 @@ def _parse_tasks_helper(claude_response: str, max_tasks: int, debug_log: List[st
 
 async def decompose_task(
     valves: Any,
-    call_claude_func: Callable[..., Awaitable[str]], # More specific callable type
+    call_claude_func: Callable[..., Awaitable[str]],
     query: str,
-    # context_len: int, # Replaced with scratchpad_content for more context
     scratchpad_content: str,
-    num_chunks: int, # For the prompt
+    num_chunks: int,
     max_tasks_per_round: int,
-    current_round: int, # For logging
-    conversation_log: List[str], # For logging if show_conversation
-    debug_log: List[str] # For detailed debug logging
-) -> List[str]:
+    current_round: int,
+    conversation_log: List[str],
+    debug_log: List[str]
+) -> Tuple[List[str], str, str]:  # Added third return value for the prompt
     """
     Constructs the decomposition prompt, calls Claude, and parses tasks.
+    Returns: (tasks, claude_response, decomposition_prompt)
     """
-    # This prompt construction will be based on the one in _execute_minions_protocol
-    # from minions_pipe_method.py
-    
-    decomposition_prompt = f'''You are a supervisor LLM in a multi-round process. Your goal is to answer: "{query}"
+    # Base decomposition prompt
+    base_decomposition_prompt = f'''You are a supervisor LLM in a multi-round process. Your goal is to answer: "{query}"
 Context has been split into {num_chunks} chunks. A local LLM will process these chunks for each task you define.
 Scratchpad (previous findings): {scratchpad_content if scratchpad_content else "Nothing yet."}
 
@@ -408,6 +428,9 @@ Based on the scratchpad and the original query, identify up to {max_tasks_per_ro
 If the information in the scratchpad is sufficient to answer the query, respond ONLY with the exact phrase "FINAL ANSWER READY." followed by the comprehensive answer.
 Otherwise, list the new tasks clearly. Ensure tasks are actionable. Avoid redundant tasks.
 Format tasks as a simple list (e.g., 1. Task A, 2. Task B).'''
+
+    # Enhance the prompt with task formulation guidance
+    decomposition_prompt = _enhance_decomposition_prompt(base_decomposition_prompt, valves)
 
     if valves.show_conversation:
         conversation_log.append(f"**🤖 Claude (Decomposition - Round {current_round}):** Sending prompt:\n```\n{decomposition_prompt}\n```")
@@ -426,15 +449,6 @@ Format tasks as a simple list (e.g., 1. Task A, 2. Task B).'''
             debug_log.append(f"   ⏱️ Claude call (Decomposition Round {current_round}) took {time_taken_claude_decomp:.2f}s.")
             debug_log.append(f"   [Debug] Claude response (Decomposition Round {current_round}):\n{claude_response}")
 
-        if valves.show_conversation:
-            # conversation_log.append(f"**🤖 Claude (Decomposition - Round {current_round}):**\n{claude_response}\n")
-            # This log is now handled by the caller (_execute_minions_protocol) to include the "FINAL ANSWER READY" check
-            pass
-
-        # The "FINAL ANSWER READY." check will be done by the caller (_execute_minions_protocol)
-        # as it affects control flow beyond just task parsing.
-        # This function will always try to parse tasks.
-
         tasks = _parse_tasks_helper(claude_response, max_tasks_per_round, debug_log, valves)
         
         if valves.debug_mode:
@@ -442,7 +456,7 @@ Format tasks as a simple list (e.g., 1. Task A, 2. Task B).'''
             for task_idx, task_item in enumerate(tasks):
                 debug_log.append(f"    Task {task_idx+1} (Round {current_round}): {task_item[:100]}...")
         
-        return tasks, claude_response # Return claude_response as well for "FINAL ANSWER READY" check
+        return tasks, claude_response, decomposition_prompt  # Return the prompt too
 
     except Exception as e:
         error_msg = f"❌ Error calling Claude for decomposition in round {current_round}: {e}"
@@ -450,8 +464,34 @@ Format tasks as a simple list (e.g., 1. Task A, 2. Task B).'''
             conversation_log.append(error_msg)
         if valves.debug_mode:
             debug_log.append(f"   {error_msg}")
-        # In case of error, return empty list of tasks and an error message string
-        return [], f"CLAUDE_ERROR: {error_msg}"
+        return [], f"CLAUDE_ERROR: {error_msg}", ""  # Return empty prompt on error
+    
+def _enhance_decomposition_prompt(base_prompt: str, valves: Any) -> str:
+    """
+    Enhances the decomposition prompt with additional guidance to ensure
+    tasks are formulated to receive string responses.
+    """
+    task_formulation_guidance = '''
+
+IMPORTANT TASK FORMULATION RULES:
+1. Each task should request information that can be expressed as plain text
+2. Avoid tasks that implicitly request structured data (like "Create a table of..." or "List with categories...")
+3. Instead of "Extract and categorize X by Y", use "Describe X including information about Y"
+4. Tasks should be answerable with narrative text, not data structures
+
+GOOD TASK EXAMPLES:
+- "Summarize the key advancements described in each Part, presenting them as a narrative"
+- "Describe the AI winters mentioned, including their timeframes and characteristics"
+- "Explain the progression of AI development across different periods"
+
+BAD TASK EXAMPLES (avoid these):
+- "Create a structured list of Parts with their key points"
+- "Extract and categorize advancements by Part number"
+- "Build a timeline table of AI winters"
+
+Remember: The local assistant will return text strings, not structured data.'''
+    
+    return base_prompt + task_formulation_guidance
 
 
 import asyncio
@@ -462,14 +502,22 @@ from typing import List, Dict, Any, Callable # Removed Optional, Awaitable
 
 # Removed create_chunks function from here
 
-def parse_local_response(response: str, is_structured: bool, use_structured_output: bool, debug_mode: bool, TaskResultModel: Any) -> Dict: # Added TaskResultModel param
+def parse_local_response(response: str, is_structured: bool, use_structured_output: bool, debug_mode: bool, TaskResultModel: Any) -> Dict:
     """Parse local model response, supporting both text and structured formats"""
     if is_structured and use_structured_output:
         try:
             parsed_json = json.loads(response)
-            validated_model = TaskResultModel(**parsed_json) # Use TaskResultModel
+            
+            # Safety net: if answer is a dict/list, stringify it
+            if 'answer' in parsed_json and not isinstance(parsed_json['answer'], (str, type(None))):
+                if debug_mode:
+                    print(f"DEBUG: Converting non-string answer to string: {type(parsed_json['answer'])}")
+                parsed_json['answer'] = json.dumps(parsed_json['answer']) if parsed_json['answer'] else None
+            
+            validated_model = TaskResultModel(**parsed_json)
             model_dict = validated_model.dict()
             model_dict['parse_error'] = None
+            
             # Check if the structured response indicates "not found" via its 'answer' field
             if model_dict.get('answer') is None:
                 model_dict['_is_none_equivalent'] = True
@@ -662,9 +710,9 @@ async def _execute_minions_protocol(
     valves: Any,
     query: str,
     context: str,
-    call_claude: Callable,  # Changed from call_claude_func
-    call_ollama: Callable,  # Changed from call_ollama_func
-    TaskResult: Any        # Changed from TaskResultModel
+    call_claude: Callable,
+    call_ollama_func: Callable,
+    TaskResultModel: Any
 ) -> str:
     """Execute the MinionS protocol"""
     conversation_log = []
@@ -682,7 +730,7 @@ async def _execute_minions_protocol(
 
     overall_start_time = asyncio.get_event_loop().time()
     if valves.debug_mode:
-        debug_log.append(f"🔍 **Debug Info (MinionS v0.2.6):**\n- Query: {query[:100]}...\n- Context length: {len(context)} chars")
+        debug_log.append(f"🔍 **Debug Info (MinionS v0.2.0):**\n- Query: {query[:100]}...\n- Context length: {len(context)} chars")
         debug_log.append(f"**⏱️ Overall process started. (Debug Mode)**")
 
     chunks = create_chunks(context, valves.chunk_size, valves.max_chunks)
@@ -723,9 +771,10 @@ async def _execute_minions_protocol(
             conversation_log.append(f"### 🎯 Round {current_round + 1}/{valves.max_rounds} - Task Decomposition Phase")
 
         # Call the new decompose_task function
-        tasks, claude_response_for_decomposition = await decompose_task(
+        # Note: now returns three values instead of two
+        tasks, claude_response_for_decomposition, decomposition_prompt = await decompose_task(
             valves=valves,
-            call_claude_func=call_claude,  # Using call_claude
+            call_claude_func=call_claude,
             query=query,
             scratchpad_content=scratchpad_content,
             num_chunks=len(chunks),
@@ -734,6 +783,10 @@ async def _execute_minions_protocol(
             conversation_log=conversation_log,
             debug_log=debug_log
         )
+        
+        # Store the decomposition prompt in history
+        if decomposition_prompt:  # Only add if not empty (error case)
+            decomposition_prompts_history.append(decomposition_prompt)
         
         # Handle Claude communication errors from decompose_task
         if claude_response_for_decomposition.startswith("CLAUDE_ERROR:"):
@@ -753,7 +806,7 @@ async def _execute_minions_protocol(
                 conversation_log.append(f"**🤖 Claude indicates final answer is ready in round {current_round + 1}.**")
             scratchpad_content += f"\n\n**Round {current_round + 1}:** Claude provided final answer."
             break
-        
+
         if not tasks:
             if valves.show_conversation:
                 conversation_log.append(f"**🤖 Claude provided no new tasks in round {current_round + 1}. Proceeding to final synthesis.**")
@@ -766,7 +819,7 @@ async def _execute_minions_protocol(
         
         execution_details = await execute_tasks_on_chunks(
             tasks, chunks, conversation_log if valves.show_conversation else debug_log, 
-            current_round + 1, valves, call_ollama, TaskResult  # Using correct names
+            current_round + 1, valves, call_ollama_func, TaskResultModel
         )
         current_round_task_results = execution_details["results"]
         round_chunk_attempts = execution_details["total_chunk_processing_attempts"]
@@ -820,7 +873,6 @@ async def _execute_minions_protocol(
             if not synthesis_input_summary:
                 synthesis_input_summary = "No definitive information was found by local models. The original query was: " + query
             
-            # Call the new function for synthesis prompt
             synthesis_prompt = get_minions_synthesis_claude_prompt(query, synthesis_input_summary, valves)
             synthesis_prompts_history.append(synthesis_prompt)
             
@@ -860,12 +912,18 @@ async def _execute_minions_protocol(
         len(context), len(query), total_chunks_processed_for_stats, total_tasks_executed_local
     )
     
+    # Override the total_rounds if needed to show actual rounds executed
+    actual_rounds_executed = len(decomposition_prompts_history)
+    if actual_rounds_executed == 0 and current_round >= 0:
+        # Fallback: if history wasn't populated properly, at least show rounds attempted
+        actual_rounds_executed = min(current_round + 1, valves.max_rounds)
+    
     total_successful_tasks = len([r for r in all_round_results_aggregated if r['status'] == 'success'])
     tasks_with_any_timeout = len([r for r in all_round_results_aggregated if r['status'] == 'timeout_all_chunks'])
 
-    output_parts.append(f"\n## 📊 MinionS Efficiency Stats (v0.2.6)")
+    output_parts.append(f"\n## 📊 MinionS Efficiency Stats (v0.2.0)")
     output_parts.append(f"- **Protocol:** MinionS (Multi-Round)")
-    output_parts.append(f"- **Rounds executed:** {stats['total_rounds']}/{valves.max_rounds}")
+    output_parts.append(f"- **Rounds executed:** {actual_rounds_executed}/{valves.max_rounds}")
     output_parts.append(f"- **Total tasks for local LLM:** {stats['total_tasks_executed_local']}")
     output_parts.append(f"- **Successful tasks (local):** {total_successful_tasks}")
     output_parts.append(f"- **Tasks where all chunks timed out (local):** {tasks_with_any_timeout}")
@@ -944,7 +1002,7 @@ class Pipe:
 
     def __init__(self):
         self.valves = self.Valves()
-        self.name = "MinionS v0.2.2 (Multi-Round)"
+        self.name = "MinionS v0.3.0 (Task Decomposition)"
 
     def pipes(self):
         """Define the available models"""

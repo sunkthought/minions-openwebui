@@ -56,9 +56,9 @@ async def _execute_minion_protocol(
     valves: Any,
     query: str,
     context: str,
-    call_claude_func: Callable, # Renamed
-    call_ollama_func: Callable, # Renamed
-    LocalAssistantResponseModel: Any # Renamed
+    call_claude_func: Callable,
+    call_ollama_func: Callable,
+    LocalAssistantResponseModel: Any
 ) -> str:
     """Execute the Minion protocol"""
     conversation_log = []
@@ -79,8 +79,6 @@ async def _execute_minion_protocol(
         debug_log.append(f"  - Timeouts: Claude={valves.timeout_claude}s, Local={valves.timeout_local}s")
         debug_log.append(f"**⏱️ Overall process started. (Debug Mode)**\n")
 
-    # initial_claude_prompt construction removed, will call get_minion_initial_claude_prompt
-
     for round_num in range(valves.max_rounds):
         if valves.debug_mode:
             debug_log.append(f"**⚙️ Starting Round {round_num + 1}/{valves.max_rounds}... (Debug Mode)**")
@@ -90,19 +88,41 @@ async def _execute_minion_protocol(
 
         claude_prompt_for_this_round = ""
         if round_num == 0:
-            # Call the new function for initial prompt
             claude_prompt_for_this_round = get_minion_initial_claude_prompt(query, len(context), valves)
         else:
-            # Call the new function for conversation prompt
-            claude_prompt_for_this_round = get_minion_conversation_claude_prompt(
-                conversation_history, query, valves
-            )
+            # Check if this is the last round and force a final answer
+            is_last_round = (round_num == valves.max_rounds - 1)
+            if is_last_round:
+                # Override with a prompt that forces a final answer
+                claude_prompt_for_this_round = f"""You are a supervisor LLM collaborating with a trusted local AI assistant to answer the user's ORIGINAL QUESTION: "{query}"
+
+The local assistant has full access to the source document and has been providing factual information extracted from it.
+
+CONVERSATION SO FAR:
+"""
+                for role, message in conversation_history:
+                    if role == "assistant":
+                        claude_prompt_for_this_round += f"\nYou previously asked: \"{message}\""
+                    else:
+                        claude_prompt_for_this_round += f"\nLocal assistant responded: \"{message}\""
+                
+                claude_prompt_for_this_round += f"""
+
+THIS IS YOUR FINAL OPPORTUNITY TO ANSWER. You have gathered sufficient information through {round_num} rounds of questions.
+
+Based on ALL the information provided by the local assistant, you MUST now provide a comprehensive answer to the user's original question: "{query}"
+
+Respond with "FINAL ANSWER READY." followed by your synthesized answer. Do NOT ask any more questions."""
+            else:
+                claude_prompt_for_this_round = get_minion_conversation_claude_prompt(
+                    conversation_history, query, valves
+                )
         
         claude_response = ""
         try:
             if valves.debug_mode: 
                 start_time_claude = asyncio.get_event_loop().time()
-            claude_response = await call_claude_func(valves, claude_prompt_for_this_round) # Use call_claude_func
+            claude_response = await call_claude_func(valves, claude_prompt_for_this_round)
             if valves.debug_mode:
                 end_time_claude = asyncio.get_event_loop().time()
                 time_taken_claude = end_time_claude - start_time_claude
@@ -129,25 +149,28 @@ async def _execute_minion_protocol(
                 debug_log.append(f"  🏁 Claude declared FINAL ANSWER READY in round {round_num + 1}. (Debug Mode)")
             break
 
-        # local_prompt construction removed, will call get_minion_local_prompt
+        # Skip local model call if this was the last round and Claude provided final answer
+        if round_num == valves.max_rounds - 1:
+            continue
+
         local_prompt = get_minion_local_prompt(context, query, claude_response, valves)
         
         local_response_str = ""
         try:
             if valves.debug_mode: 
                 start_time_ollama = asyncio.get_event_loop().time()
-            local_response_str = await call_ollama_func( # Use call_ollama_func
+            local_response_str = await call_ollama_func(
                 valves,
                 local_prompt,
                 use_json=True,
-                schema=LocalAssistantResponseModel # Use LocalAssistantResponseModel
+                schema=LocalAssistantResponseModel
             )
             local_response_data = _parse_local_response(
                 local_response_str,
                 is_structured=True,
                 use_structured_output=valves.use_structured_output,
                 debug_mode=valves.debug_mode,
-                LocalAssistantResponseModel=LocalAssistantResponseModel # Pass LocalAssistantResponseModel
+                LocalAssistantResponseModel=LocalAssistantResponseModel
             )
             if valves.debug_mode:
                 end_time_ollama = asyncio.get_event_loop().time()
@@ -184,10 +207,11 @@ async def _execute_minion_protocol(
             debug_log.append(f"**🏁 Completed Round {round_num + 1}. Cumulative time: {current_cumulative_time:.2f}s. (Debug Mode)**\n")
     
     if not claude_declared_final and conversation_history:
+        # This shouldn't happen with the fix above, but keep as fallback
         last_claude_msg = conversation_history[-1][1] if conversation_history[-1][0] == "assistant" else (conversation_history[-2][1] if len(conversation_history) > 1 and conversation_history[-2][0] == "assistant" else "No suitable final message from Claude found.")
-        actual_final_answer = f"Max rounds reached. Claude's last message was: \"{last_claude_msg}\""
+        actual_final_answer = f"Protocol ended without explicit final answer. Claude's last response was: \"{last_claude_msg}\""
         if valves.show_conversation:
-            conversation_log.append(f"⚠️ Max rounds reached. Using Claude's last message as the result.\n")
+            conversation_log.append(f"⚠️ Protocol ended without Claude providing a final answer.\n")
 
     if valves.debug_mode:
         total_execution_time = asyncio.get_event_loop().time() - overall_start_time

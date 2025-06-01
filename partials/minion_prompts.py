@@ -5,29 +5,28 @@ from typing import List, Tuple, Any
 def get_minion_initial_claude_prompt(query: str, context_len: int, valves: Any) -> str:
     """
     Returns the initial prompt for Claude in the Minion protocol.
-    Moved from _execute_minion_protocol in minion_protocol_logic.py.
     """
-    # It seems 'valves' is not strictly needed for this specific prompt's text content
-    # but keeping it in signature for consistency if other valve-dependent variants arise.
     return f"""Your primary goal is to answer the user's question: "{query}"
 
-To achieve this, you will collaborate with a local AI assistant. This local assistant has ALREADY READ and has FULL ACCESS to the relevant document ({context_len} characters long). The local assistant is a TRUSTED source that will provide you with factual information, summaries, and direct extractions FROM THE DOCUMENT in response to your questions.
+To achieve this, you will collaborate with a local AI assistant. This local assistant has ALREADY READ and has FULL ACCESS to the relevant document ({context_len} characters long). You will not be given the full document. Instead you are to ask the TRUSTED local assistant who can provide you with factual information, summaries, and direct extractions FROM THE DOCUMENT in response to your questions.
 
 Your role is to:
-1.  Formulate specific, focused questions to the local assistant to gather the necessary information from the document. Ask only what you need to build up the answer to the user's original query.
-2.  Receive and understand the information provided by the local assistant.
-3.  Synthesize this information to answer the user's original query.
+1. Ask SPECIFIC, TARGETED questions to extract concrete information from the document
+2. Request specific examples, quotes, or detailed descriptions rather than high-level overviews
+3. Build up enough specific information to answer the user's query comprehensively
 
 IMPORTANT INSTRUCTIONS:
-- DO NOT ask the local assistant to provide the entire document or large raw excerpts.
-- DO NOT express that you cannot see the document. Assume the local assistant provides accurate information from it.
-- Your questions should be aimed at extracting pieces of information that you can then synthesize.
+- DO NOT ask for general overviews or themes - ask for specific content
+- Request concrete details: names, dates, technologies, specific advancements
+- Ask for direct quotes or detailed descriptions from specific parts
+- If you need information from multiple parts, ask for each one specifically
 
-If, after receiving responses from the local assistant, you believe you have gathered enough information to comprehensively answer the user's original query ("{query}"), then respond ONLY with the exact phrase "FINAL ANSWER READY." followed by your detailed final answer.
-If you need more specific information from the document, ask the local assistant ONE more clear, targeted question. Do not use the phrase "FINAL ANSWER READY." yet.
+Example good questions:
+- "What specific technological advancements are described in Part III?"
+- "Can you provide the exact details about the AI winter mentioned in Part II, including dates and causes?"
+- "What are the specific building blocks or technologies mentioned in Part V?"
 
-Start by asking your first question to the local assistant to begin gathering information.
-"""
+Start by asking your first SPECIFIC question to begin gathering concrete information."""
 
 def get_minion_conversation_claude_prompt(history: List[Tuple[str, str]], original_query: str, valves: Any) -> str:
     """
@@ -62,15 +61,23 @@ def get_minion_conversation_claude_prompt(history: List[Tuple[str, str]], origin
 def get_minion_local_prompt(context: str, query: str, claude_request: str, valves: Any) -> str:
     """
     Returns the prompt for the local Ollama model in the Minion protocol.
-    Moved from _execute_minion_protocol in minion_protocol_logic.py.
     """
-    # 'valves' not strictly needed for this specific prompt's text content from original version
-    # but could be used for schema instructions if valves.use_structured_output was considered here.
-    # The original prompt did include a generic instruction about JSON.
     return f"""You have access to the full context below. Claude (Anthropic's AI) is collaborating with you to answer a user's question.
+
 CONTEXT:
 {context}
+
 ORIGINAL QUESTION: {query}
+
 CLAUDE'S REQUEST: {claude_request}
-Please provide a helpful, accurate response based on the context you have access to. Extract relevant information that answers Claude's specific question. Be concise but thorough.
+
+IMPORTANT INSTRUCTIONS:
+- Provide SPECIFIC, DETAILED information from the context
+- Include concrete examples, names, dates, and technical details
+- Quote directly from the text when relevant
+- If Claude asks about a specific part or section, provide detailed content from that section
+- Do not give vague overviews - provide substantial, specific information
+
+Please provide a helpful, accurate response based on the context you have access to. Extract relevant information that answers Claude's specific question. Be thorough and include all relevant details.
+
 If you are instructed to provide a JSON response (e.g., by a schema appended to this prompt), ensure your entire response is ONLY that valid JSON object, without any surrounding text, explanations, or markdown formatting like ```json ... ```."""

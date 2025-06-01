@@ -6,14 +6,22 @@ from typing import List, Dict, Any, Callable # Removed Optional, Awaitable
 
 # Removed create_chunks function from here
 
-def parse_local_response(response: str, is_structured: bool, use_structured_output: bool, debug_mode: bool, TaskResultModel: Any) -> Dict: # Added TaskResultModel param
+def parse_local_response(response: str, is_structured: bool, use_structured_output: bool, debug_mode: bool, TaskResultModel: Any) -> Dict:
     """Parse local model response, supporting both text and structured formats"""
     if is_structured and use_structured_output:
         try:
             parsed_json = json.loads(response)
-            validated_model = TaskResultModel(**parsed_json) # Use TaskResultModel
+            
+            # Safety net: if answer is a dict/list, stringify it
+            if 'answer' in parsed_json and not isinstance(parsed_json['answer'], (str, type(None))):
+                if debug_mode:
+                    print(f"DEBUG: Converting non-string answer to string: {type(parsed_json['answer'])}")
+                parsed_json['answer'] = json.dumps(parsed_json['answer']) if parsed_json['answer'] else None
+            
+            validated_model = TaskResultModel(**parsed_json)
             model_dict = validated_model.dict()
             model_dict['parse_error'] = None
+            
             # Check if the structured response indicates "not found" via its 'answer' field
             if model_dict.get('answer') is None:
                 model_dict['_is_none_equivalent'] = True

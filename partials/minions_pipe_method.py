@@ -19,9 +19,9 @@ async def _execute_minions_protocol(
     valves: Any,
     query: str,
     context: str,
-    call_claude: Callable,  # Changed from call_claude_func
-    call_ollama: Callable,  # Changed from call_ollama_func
-    TaskResult: Any        # Changed from TaskResultModel
+    call_claude: Callable,
+    call_ollama_func: Callable,
+    TaskResultModel: Any
 ) -> str:
     """Execute the MinionS protocol"""
     conversation_log = []
@@ -39,7 +39,7 @@ async def _execute_minions_protocol(
 
     overall_start_time = asyncio.get_event_loop().time()
     if valves.debug_mode:
-        debug_log.append(f"🔍 **Debug Info (MinionS v0.2.6):**\n- Query: {query[:100]}...\n- Context length: {len(context)} chars")
+        debug_log.append(f"🔍 **Debug Info (MinionS v0.2.0):**\n- Query: {query[:100]}...\n- Context length: {len(context)} chars")
         debug_log.append(f"**⏱️ Overall process started. (Debug Mode)**")
 
     chunks = create_chunks(context, valves.chunk_size, valves.max_chunks)
@@ -80,9 +80,10 @@ async def _execute_minions_protocol(
             conversation_log.append(f"### 🎯 Round {current_round + 1}/{valves.max_rounds} - Task Decomposition Phase")
 
         # Call the new decompose_task function
-        tasks, claude_response_for_decomposition = await decompose_task(
+        # Note: now returns three values instead of two
+        tasks, claude_response_for_decomposition, decomposition_prompt = await decompose_task(
             valves=valves,
-            call_claude_func=call_claude,  # Using call_claude
+            call_claude_func=call_claude,
             query=query,
             scratchpad_content=scratchpad_content,
             num_chunks=len(chunks),
@@ -91,6 +92,10 @@ async def _execute_minions_protocol(
             conversation_log=conversation_log,
             debug_log=debug_log
         )
+        
+        # Store the decomposition prompt in history
+        if decomposition_prompt:  # Only add if not empty (error case)
+            decomposition_prompts_history.append(decomposition_prompt)
         
         # Handle Claude communication errors from decompose_task
         if claude_response_for_decomposition.startswith("CLAUDE_ERROR:"):
@@ -110,7 +115,7 @@ async def _execute_minions_protocol(
                 conversation_log.append(f"**🤖 Claude indicates final answer is ready in round {current_round + 1}.**")
             scratchpad_content += f"\n\n**Round {current_round + 1}:** Claude provided final answer."
             break
-        
+
         if not tasks:
             if valves.show_conversation:
                 conversation_log.append(f"**🤖 Claude provided no new tasks in round {current_round + 1}. Proceeding to final synthesis.**")
@@ -123,7 +128,7 @@ async def _execute_minions_protocol(
         
         execution_details = await execute_tasks_on_chunks(
             tasks, chunks, conversation_log if valves.show_conversation else debug_log, 
-            current_round + 1, valves, call_ollama, TaskResult  # Using correct names
+            current_round + 1, valves, call_ollama_func, TaskResultModel
         )
         current_round_task_results = execution_details["results"]
         round_chunk_attempts = execution_details["total_chunk_processing_attempts"]
@@ -177,7 +182,6 @@ async def _execute_minions_protocol(
             if not synthesis_input_summary:
                 synthesis_input_summary = "No definitive information was found by local models. The original query was: " + query
             
-            # Call the new function for synthesis prompt
             synthesis_prompt = get_minions_synthesis_claude_prompt(query, synthesis_input_summary, valves)
             synthesis_prompts_history.append(synthesis_prompt)
             
@@ -217,12 +221,18 @@ async def _execute_minions_protocol(
         len(context), len(query), total_chunks_processed_for_stats, total_tasks_executed_local
     )
     
+    # Override the total_rounds if needed to show actual rounds executed
+    actual_rounds_executed = len(decomposition_prompts_history)
+    if actual_rounds_executed == 0 and current_round >= 0:
+        # Fallback: if history wasn't populated properly, at least show rounds attempted
+        actual_rounds_executed = min(current_round + 1, valves.max_rounds)
+    
     total_successful_tasks = len([r for r in all_round_results_aggregated if r['status'] == 'success'])
     tasks_with_any_timeout = len([r for r in all_round_results_aggregated if r['status'] == 'timeout_all_chunks'])
 
-    output_parts.append(f"\n## 📊 MinionS Efficiency Stats (v0.2.6)")
+    output_parts.append(f"\n## 📊 MinionS Efficiency Stats (v0.2.0)")
     output_parts.append(f"- **Protocol:** MinionS (Multi-Round)")
-    output_parts.append(f"- **Rounds executed:** {stats['total_rounds']}/{valves.max_rounds}")
+    output_parts.append(f"- **Rounds executed:** {actual_rounds_executed}/{valves.max_rounds}")
     output_parts.append(f"- **Total tasks for local LLM:** {stats['total_tasks_executed_local']}")
     output_parts.append(f"- **Successful tasks (local):** {total_successful_tasks}")
     output_parts.append(f"- **Tasks where all chunks timed out (local):** {tasks_with_any_timeout}")
