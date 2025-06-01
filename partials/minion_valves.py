@@ -4,7 +4,8 @@ class MinionValves(BaseModel):
     """
     Configuration settings (valves) specifically for the Minion (conversational) pipe.
     These settings control the behavior of the Minion protocol, including API keys,
-    model selections, timeouts, and operational parameters.
+    model selections, timeouts, operational parameters, extraction instructions,
+    expected output format, and confidence threshold.
     """
     # Essential configuration only
     anthropic_api_key: str = Field(
@@ -48,6 +49,15 @@ class MinionValves(BaseModel):
     )
     debug_mode: bool = Field(
         default=False, description="Show additional technical details and verbose logs."
+    )
+    extraction_instructions: str = Field(
+        default="", title="Extraction Instructions", description="Specific instructions for the LLM on what to extract or how to process the information."
+    )
+    expected_format: str = Field(
+        default="text", title="Expected Output Format", description="Desired format for the LLM's output (e.g., 'text', 'JSON', 'bullet points')."
+    )
+    confidence_threshold: float = Field(
+        default=0.7, title="Confidence Threshold", description="Minimum confidence level for the LLM's response (0.0-1.0). Primarily a suggestion to the LLM.", ge=0, le=1
     )
 
     # The following class is part of the Pydantic configuration and is standard.

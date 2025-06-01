@@ -4,7 +4,8 @@ class MinionsValves(BaseModel):
     """
     Configuration settings (valves) specifically for the MinionS (multi-task, multi-round) pipe.
     These settings control the behavior of the MinionS protocol, including API keys,
-    model selections, timeouts, task decomposition parameters, and operational parameters.
+    model selections, timeouts, task decomposition parameters, operational parameters,
+    extraction instructions, expected output format, and confidence threshold.
     """
     anthropic_api_key: str = Field(
         default="", description="Anthropic API key for Claude."
@@ -58,6 +59,15 @@ class MinionsValves(BaseModel):
     use_structured_output: bool = Field(
         default=False, 
         description="Enable JSON structured output for local model responses (requires local model to support JSON mode and the TaskResult schema)."
+    )
+    extraction_instructions: str = Field(
+        default="", title="Extraction Instructions", description="Specific instructions for the LLM on what to extract or how to process the information for each task."
+    )
+    expected_format: str = Field(
+        default="text", title="Expected Output Format", description="Desired format for the LLM's output for each task (e.g., 'text', 'JSON', 'bullet points'). Note: 'JSON' enables specific structured output fields like 'explanation', 'citation', 'answer'."
+    )
+    confidence_threshold: float = Field(
+        default=0.7, title="Confidence Threshold", description="Minimum confidence level for the LLM's response for each task (0.0-1.0). Primarily a suggestion to the LLM.", ge=0, le=1
     )
 
     class Config:
