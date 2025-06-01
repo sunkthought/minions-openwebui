@@ -137,6 +137,33 @@ async def _execute_minions_protocol(
 
         # Process Metrics After execute_tasks_on_chunks
         raw_metrics_data = execution_details.get("round_metrics_data")
+
+        # Extract and Calculate Confidence Metrics
+        confidence_data = execution_details.get("confidence_metrics_data")
+        task_confidences = confidence_data.get("task_confidences", []) if confidence_data else []
+
+        round_avg_numeric_confidence = 0.0
+        if task_confidences:
+            total_confidence_sum = sum(tc['avg_numeric_confidence'] for tc in task_confidences if tc.get('contributing_successful_chunks', 0) > 0)
+            num_successful_tasks_with_confidence = sum(1 for tc in task_confidences if tc.get('contributing_successful_chunks', 0) > 0)
+            if num_successful_tasks_with_confidence > 0:
+                round_avg_numeric_confidence = total_confidence_sum / num_successful_tasks_with_confidence
+
+        round_confidence_distribution = confidence_data.get("round_confidence_distribution", {"HIGH": 0, "MEDIUM": 0, "LOW": 0}) if confidence_data else {"HIGH": 0, "MEDIUM": 0, "LOW": 0}
+
+        # Determine Confidence Trend (before creating current RoundMetrics object)
+        confidence_trend = "N/A"
+        if all_round_metrics: # Check if there are previous rounds' metrics
+            previous_round_metric = all_round_metrics[-1]
+            previous_avg_confidence = previous_round_metric.avg_confidence_score
+            diff = round_avg_numeric_confidence - previous_avg_confidence
+            if diff > 0.05:
+                confidence_trend = "improving"
+            elif diff < -0.05:
+                confidence_trend = "declining"
+            else:
+                confidence_trend = "stable"
+
         if raw_metrics_data:
             try: # Add a try-except block for robustness when creating RoundMetrics
                 round_metric = RoundMetrics(
@@ -147,17 +174,22 @@ async def _execute_minions_protocol(
                     avg_chunk_processing_time_ms=raw_metrics_data["avg_chunk_processing_time_ms"],
                     total_unique_findings_count=0,  # Placeholder for Iteration 1
                     execution_time_ms=raw_metrics_data["execution_time_ms"],
-                    success_rate=raw_metrics_data["success_rate"]
+                    success_rate=raw_metrics_data["success_rate"],
+                    # Add new confidence fields
+                    avg_confidence_score=round_avg_numeric_confidence,
+                    confidence_distribution=round_confidence_distribution,
+                    confidence_trend=confidence_trend
                 )
                 all_round_metrics.append(round_metric)
 
-                # Format and append metrics summary
+                # Format and append metrics summary (now includes confidence)
                 metrics_summary = (
                     f"**📊 Round {round_metric.round_number} Metrics:**\n"
                     f"  - Tasks Executed: {round_metric.tasks_executed}\n"
                     f"  - Success Rate: {round_metric.success_rate:.2%}\n"
-                    f"  - Task Successes: {round_metric.task_success_count}\n"
-                    f"  - Task Failures: {round_metric.task_failure_count}\n"
+                    f"  - Task Successes: {round_metric.task_success_count}, Failures: {round_metric.task_failure_count}\n"
+                    f"  - Avg Confidence: {round_metric.avg_confidence_score:.2f} ({round_metric.confidence_trend})\n"
+                    f"  - Confidence Dist (H/M/L): {round_metric.confidence_distribution.get('HIGH',0)}/{round_metric.confidence_distribution.get('MEDIUM',0)}/{round_metric.confidence_distribution.get('LOW',0)}\n"
                     f"  - Round Execution Time: {round_metric.execution_time_ms:.0f} ms\n"
                     f"  - Avg. Chunk Processing Time: {round_metric.avg_chunk_processing_time_ms:.0f} ms"
                 )

@@ -45,5 +45,10 @@ class RoundMetrics(BaseModel):
     execution_time_ms: float
     success_rate: float # Calculated as task_success_count / tasks_executed
 
+    # New fields for Iteration 2
+    avg_confidence_score: float = 0.0 # Default to 0.0
+    confidence_distribution: Dict[str, int] = Field(default_factory=lambda: {"HIGH": 0, "MEDIUM": 0, "LOW": 0})
+    confidence_trend: str = "N/A" # Default to N/A
+
     class Config:
         extra = "ignore"

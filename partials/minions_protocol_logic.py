@@ -9,6 +9,9 @@ from .minions_models import RoundMetrics # Import RoundMetrics
 
 def parse_local_response(response: str, is_structured: bool, use_structured_output: bool, debug_mode: bool, TaskResultModel: Any) -> Dict:
     """Parse local model response, supporting both text and structured formats"""
+    confidence_map = {'HIGH': 0.9, 'MEDIUM': 0.6, 'LOW': 0.3}
+    default_numeric_confidence = 0.3 # Corresponds to LOW
+
     if is_structured and use_structured_output:
         try:
             parsed_json = json.loads(response)
@@ -23,6 +26,9 @@ def parse_local_response(response: str, is_structured: bool, use_structured_outp
             model_dict = validated_model.dict()
             model_dict['parse_error'] = None
             
+            text_confidence = model_dict.get('confidence', 'LOW').upper()
+            model_dict['numeric_confidence'] = confidence_map.get(text_confidence, default_numeric_confidence)
+
             # Check if the structured response indicates "not found" via its 'answer' field
             if model_dict.get('answer') is None:
                 model_dict['_is_none_equivalent'] = True
@@ -34,11 +40,12 @@ def parse_local_response(response: str, is_structured: bool, use_structured_outp
                 print(f"DEBUG: Failed to parse structured output in MinionS: {e}. Response was: {response[:500]}")
             # Fallback for parsing failure
             is_none_equivalent_fallback = response.strip().upper() == "NONE"
-            return {"answer": response, "explanation": response, "confidence": "LOW", "citation": None, "parse_error": str(e), "_is_none_equivalent": is_none_equivalent_fallback}
+            return {"answer": response, "explanation": response, "confidence": "LOW", "numeric_confidence": default_numeric_confidence, "parse_error": str(e), "_is_none_equivalent": is_none_equivalent_fallback}
     
     # Fallback for non-structured processing
     is_none_equivalent_text = response.strip().upper() == "NONE"
-    return {"answer": response, "explanation": response, "confidence": "MEDIUM", "citation": None, "parse_error": None, "_is_none_equivalent": is_none_equivalent_text}
+    # Confidence is MEDIUM by default in this path
+    return {"answer": response, "explanation": response, "confidence": "MEDIUM", "numeric_confidence": confidence_map['MEDIUM'], "citation": None, "parse_error": None, "_is_none_equivalent": is_none_equivalent_text}
 
 async def execute_tasks_on_chunks(
     tasks: List[str], 
@@ -60,11 +67,15 @@ async def execute_tasks_on_chunks(
     task_success_count = 0
     task_failure_count = 0
     chunk_processing_times = []
+    # Initialize Confidence Accumulators
+    round_confidence_distribution = {"HIGH": 0, "MEDIUM": 0, "LOW": 0}
+    aggregated_task_confidences = []
 
     for task_idx, task in enumerate(tasks):
         tasks_executed_count += 1 # Track Tasks Executed
         conversation_log.append(f"**📋 Task {task_idx + 1} (Round {current_round}):** {task}")
         results_for_this_task_from_chunks = []
+        current_task_chunk_confidences = [] # Initialize for current task
         chunk_timeout_count_for_task = 0
         num_relevant_chunks_found = 0
 
@@ -113,6 +124,15 @@ async def execute_tasks_on_chunks(
                     debug_mode=valves.debug_mode,
                     TaskResultModel=TaskResult # Pass TaskResult to parse_local_response
                 )
+
+                # Collect Confidence per Chunk
+                numeric_confidence = response_data.get('numeric_confidence', 0.3) # Default to LOW numeric
+                text_confidence = response_data.get('confidence', 'LOW').upper()
+
+                if not response_data.get('_is_none_equivalent') and not response_data.get('parse_error'):
+                    if text_confidence in round_confidence_distribution:
+                        round_confidence_distribution[text_confidence] += 1
+                    current_task_chunk_confidences.append(numeric_confidence)
                 
                 if valves.debug_mode:
                     # end_time_ollama = asyncio.get_event_loop().time() # Already have chunk_end_time
@@ -137,6 +157,7 @@ async def execute_tasks_on_chunks(
                     extracted_info = response_data.get('answer') or response_data.get('explanation', 'Could not extract details.')
                     results_for_this_task_from_chunks.append(f"[Chunk {chunk_idx+1}]: {extracted_info}")
                     num_relevant_chunks_found += 1
+                    # Note: current_task_chunk_confidences is already appended if valid
                     
             except asyncio.TimeoutError:
                 chunk_end_time = asyncio.get_event_loop().time() # Capture time even on timeout
@@ -160,29 +181,38 @@ async def execute_tasks_on_chunks(
                     f"   ❌ Task {task_idx + 1} - Chunk {chunk_idx + 1} error: {str(e)}"
                 )
         
-        # Track Task Success/Failure
+        # Track Task Success/Failure and Aggregate Confidence per Task
         if results_for_this_task_from_chunks:
             task_success_count += 1
+            avg_task_confidence = sum(current_task_chunk_confidences) / len(current_task_chunk_confidences) if current_task_chunk_confidences else 0.0
+            aggregated_task_confidences.append({
+                "task": task,
+                "avg_numeric_confidence": avg_task_confidence,
+                "contributing_successful_chunks": len(current_task_chunk_confidences)
+            })
             aggregated_result_for_task = "\n".join(results_for_this_task_from_chunks)
             overall_task_results.append({"task": task, "result": aggregated_result_for_task, "status": "success"})
             conversation_log.append(
-                f"**💻 Local Model (Aggregated for Task {task_idx + 1}, Round {current_round}):** Found info in {num_relevant_chunks_found}/{len(chunks)} chunk(s). First result snippet: {results_for_this_task_from_chunks[0][:100]}..."
+                f"**💻 Local Model (Aggregated for Task {task_idx + 1}, Round {current_round}):** Found info in {num_relevant_chunks_found}/{len(chunks)} chunk(s). Avg Confidence: {avg_task_confidence:.2f}. First result snippet: {results_for_this_task_from_chunks[0][:100]}..."
             )
         elif chunk_timeout_count_for_task > 0 and chunk_timeout_count_for_task == len(chunks):
             task_failure_count += 1 # All chunks timed out
+            aggregated_task_confidences.append({"task": task, "avg_numeric_confidence": 0.0, "contributing_successful_chunks": 0})
             overall_task_results.append({"task": task, "result": f"Timeout on all {len(chunks)} chunks", "status": "timeout_all_chunks"})
             conversation_log.append(
                 f"**💻 Local Model (Task {task_idx + 1}, Round {current_round}):** All {len(chunks)} chunks timed out."
             )
-        else:
-            task_failure_count += 1 # No relevant info found or other errors
+        else: # No relevant info found or other errors
+            task_failure_count += 1
+            aggregated_task_confidences.append({"task": task, "avg_numeric_confidence": 0.0, "contributing_successful_chunks": 0})
             overall_task_results.append(
                 {"task": task, "result": "Information not found in any relevant chunk", "status": "not_found"}
             )
             conversation_log.append(
                 f"**💻 Local Model (Task {task_idx + 1}, Round {current_round}):** No relevant information found in any chunk."
             )
-    
+        # current_task_chunk_confidences is implicitly reset at the start of the task loop
+
     # Calculate Final Metrics
     round_end_time = asyncio.get_event_loop().time()
     execution_time_ms = (round_end_time - round_start_time) * 1000
@@ -205,7 +235,11 @@ async def execute_tasks_on_chunks(
         "results": overall_task_results,
         "total_chunk_processing_attempts": total_attempts_this_call,
         "total_chunk_processing_timeouts": total_timeouts_this_call,
-        "round_metrics_data": round_metrics_data
+        "round_metrics_data": round_metrics_data,
+        "confidence_metrics_data": { # New confidence data
+            "task_confidences": aggregated_task_confidences,
+            "round_confidence_distribution": round_confidence_distribution
+        }
     }
 
 def calculate_token_savings(
