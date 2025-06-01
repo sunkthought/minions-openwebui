@@ -5,7 +5,7 @@ from fastapi import Request
 from .common_api_calls import call_claude, call_ollama
 from .minions_protocol_logic import execute_tasks_on_chunks, calculate_token_savings
 from .common_file_processing import create_chunks
-from .minions_models import TaskResult
+from .minions_models import TaskResult, RoundMetrics # Import RoundMetrics
 from .common_context_utils import extract_context_from_messages, extract_context_from_files
 from .minions_decomposition_logic import decompose_task
 from .minions_prompts import get_minions_synthesis_claude_prompt
@@ -28,6 +28,7 @@ async def _execute_minions_protocol(
     debug_log = []
     scratchpad_content = ""
     all_round_results_aggregated = []
+    all_round_metrics: List[RoundMetrics] = [] # Initialize Metrics List
     decomposition_prompts_history = []
     synthesis_prompts_history = []
     final_response = "No answer could be synthesized."
@@ -133,6 +134,44 @@ async def _execute_minions_protocol(
         current_round_task_results = execution_details["results"]
         round_chunk_attempts = execution_details["total_chunk_processing_attempts"]
         round_chunk_timeouts = execution_details["total_chunk_processing_timeouts"]
+
+        # Process Metrics After execute_tasks_on_chunks
+        raw_metrics_data = execution_details.get("round_metrics_data")
+        if raw_metrics_data:
+            try: # Add a try-except block for robustness when creating RoundMetrics
+                round_metric = RoundMetrics(
+                    round_number=raw_metrics_data["round_number"],
+                    tasks_executed=raw_metrics_data["tasks_executed"],
+                    task_success_count=raw_metrics_data["task_success_count"],
+                    task_failure_count=raw_metrics_data["task_failure_count"],
+                    avg_chunk_processing_time_ms=raw_metrics_data["avg_chunk_processing_time_ms"],
+                    total_unique_findings_count=0,  # Placeholder for Iteration 1
+                    execution_time_ms=raw_metrics_data["execution_time_ms"],
+                    success_rate=raw_metrics_data["success_rate"]
+                )
+                all_round_metrics.append(round_metric)
+
+                # Format and append metrics summary
+                metrics_summary = (
+                    f"**📊 Round {round_metric.round_number} Metrics:**\n"
+                    f"  - Tasks Executed: {round_metric.tasks_executed}\n"
+                    f"  - Success Rate: {round_metric.success_rate:.2%}\n"
+                    f"  - Task Successes: {round_metric.task_success_count}\n"
+                    f"  - Task Failures: {round_metric.task_failure_count}\n"
+                    f"  - Round Execution Time: {round_metric.execution_time_ms:.0f} ms\n"
+                    f"  - Avg. Chunk Processing Time: {round_metric.avg_chunk_processing_time_ms:.0f} ms"
+                )
+                scratchpad_content += f"\n\n{metrics_summary}"
+                if valves.show_conversation:
+                    conversation_log.append(metrics_summary)
+
+            except KeyError as e:
+                if valves.debug_mode:
+                    debug_log.append(f"⚠️ **Metrics Error:** Missing key {e} in round_metrics_data for round {current_round + 1}. Skipping metrics for this round.")
+            except Exception as e: # Catch any other validation error from Pydantic
+                 if valves.debug_mode:
+                    debug_log.append(f"⚠️ **Metrics Error:** Could not create RoundMetrics object for round {current_round + 1} due to {type(e).__name__}: {e}. Skipping metrics for this round.")
+
 
         if round_chunk_attempts > 0:
             timeout_percentage_this_round = (round_chunk_timeouts / round_chunk_attempts) * 100

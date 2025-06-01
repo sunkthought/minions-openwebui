@@ -1,6 +1,7 @@
 import asyncio
 import json
 from typing import List, Dict, Any, Callable # Removed Optional, Awaitable
+from .minions_models import RoundMetrics # Import RoundMetrics
 
 # parse_tasks function removed, will be part of minions_decomposition_logic.py
 
@@ -53,7 +54,15 @@ async def execute_tasks_on_chunks(
     total_attempts_this_call = 0
     total_timeouts_this_call = 0
 
+    # Initialize Metrics
+    round_start_time = asyncio.get_event_loop().time()
+    tasks_executed_count = 0
+    task_success_count = 0
+    task_failure_count = 0
+    chunk_processing_times = []
+
     for task_idx, task in enumerate(tasks):
+        tasks_executed_count += 1 # Track Tasks Executed
         conversation_log.append(f"**📋 Task {task_idx + 1} (Round {current_round}):** {task}")
         results_for_this_task_from_chunks = []
         chunk_timeout_count_for_task = 0
@@ -63,7 +72,7 @@ async def execute_tasks_on_chunks(
             total_attempts_this_call += 1
             
             # Call the new function for local task prompt
-            local_prompt = get_minions_local_task_prompt(
+            local_prompt = get_minions_local_task_prompt( # Ensure this function is defined or imported
                 chunk=chunk,
                 task=task,
                 chunk_idx=chunk_idx,
@@ -71,12 +80,18 @@ async def execute_tasks_on_chunks(
                 valves=valves
             )
             
-            start_time_ollama = 0
+            # Track Chunk Processing Time
+            chunk_start_time = asyncio.get_event_loop().time()
+            # start_time_ollama variable was previously used for debug,
+            # let's ensure we use chunk_start_time for metrics consistently.
+            # If start_time_ollama is still needed for debug, it can be kept separate.
+            # For metrics, we'll use chunk_start_time and chunk_end_time.
+
             if valves.debug_mode:
                 conversation_log.append(
                     f"   🔄 Task {task_idx + 1} - Trying chunk {chunk_idx + 1}/{len(chunks)} (size: {len(chunk)} chars)... (Debug Mode)"
                 )
-                start_time_ollama = asyncio.get_event_loop().time()
+                # start_time_ollama = asyncio.get_event_loop().time() # This was for debug, let's use chunk_start_time
 
             try:
                 response_str = await asyncio.wait_for(
@@ -88,6 +103,9 @@ async def execute_tasks_on_chunks(
                     ),
                     timeout=valves.timeout_local,
                 )
+                chunk_end_time = asyncio.get_event_loop().time()
+                chunk_processing_times.append((chunk_end_time - chunk_start_time) * 1000)
+
                 response_data = parse_local_response(
                     response_str,
                     is_structured=True,
@@ -97,8 +115,8 @@ async def execute_tasks_on_chunks(
                 )
                 
                 if valves.debug_mode:
-                    end_time_ollama = asyncio.get_event_loop().time()
-                    time_taken_ollama = end_time_ollama - start_time_ollama
+                    # end_time_ollama = asyncio.get_event_loop().time() # Already have chunk_end_time
+                    time_taken_ollama = (chunk_end_time - chunk_start_time) # Use metric times for debug consistency
                     status_msg = ""
                     details_msg = ""
                     if response_data.get("parse_error"):
@@ -121,34 +139,43 @@ async def execute_tasks_on_chunks(
                     num_relevant_chunks_found += 1
                     
             except asyncio.TimeoutError:
+                chunk_end_time = asyncio.get_event_loop().time() # Capture time even on timeout
+                chunk_processing_times.append((chunk_end_time - chunk_start_time) * 1000)
                 total_timeouts_this_call += 1
                 chunk_timeout_count_for_task += 1
                 conversation_log.append(
                     f"   ⏰ Task {task_idx + 1} - Chunk {chunk_idx + 1} timed out after {valves.timeout_local}s"
                 )
                 if valves.debug_mode:
-                    end_time_ollama = asyncio.get_event_loop().time()
-                    time_taken_ollama = end_time_ollama - start_time_ollama
+                    # end_time_ollama = asyncio.get_event_loop().time() # Already have chunk_end_time
+                    time_taken_ollama = (chunk_end_time - chunk_start_time) # Use metric times
                     conversation_log.append(
                          f"   ⏱️ Task {task_idx+1}, Chunk {chunk_idx+1} TIMEOUT after {time_taken_ollama:.2f}s. (Debug Mode)"
                     )
             except Exception as e:
+                # It's good practice to also record chunk processing time if an unexpected exception occurs
+                chunk_end_time = asyncio.get_event_loop().time()
+                chunk_processing_times.append((chunk_end_time - chunk_start_time) * 1000)
                 conversation_log.append(
                     f"   ❌ Task {task_idx + 1} - Chunk {chunk_idx + 1} error: {str(e)}"
                 )
         
+        # Track Task Success/Failure
         if results_for_this_task_from_chunks:
+            task_success_count += 1
             aggregated_result_for_task = "\n".join(results_for_this_task_from_chunks)
             overall_task_results.append({"task": task, "result": aggregated_result_for_task, "status": "success"})
             conversation_log.append(
                 f"**💻 Local Model (Aggregated for Task {task_idx + 1}, Round {current_round}):** Found info in {num_relevant_chunks_found}/{len(chunks)} chunk(s). First result snippet: {results_for_this_task_from_chunks[0][:100]}..."
             )
         elif chunk_timeout_count_for_task > 0 and chunk_timeout_count_for_task == len(chunks):
-             overall_task_results.append({"task": task, "result": f"Timeout on all {len(chunks)} chunks", "status": "timeout_all_chunks"})
-             conversation_log.append(
+            task_failure_count += 1 # All chunks timed out
+            overall_task_results.append({"task": task, "result": f"Timeout on all {len(chunks)} chunks", "status": "timeout_all_chunks"})
+            conversation_log.append(
                 f"**💻 Local Model (Task {task_idx + 1}, Round {current_round}):** All {len(chunks)} chunks timed out."
             )
         else:
+            task_failure_count += 1 # No relevant info found or other errors
             overall_task_results.append(
                 {"task": task, "result": "Information not found in any relevant chunk", "status": "not_found"}
             )
@@ -156,10 +183,29 @@ async def execute_tasks_on_chunks(
                 f"**💻 Local Model (Task {task_idx + 1}, Round {current_round}):** No relevant information found in any chunk."
             )
     
+    # Calculate Final Metrics
+    round_end_time = asyncio.get_event_loop().time()
+    execution_time_ms = (round_end_time - round_start_time) * 1000
+    avg_chunk_processing_time_ms = sum(chunk_processing_times) / len(chunk_processing_times) if chunk_processing_times else 0
+    success_rate = task_success_count / tasks_executed_count if tasks_executed_count > 0 else 0
+
+    # Prepare Metrics Object (as a dictionary for now, as per instructions)
+    round_metrics_data = {
+        "round_number": current_round,
+        "tasks_executed": tasks_executed_count,
+        "task_success_count": task_success_count,
+        "task_failure_count": task_failure_count,
+        "avg_chunk_processing_time_ms": avg_chunk_processing_time_ms,
+        "execution_time_ms": execution_time_ms,
+        "success_rate": success_rate,
+        # total_unique_findings_count will be handled later, defaulting in the model
+    }
+
     return {
         "results": overall_task_results,
         "total_chunk_processing_attempts": total_attempts_this_call,
-        "total_chunk_processing_timeouts": total_timeouts_this_call
+        "total_chunk_processing_timeouts": total_timeouts_this_call,
+        "round_metrics_data": round_metrics_data
     }
 
 def calculate_token_savings(
