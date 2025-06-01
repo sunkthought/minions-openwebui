@@ -50,5 +50,11 @@ class RoundMetrics(BaseModel):
     confidence_distribution: Dict[str, int] = Field(default_factory=lambda: {"HIGH": 0, "MEDIUM": 0, "LOW": 0})
     confidence_trend: str = "N/A" # Default to N/A
 
+    # New fields for Iteration 3
+    new_findings_count_this_round: int = 0
+    duplicate_findings_count_this_round: int = 0
+    redundancy_percentage_this_round: float = 0.0
+    # cross_round_similarity_score: float = 0.0 # Deferred
+
     class Config:
         extra = "ignore"

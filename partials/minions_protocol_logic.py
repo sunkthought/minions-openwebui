@@ -1,5 +1,6 @@
 import asyncio
 import json
+import hashlib # Import hashlib
 from typing import List, Dict, Any, Callable # Removed Optional, Awaitable
 from .minions_models import RoundMetrics # Import RoundMetrics
 
@@ -128,11 +129,19 @@ async def execute_tasks_on_chunks(
                 # Collect Confidence per Chunk
                 numeric_confidence = response_data.get('numeric_confidence', 0.3) # Default to LOW numeric
                 text_confidence = response_data.get('confidence', 'LOW').upper()
+                response_data['fingerprint'] = None # Initialize fingerprint
 
                 if not response_data.get('_is_none_equivalent') and not response_data.get('parse_error'):
                     if text_confidence in round_confidence_distribution:
                         round_confidence_distribution[text_confidence] += 1
                     current_task_chunk_confidences.append(numeric_confidence)
+
+                    # Fingerprint Generation Logic
+                    answer_text = response_data.get('answer')
+                    if answer_text: # Ensure answer_text is not None and not empty
+                        normalized_text = answer_text.lower().strip()
+                        if normalized_text: # Ensure normalized_text is not empty
+                            response_data['fingerprint'] = hashlib.sha256(normalized_text.encode('utf-8')).hexdigest()
                 
                 if valves.debug_mode:
                     # end_time_ollama = asyncio.get_event_loop().time() # Already have chunk_end_time
@@ -153,11 +162,15 @@ async def execute_tasks_on_chunks(
                          f"   ⏱️ Task {task_idx+1}, Chunk {chunk_idx+1} processed by local LLM in {time_taken_ollama:.2f}s. Status: {status_msg}. Details: {details_msg} (Debug Mode)"
                     )
 
-                if not response_data['_is_none_equivalent']:
+                if not response_data.get('_is_none_equivalent'): # Check with .get for safety
                     extracted_info = response_data.get('answer') or response_data.get('explanation', 'Could not extract details.')
-                    results_for_this_task_from_chunks.append(f"[Chunk {chunk_idx+1}]: {extracted_info}")
+                    # Store as dict with fingerprint
+                    results_for_this_task_from_chunks.append({
+                        "text": f"[Chunk {chunk_idx+1}]: {extracted_info}",
+                        "fingerprint": response_data.get('fingerprint')
+                    })
                     num_relevant_chunks_found += 1
-                    # Note: current_task_chunk_confidences is already appended if valid
+                    # Note: current_task_chunk_confidences is already appended if valid (based on earlier logic)
                     
             except asyncio.TimeoutError:
                 chunk_end_time = asyncio.get_event_loop().time() # Capture time even on timeout
@@ -190,24 +203,39 @@ async def execute_tasks_on_chunks(
                 "avg_numeric_confidence": avg_task_confidence,
                 "contributing_successful_chunks": len(current_task_chunk_confidences)
             })
-            aggregated_result_for_task = "\n".join(results_for_this_task_from_chunks)
-            overall_task_results.append({"task": task, "result": aggregated_result_for_task, "status": "success"})
+            # Modify overall_task_results for successful tasks
+            detailed_results = [{"text": res["text"], "fingerprint": res["fingerprint"]} for res in results_for_this_task_from_chunks if isinstance(res, dict)]
+            aggregated_text_result = "\n".join([res["text"] for res in detailed_results])
+            overall_task_results.append({
+                "task": task,
+                "result": aggregated_text_result,
+                "status": "success",
+                "detailed_findings": detailed_results
+            })
             conversation_log.append(
-                f"**💻 Local Model (Aggregated for Task {task_idx + 1}, Round {current_round}):** Found info in {num_relevant_chunks_found}/{len(chunks)} chunk(s). Avg Confidence: {avg_task_confidence:.2f}. First result snippet: {results_for_this_task_from_chunks[0][:100]}..."
+                f"**💻 Local Model (Aggregated for Task {task_idx + 1}, Round {current_round}):** Found info in {num_relevant_chunks_found}/{len(chunks)} chunk(s). Avg Confidence: {avg_task_confidence:.2f}. First result snippet: {detailed_results[0]['text'][:100] if detailed_results else 'N/A'}..."
             )
         elif chunk_timeout_count_for_task > 0 and chunk_timeout_count_for_task == len(chunks):
             task_failure_count += 1 # All chunks timed out
             aggregated_task_confidences.append({"task": task, "avg_numeric_confidence": 0.0, "contributing_successful_chunks": 0})
-            overall_task_results.append({"task": task, "result": f"Timeout on all {len(chunks)} chunks", "status": "timeout_all_chunks"})
+            overall_task_results.append({
+                "task": task,
+                "result": f"Timeout on all {len(chunks)} chunks",
+                "status": "timeout_all_chunks",
+                "detailed_findings": [] # Add empty list for consistency
+            })
             conversation_log.append(
                 f"**💻 Local Model (Task {task_idx + 1}, Round {current_round}):** All {len(chunks)} chunks timed out."
             )
         else: # No relevant info found or other errors
             task_failure_count += 1
             aggregated_task_confidences.append({"task": task, "avg_numeric_confidence": 0.0, "contributing_successful_chunks": 0})
-            overall_task_results.append(
-                {"task": task, "result": "Information not found in any relevant chunk", "status": "not_found"}
-            )
+            overall_task_results.append({
+                "task": task,
+                "result": "Information not found in any relevant chunk",
+                "status": "not_found",
+                "detailed_findings": [] # Add empty list for consistency
+            })
             conversation_log.append(
                 f"**💻 Local Model (Task {task_idx + 1}, Round {current_round}):** No relevant information found in any chunk."
             )

@@ -29,6 +29,7 @@ async def _execute_minions_protocol(
     scratchpad_content = ""
     all_round_results_aggregated = []
     all_round_metrics: List[RoundMetrics] = [] # Initialize Metrics List
+    global_unique_fingerprints_seen = set() # Initialize Global Fingerprint Set
     decomposition_prompts_history = []
     synthesis_prompts_history = []
     final_response = "No answer could be synthesized."
@@ -165,6 +166,29 @@ async def _execute_minions_protocol(
                 confidence_trend = "stable"
 
         if raw_metrics_data:
+            # Process Findings for Redundancy Metrics
+            current_round_new_findings = 0
+            current_round_duplicate_findings = 0
+            # current_round_fingerprints_seen_this_round = set() # Not strictly needed for plan's definition
+
+            task_execution_results = execution_details.get("results", [])
+            for task_result in task_execution_results:
+                if task_result.get("status") == "success" and task_result.get("detailed_findings"):
+                    for finding in task_result["detailed_findings"]:
+                        fingerprint = finding.get("fingerprint")
+                        if fingerprint:
+                            # Check against global set first for duplicates from previous rounds or earlier in this round
+                            if fingerprint in global_unique_fingerprints_seen:
+                                current_round_duplicate_findings += 1
+                            else:
+                                current_round_new_findings += 1
+                                global_unique_fingerprints_seen.add(fingerprint)
+                            # current_round_fingerprints_seen_this_round.add(fingerprint)
+
+
+            total_findings_this_round = current_round_new_findings + current_round_duplicate_findings
+            redundancy_percentage_this_round = (current_round_duplicate_findings / total_findings_this_round) * 100 if total_findings_this_round > 0 else 0.0
+
             try: # Add a try-except block for robustness when creating RoundMetrics
                 round_metric = RoundMetrics(
                     round_number=raw_metrics_data["round_number"],
@@ -178,20 +202,25 @@ async def _execute_minions_protocol(
                     # Add new confidence fields
                     avg_confidence_score=round_avg_numeric_confidence,
                     confidence_distribution=round_confidence_distribution,
-                    confidence_trend=confidence_trend
+                    confidence_trend=confidence_trend,
+                    # Add new redundancy fields
+                    new_findings_count_this_round=current_round_new_findings,
+                    duplicate_findings_count_this_round=current_round_duplicate_findings,
+                    redundancy_percentage_this_round=redundancy_percentage_this_round,
+                    total_unique_findings_count=len(global_unique_fingerprints_seen)
                 )
                 all_round_metrics.append(round_metric)
 
-                # Format and append metrics summary (now includes confidence)
+                # Format and append metrics summary (now includes redundancy)
                 metrics_summary = (
                     f"**📊 Round {round_metric.round_number} Metrics:**\n"
-                    f"  - Tasks Executed: {round_metric.tasks_executed}\n"
-                    f"  - Success Rate: {round_metric.success_rate:.2%}\n"
-                    f"  - Task Successes: {round_metric.task_success_count}, Failures: {round_metric.task_failure_count}\n"
+                    f"  - Tasks Executed: {round_metric.tasks_executed}, Success Rate: {round_metric.success_rate:.2%}\n"
+                    f"  - Task Counts (S/F): {round_metric.task_success_count}/{round_metric.task_failure_count}\n"
+                    f"  - Findings (New/Dup): {round_metric.new_findings_count_this_round}/{round_metric.duplicate_findings_count_this_round}, Total Unique: {round_metric.total_unique_findings_count}\n"
+                    f"  - Redundancy This Round: {round_metric.redundancy_percentage_this_round:.1f}%\n"
                     f"  - Avg Confidence: {round_metric.avg_confidence_score:.2f} ({round_metric.confidence_trend})\n"
                     f"  - Confidence Dist (H/M/L): {round_metric.confidence_distribution.get('HIGH',0)}/{round_metric.confidence_distribution.get('MEDIUM',0)}/{round_metric.confidence_distribution.get('LOW',0)}\n"
-                    f"  - Round Execution Time: {round_metric.execution_time_ms:.0f} ms\n"
-                    f"  - Avg. Chunk Processing Time: {round_metric.avg_chunk_processing_time_ms:.0f} ms"
+                    f"  - Round Time: {round_metric.execution_time_ms:.0f} ms, Avg Chunk Time: {round_metric.avg_chunk_processing_time_ms:.0f} ms"
                 )
                 scratchpad_content += f"\n\n{metrics_summary}"
                 if valves.show_conversation:
