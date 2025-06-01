@@ -196,7 +196,7 @@ async def _execute_minions_protocol(
                     task_success_count=raw_metrics_data["task_success_count"],
                     task_failure_count=raw_metrics_data["task_failure_count"],
                     avg_chunk_processing_time_ms=raw_metrics_data["avg_chunk_processing_time_ms"],
-                    total_unique_findings_count=0,  # Placeholder for Iteration 1
+                    # total_unique_findings_count=0,  # Placeholder for Iteration 1 REMOVED
                     execution_time_ms=raw_metrics_data["execution_time_ms"],
                     success_rate=raw_metrics_data["success_rate"],
                     # Add new confidence fields
