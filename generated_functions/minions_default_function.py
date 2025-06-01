@@ -5,7 +5,7 @@ author_url: https://github.com/SunkThought/minions-openwebui
 original_author: Copyright (c) 2025 Sabri Eyuboglu, Avanika Narayan, Dan Biderman, and the rest of the Minions team (@HazyResearch wrote the original MinionS Protocol paper and code examples on github that spawned this)
 original_author_url: https://github.com/HazyResearch/
 funding_url: https://github.com/HazyResearch/minions
-version: 0.3.1
+version: 0.3.2
 description: MinionS protocol - task decomposition and parallel processing between local and cloud models
 required_open_webui_version: 0.5.0
 license: MIT License
@@ -395,9 +395,13 @@ IMPORTANT: Provide your answer as a valid JSON object with the following structu
             "1. The \"answer\" field MUST be a plain text string, NOT an object or array.",
             "2. If you need to list multiple items in the \"answer\" field, format them as a single string with clear separators (e.g., \"Item 1: Description. Item 2: Description.\").",
             "3. Do NOT create nested JSON structures within any field.",
-            "4. If no relevant information is found for the task, set \"answer\" to null (but still provide explanation and citation if possible, e.g., 'No information found for this specific task.')."
+            "4. If you cannot confidently determine the information from the provided text to answer the task, ALL THREE fields (\"explanation\", \"citation\", \"answer\") in the JSON object must be null."
         ]
         prompt_lines.extend(structured_output_rules)
+
+        # Rule 5 regarding expected_format needs to be renumbered if it was part of the list,
+        # but it's added conditionally after extending structured_output_rules.
+        # So, its conditional addition logic remains correct without renumbering.
 
         if hasattr(valves, 'expected_format') and valves.expected_format and valves.expected_format.lower() != "json":
             prompt_lines.append(f"5. Format the content WITHIN the \"answer\" field as {valves.expected_format.upper()}. For example, if \"bullet points\", the \"answer\" string should look like \"- Point 1\\n- Point 2\".")
@@ -1064,7 +1068,7 @@ class Pipe:
 
     def __init__(self):
         self.valves = self.Valves()
-        self.name = "MinionS v0.3.1 (Task Decomposition)"
+        self.name = "MinionS v0.3.2 (Task Decomposition)"
 
     def pipes(self):
         """Define the available models"""
