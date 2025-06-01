@@ -9,6 +9,7 @@ from .minions_models import TaskResult, RoundMetrics # Import RoundMetrics
 from .common_context_utils import extract_context_from_messages, extract_context_from_files
 from .minions_decomposition_logic import decompose_task
 from .minions_prompts import get_minions_synthesis_claude_prompt
+from .common_query_utils import QueryComplexityClassifier, QueryComplexity # Import Query Complexity classes
 
 
 async def _call_claude_directly(valves: Any, query: str, call_claude_func: Callable) -> str:
@@ -43,6 +44,16 @@ async def _execute_minions_protocol(
     if valves.debug_mode:
         debug_log.append(f"🔍 **Debug Info (MinionS v0.2.0):**\n- Query: {query[:100]}...\n- Context length: {len(context)} chars")
         debug_log.append(f"**⏱️ Overall process started. (Debug Mode)**")
+
+    # Initialize Query Complexity Classifier and Classify Query
+    query_classifier = QueryComplexityClassifier(debug_mode=valves.debug_mode)
+    query_complexity_level = query_classifier.classify_query(query)
+
+    if valves.debug_mode:
+        debug_log.append(f"🧠 Query classified as: {query_complexity_level.value} (Debug Mode)")
+    # Optional: Add to conversation_log if you want user to see it always
+    # if valves.show_conversation:
+    #     conversation_log.append(f"🧠 Initial query classified as complexity: {query_complexity_level.value}")
 
     chunks = create_chunks(context, valves.chunk_size, valves.max_chunks)
     if not chunks and context:
@@ -332,6 +343,7 @@ async def _execute_minions_protocol(
 
     output_parts.append(f"\n## 📊 MinionS Efficiency Stats (v0.2.0)")
     output_parts.append(f"- **Protocol:** MinionS (Multi-Round)")
+    output_parts.append(f"- **Query Complexity:** {query_complexity_level.value}") # Display Query Complexity
     output_parts.append(f"- **Rounds executed:** {actual_rounds_executed}/{valves.max_rounds}")
     output_parts.append(f"- **Total tasks for local LLM:** {stats['total_tasks_executed_local']}")
     output_parts.append(f"- **Successful tasks (local):** {total_successful_tasks}")
