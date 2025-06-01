@@ -730,7 +730,7 @@ async def _execute_minions_protocol(
 
     overall_start_time = asyncio.get_event_loop().time()
     if valves.debug_mode:
-        debug_log.append(f"🔍 **Debug Info (MinionS v0.3.0):**\n- Query: {query[:100]}...\n- Context length: {len(context)} chars")
+        debug_log.append(f"🔍 **Debug Info (MinionS v0.2.0):**\n- Query: {query[:100]}...\n- Context length: {len(context)} chars")
         debug_log.append(f"**⏱️ Overall process started. (Debug Mode)**")
 
     chunks = create_chunks(context, valves.chunk_size, valves.max_chunks)
@@ -921,7 +921,7 @@ async def _execute_minions_protocol(
     total_successful_tasks = len([r for r in all_round_results_aggregated if r['status'] == 'success'])
     tasks_with_any_timeout = len([r for r in all_round_results_aggregated if r['status'] == 'timeout_all_chunks'])
 
-    output_parts.append(f"\n## 📊 MinionS Efficiency Stats (v0.3.0)")
+    output_parts.append(f"\n## 📊 MinionS Efficiency Stats (v0.2.0)")
     output_parts.append(f"- **Protocol:** MinionS (Multi-Round)")
     output_parts.append(f"- **Rounds executed:** {actual_rounds_executed}/{valves.max_rounds}")
     output_parts.append(f"- **Total tasks for local LLM:** {stats['total_tasks_executed_local']}")
@@ -1002,7 +1002,7 @@ class Pipe:
 
     def __init__(self):
         self.valves = self.Valves()
-        self.name = "MinionS v0.3.0 (Multi-Round)"
+        self.name = "MinionS v0.3.0 (Task Decomposition)"
 
     def pipes(self):
         """Define the available models"""
