@@ -5,7 +5,7 @@ author_url: https://github.com/SunkThought/minions-openwebui
 original_author: Copyright (c) 2025 Sabri Eyuboglu, Avanika Narayan, Dan Biderman, and the rest of the Minions team (@HazyResearch wrote the original MinionS Protocol paper and code examples on github that spawned this)
 original_author_url: https://github.com/HazyResearch/
 funding_url: https://github.com/HazyResearch/minions
-version: 0.3.0
+version: 0.3.1
 description: Basic Minion protocol - conversational collaboration between local and cloud models
 required_open_webui_version: 0.5.0
 license: MIT License
@@ -281,37 +281,41 @@ from typing import List, Tuple, Any
 def get_minion_initial_claude_prompt(query: str, context_len: int, valves: Any) -> str:
     """
     Returns the initial prompt for Claude in the Minion protocol.
+    Moved from _execute_minion_protocol in minion_protocol_logic.py.
     """
-    return f"""Your primary goal is to answer the user's question: "{query}"
+    # Escape any quotes in the query to prevent f-string issues
+    escaped_query = query.replace('"', '\\"').replace("'", "\\'")
+    
+    return f'''Your primary goal is to answer the user's question: "{escaped_query}"
 
-To achieve this, you will collaborate with a local AI assistant. This local assistant has ALREADY READ and has FULL ACCESS to the relevant document ({context_len} characters long). You will not be given the full document. Instead you are to ask the TRUSTED local assistant who can provide you with factual information, summaries, and direct extractions FROM THE DOCUMENT in response to your questions.
+To achieve this, you will collaborate with a local AI assistant. This local assistant has ALREADY READ and has FULL ACCESS to the relevant document ({context_len} characters long). The local assistant is a TRUSTED source that will provide you with factual information, summaries, and direct extractions FROM THE DOCUMENT in response to your questions.
 
 Your role is to:
-1. Ask SPECIFIC, TARGETED questions to extract concrete information from the document
-2. Request specific examples, quotes, or detailed descriptions rather than high-level overviews
-3. Build up enough specific information to answer the user's query comprehensively
+1.  Formulate specific, focused questions to the local assistant to gather the necessary information from the document. Ask only what you need to build up the answer to the user's original query.
+2.  Receive and understand the information provided by the local assistant.
+3.  Synthesize this information to answer the user's original query.
 
 IMPORTANT INSTRUCTIONS:
-- DO NOT ask for general overviews or themes - ask for specific content
-- Request concrete details: names, dates, technologies, specific advancements
-- Ask for direct quotes or detailed descriptions from specific parts
-- If you need information from multiple parts, ask for each one specifically
+- DO NOT ask the local assistant to provide the entire document or large raw excerpts.
+- DO NOT express that you cannot see the document. Assume the local assistant provides accurate information from it.
+- Your questions should be aimed at extracting pieces of information that you can then synthesize.
 
-Example good questions:
-- "What specific technological advancements are described in Part III?"
-- "Can you provide the exact details about the AI winter mentioned in Part II, including dates and causes?"
-- "What are the specific building blocks or technologies mentioned in Part V?"
+If, after receiving responses from the local assistant, you believe you have gathered enough information to comprehensively answer the user's original query ("{escaped_query}"), then respond ONLY with the exact phrase "FINAL ANSWER READY." followed by your detailed final answer.
+If you need more specific information from the document, ask the local assistant ONE more clear, targeted question. Do not use the phrase "FINAL ANSWER READY." yet.
 
-Start by asking your first SPECIFIC question to begin gathering concrete information."""
+Start by asking your first question to the local assistant to begin gathering information.
+'''
 
 def get_minion_conversation_claude_prompt(history: List[Tuple[str, str]], original_query: str, valves: Any) -> str:
     """
     Returns the prompt for Claude during subsequent conversation rounds in the Minion protocol.
     Moved from _build_conversation_context in minion_protocol_logic.py.
     """
-    # 'valves' not strictly needed here based on original _build_conversation_context
+    # Escape the original query
+    escaped_query = original_query.replace('"', '\\"').replace("'", "\\'")
+    
     context_parts = [
-        f"You are a supervisor LLM collaborating with a trusted local AI assistant to answer the user's ORIGINAL QUESTION: \"{original_query}\"",
+        f'You are a supervisor LLM collaborating with a trusted local AI assistant to answer the user\'s ORIGINAL QUESTION: "{escaped_query}"',
         "The local assistant has full access to the source document and has been providing factual information extracted from it.",
         "",
         "CONVERSATION SO FAR (Your questions, Local Assistant's factual responses from the document):",
@@ -319,9 +323,9 @@ def get_minion_conversation_claude_prompt(history: List[Tuple[str, str]], origin
 
     for role, message in history:
         if role == "assistant":  # Claude's previous message
-            context_parts.append(f"You previously asked the local assistant: \"{message}\"")
+            context_parts.append(f'You previously asked the local assistant: "{message}"')
         else:  # Local model's response
-            context_parts.append(f"The local assistant responded with information from the document: \"{message}\"")
+            context_parts.append(f'The local assistant responded with information from the document: "{message}"')
 
     context_parts.extend(
         [
@@ -337,27 +341,18 @@ def get_minion_conversation_claude_prompt(history: List[Tuple[str, str]], origin
 def get_minion_local_prompt(context: str, query: str, claude_request: str, valves: Any) -> str:
     """
     Returns the prompt for the local Ollama model in the Minion protocol.
+    Moved from _execute_minion_protocol in minion_protocol_logic.py.
     """
+    # 'valves' not strictly needed for this specific prompt's text content from original version
+    # but could be used for schema instructions if valves.use_structured_output was considered here.
+    # The original prompt did include a generic instruction about JSON.
     return f"""You have access to the full context below. Claude (Anthropic's AI) is collaborating with you to answer a user's question.
-
 CONTEXT:
 {context}
-
 ORIGINAL QUESTION: {query}
-
 CLAUDE'S REQUEST: {claude_request}
-
-IMPORTANT INSTRUCTIONS:
-- Provide SPECIFIC, DETAILED information from the context
-- Include concrete examples, names, dates, and technical details
-- Quote directly from the text when relevant
-- If Claude asks about a specific part or section, provide detailed content from that section
-- Do not give vague overviews - provide substantial, specific information
-
-Please provide a helpful, accurate response based on the context you have access to. Extract relevant information that answers Claude's specific question. Be thorough and include all relevant details.
-
+Please provide a helpful, accurate response based on the context you have access to. Extract relevant information that answers Claude's specific question. Be concise but thorough.
 If you are instructed to provide a JSON response (e.g., by a schema appended to this prompt), ensure your entire response is ONLY that valid JSON object, without any surrounding text, explanations, or markdown formatting like ```json ... ```."""
-
 
 import asyncio
 import json
@@ -681,7 +676,7 @@ class Pipe:
 
     def __init__(self):
         self.valves = self.Valves()
-        self.name = "Minion v0.3.0 (Conversational)"
+        self.name = "Minion v0.3.1 (Conversational)"
 
     def pipes(self):
         """Define the available models"""
