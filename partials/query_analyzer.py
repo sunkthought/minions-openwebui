@@ -94,24 +94,64 @@ class QueryAnalyzer:
     def extract_query_type(self) -> QueryType:
         self._log_debug(f"Extracting query type for: '{self.original_query}'")
         if any(verb in self.query_lower for verb in self.action_verbs_keywords["compare"]):
+            self._log_debug("Query type: COMPARISON (matched 'compare' keywords)")
             return QueryType.COMPARISON
-        if any(verb in self.query_lower for verb in self.action_verbs_keywords["analysis_request"] + self.action_verbs_keywords["summarize"] + self.action_verbs_keywords["extract"]):
-             # Prioritize analysis/extraction if those keywords are present
-            if any(verb in self.query_lower for verb in self.action_verbs_keywords["analysis_request"]):
+
+        # Check for analysis, summarize, or extract keywords
+        is_analysis = any(verb in self.query_lower for verb in self.action_verbs_keywords["analyze"])
+        is_summarize = any(verb in self.query_lower for verb in self.action_verbs_keywords["summarize"])
+        is_extract = any(verb in self.query_lower for verb in self.action_verbs_keywords["extract"])
+
+        if is_analysis or is_summarize or is_extract:
+            if is_analysis:
+                self._log_debug("Query type: ANALYSIS_REQUEST (matched 'analyze' keywords)")
                 return QueryType.ANALYSIS_REQUEST
-            if any(q_word in self.query_lower.split() for q_word in self.action_verbs_keywords["question"]): # "summarize what happened"
-                 return QueryType.QUESTION
-            return QueryType.COMMAND # "summarize this document" could be a command
+
+            # If summarize or extract, check if it's phrased as a question
+            # e.g., "Can you summarize..." or "What should I extract?"
+            # A simple check: if a question word is also present, lean towards QUESTION.
+            # More sophisticated logic might be needed if this isn't robust enough.
+            is_question_format = any(q_word in self.query_lower for q_word in self.action_verbs_keywords["question"])
+
+            if is_question_format and (is_summarize or is_extract):
+                 # Check if the question word appears before the action verb to avoid classifying "summarize what x is" as question solely on "what"
+                try:
+                    first_action_verb_indices = []
+                    if is_summarize:
+                        for v in self.action_verbs_keywords["summarize"]:
+                            if v in self.query_lower: first_action_verb_indices.append(self.query_lower.find(v))
+                    if is_extract:
+                        for v in self.action_verbs_keywords["extract"]:
+                            if v in self.query_lower: first_action_verb_indices.append(self.query_lower.find(v))
+
+                    first_question_word_indices = []
+                    for qv in self.action_verbs_keywords["question"]:
+                        if qv in self.query_lower: first_question_word_indices.append(self.query_lower.find(qv))
+
+                    if first_question_word_indices and first_action_verb_indices:
+                        if min(first_question_word_indices) < min(first_action_verb_indices):
+                            self._log_debug("Query type: QUESTION (matched summarize/extract keywords but also question format)")
+                            return QueryType.QUESTION
+                except ValueError: # Should not happen with "in" checks but as a safeguard
+                    pass
+
+
+            # If not clearly a question, it's a command (e.g., "Summarize this document")
+            self._log_debug("Query type: COMMAND (matched summarize/extract keywords, not clearly a question)")
+            return QueryType.COMMAND
 
         if any(verb in self.query_lower.split() for verb in self.action_verbs_keywords["command"]): # Check if first word is a command verb
             # Check if it's actually a question like "Generate a list of..." vs "Can you generate..."
             if not any(q_word == self.query_lower.split()[0] for q_word in self.action_verbs_keywords["question"] if self.query_lower.split()):
+                 self._log_debug("Query type: COMMAND (matched command verb at start, not question format)")
                  return QueryType.COMMAND
 
         # Default to question if common question words are present
         if any(self.query_lower.startswith(q_word) for q_word in self.action_verbs_keywords["question"]):
+            self._log_debug("Query type: QUESTION (query starts with a question word)")
             return QueryType.QUESTION
         if "?" in self.original_query: # Final check for question mark
+            self._log_debug("Query type: QUESTION (query contains '?')")
             return QueryType.QUESTION
 
         self._log_debug("No specific query type matched, defaulting to UNKNOWN.")
