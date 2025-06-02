@@ -22,12 +22,12 @@ This change ensures that the generated function script is valid and does not att
 
 ## Additional Fix: `Entity` Type Import in `reference_resolver.py`
 
-A similar import issue was identified in `partials/reference_resolver.py` concerning the `Entity` TypedDict, which is defined in `partials/entity_resolver.py`. The `reference_resolver.py` file was also attempting to import `Entity` using a `try...except ImportError` block with a fallback dummy definition. This approach is problematic for the concatenated single-file deployment used in Open WebUI.
+Even after initially attempting to resolve import issues for the `Entity` TypedDict in `partials/reference_resolver.py` using an `if TYPE_CHECKING:` block, a parsing error (`Cannot parse: class ReferenceResolver`) persisted when Open WebUI loaded the generated function. This indicated that the `TYPE_CHECKING` block itself, or its interaction with the Open WebUI's function parsing/loading mechanism, was still problematic.
 
-The fix for `partials/reference_resolver.py` involved:
+The fix required a further simplification of `partials/reference_resolver.py`:
 
-1.  **Removed Fallback Import:** The `try...except ImportError` block, along with the dummy `Entity` class definition, was removed.
-2.  **Employing `TYPE_CHECKING` Block:** An `if TYPE_CHECKING:` block was introduced. Inside this block, `Entity` is imported (`from .entity_resolver import Entity`) solely for the benefit of development-time type checkers and linters. This import does not execute at runtime.
-3.  **Using Forward References:** Type hints within method signatures that refer to `Entity` were updated to use forward references (e.g., `Dict[str, 'Entity']`). This practice defers the evaluation of the type hint, which is compatible with the `TYPE_CHECKING` approach and situations where a type might not be fully defined at the exact point it's hinted.
+1.  **Complete Removal of Import Constructs:** The `if TYPE_CHECKING:` block, and any import statement for `Entity` within it (e.g., `from .entity_resolver import Entity`), were completely removed.
+2.  **Sole Reliance on Forward References:** The code now exclusively uses forward references (string literals, e.g., `Dict[str, 'Entity']`) for all type hints involving the `Entity` TypedDict.
+3.  **Clarifying Comment:** A comment was added at the top of `reference_resolver.py` to explicitly state that the `Entity` TypedDict is defined in `partials/entity_resolver.py` and is expected to be globally available in the final concatenated script due to the specified concatenation order in `generation_config.json`.
 
-This approach ensures that `reference_resolver.py` correctly relies on the `Entity` TypedDict being globally available at runtime (due to `entity_resolver.py` appearing earlier in the concatenation order defined in `generation_config.json`), while still providing support for development environment tools that perform type analysis.
+This revised approach makes the `partials/reference_resolver.py` file cleaner and relies entirely on the build process (concatenation order) for the `Entity` type to be defined and available in the global scope at runtime. This method is anticipated to be more robust and compatible with the Open WebUI environment's single-file function execution model.

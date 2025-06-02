@@ -3,17 +3,12 @@ This module defines the ReferenceResolver class for resolving
 pronouns and indirect references in text.
 """
 
-from typing import List, Dict, Optional, TYPE_CHECKING
+from typing import List, Dict, Optional # Removed TYPE_CHECKING
 
-# The Entity TypedDict is expected to be defined in the global scope
-# due to concatenation order specified in generation_config.json,
-# with entity_resolver.py appearing before this file.
-if TYPE_CHECKING:
-    # This allows type checkers to recognize Entity without a runtime import error
-    # It assumes Entity is defined in entity_resolver.py and has the expected structure.
-    # For runtime, Entity will be globally available.
-    from .entity_resolver import Entity # type: ignore
-
+# Note: The 'Entity' TypedDict is defined in partials/entity_resolver.py
+# and is expected to be globally available in the final concatenated script
+# due to the specified concatenation order.
+# Type hints use forward references (string literals) like 'Entity'.
 
 class ReferenceResolver:
     """
