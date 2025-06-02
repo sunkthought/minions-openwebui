@@ -15,6 +15,7 @@ from .minions_prompts import get_minions_synthesis_claude_prompt
 from .minion_sufficiency_analyzer import InformationSufficiencyAnalyzer # Added import
 from .minion_convergence_detector import ConvergenceDetector # Added import
 from .query_analyzer import QueryAnalyzer, QueryMetadata, QueryType, ScopeIndicator # Assuming query_analyzer.py is in the same directory
+from .query_expander import QueryExpander # Added for Iteration 3
 # Removed: from .common_query_utils import QueryComplexityClassifier, QueryComplexity
 
 # --- Content from common_query_utils.py START ---
@@ -127,17 +128,52 @@ async def _execute_minions_protocol(
     overall_start_time = asyncio.get_event_loop().time()
 
     # User query is passed directly to _execute_minions_protocol
-    user_query = query # Use the passed 'query' as user_query for clarity if needed elsewhere
+    user_query_original = query # Store original query for logging
 
-    # --- Query Analysis (Iteration 1) ---
+    # --- Query Expansion (Iteration 3) ---
+    # Determine domain_hint (e.g., from valves or other sources if available, else None)
+    # For now, we'll assume no explicit domain_hint is passed here, QueryExpander will infer.
+    domain_hint_for_expansion = getattr(valves, "domain_hint", None)
+    processed_query = user_query_original
+
+    if getattr(valves, "enable_query_expansion", True): # Default to True if valve not present
+        if valves.debug_mode:
+            debug_log.append(f"✨ **Starting Query Expansion... (Iteration 3)**")
+            debug_log.append(f"   Original User Query: '{user_query_original}'")
+
+        expander = QueryExpander(debug_mode=valves.debug_mode)
+        processed_query = expander.expand(
+            query=user_query_original,
+            apply_context_injection=getattr(valves, "qe_apply_context_injection", True),
+            apply_completion=getattr(valves, "qe_apply_completion", True),
+            apply_synonyms=getattr(valves, "qe_apply_synonyms", True),
+            domain_hint=domain_hint_for_expansion
+        )
+        if valves.debug_mode:
+            if processed_query != user_query_original:
+                debug_log.append(f"   Expanded Query: '{processed_query}'")
+            else:
+                debug_log.append(f"   Query not significantly altered by expansion steps.")
+            debug_log.append(f"✨ **Finished Query Expansion.**")
+    else:
+        if valves.debug_mode:
+            debug_log.append(f"ℹ️ Query Expansion is DISABLED via valve 'enable_query_expansion'. Using original query.")
+
+    user_query = processed_query # This is the query to be used by the rest of the protocol
+
+    # --- Query Analysis (Iteration 1 became Iteration 2 with ambiguity) ---
     if valves.debug_mode:
-        debug_log.append("🧠 **Starting Query Analysis... (Iteration 1)**")
+        debug_log.append("🧠 **Starting Query Analysis... (Iteration 2 Features)**") # Updated comment
 
+    # QueryAnalyzer should use the potentially expanded query
     query_analyzer = QueryAnalyzer(query=user_query, debug_mode=valves.debug_mode)
     query_metadata: QueryMetadata = query_analyzer.analyze()
 
     if valves.debug_mode:
-        debug_log.append(f"   Original Query: {query_metadata['original_query']}")
+        # Log the original query if it was expanded, for comparison
+        if user_query_original != user_query:
+             debug_log.append(f"   Original Query (Pre-Expansion): {user_query_original}")
+        debug_log.append(f"   Analyzed Query (Post-Expansion): {query_metadata['original_query']}") # This will be the processed_query
         debug_log.append(f"   Query Type: {query_metadata['query_type'].value}")
         debug_log.append(f"   Detected Entities: {query_metadata['entities']}")
         debug_log.append(f"   Temporal References: {query_metadata['temporal_refs']}")
@@ -193,9 +229,10 @@ async def _execute_minions_protocol(
 
 
     # Instantiate Sufficiency Analyzer
-    analyzer = InformationSufficiencyAnalyzer(query=user_query, debug_mode=valves.debug_mode)
+    # IMPORTANT: Sufficiency Analyzer should use the *original* user query to determine user's intent for components
+    analyzer = InformationSufficiencyAnalyzer(query=user_query_original, debug_mode=valves.debug_mode)
     if valves.debug_mode:
-        debug_log.append(f"🧠 Sufficiency Analyzer initialized for query: {user_query[:100]}...")
+        debug_log.append(f"🧠 Sufficiency Analyzer initialized for *original* query: {user_query_original[:100]}...")
         debug_log.append(f"   Identified components: {list(analyzer.components.keys())}")
 
     # Instantiate Convergence Detector
@@ -204,11 +241,13 @@ async def _execute_minions_protocol(
         debug_log.append(f"🧠 Convergence Detector initialized.")
 
     # Initialize Query Complexity Classifier and Classify Query
+    # Query Complexity should likely operate on the *original* query or the analyzed one, depending on desired behavior.
+    # For now, let's use the potentially expanded 'user_query' for classification, as it's what downstream tasks see.
     query_classifier = QueryComplexityClassifier(debug_mode=valves.debug_mode)
-    query_complexity_level = query_classifier.classify_query(query)
+    query_complexity_level = query_classifier.classify_query(user_query) # Using expanded query
 
     if valves.debug_mode:
-        debug_log.append(f"🧠 Query classified as: {query_complexity_level.value} (Debug Mode)")
+        debug_log.append(f"🧠 Query (post-expansion) classified as: {query_complexity_level.value} (Debug Mode)")
     # Optional: Add to conversation_log if you want user to see it always
     # if valves.show_conversation:
     #     conversation_log.append(f"🧠 Initial query classified as complexity: {query_complexity_level.value}")
@@ -295,10 +334,11 @@ async def _execute_minions_protocol(
 
         # Call the new decompose_task function
         # Note: now returns three values instead of two
+        # DECOMPOSITION uses the user_query (potentially expanded)
         tasks, claude_response_for_decomposition, decomposition_prompt = await decompose_task(
             valves=valves,
             call_claude_func=call_claude,
-            query=query,
+            query=user_query, # Use the processed query
             scratchpad_content=scratchpad_content,
             num_chunks=len(chunks),
             max_tasks_per_round=valves.max_tasks_per_round,
@@ -689,9 +729,13 @@ async def _execute_minions_protocol(
         else:
             synthesis_input_summary = "\n".join([f"- Task: {r['task']}\n  Result: {r['result']}" for r in all_round_results_aggregated if r['status'] == 'success'])
             if not synthesis_input_summary:
-                synthesis_input_summary = "No definitive information was found by local models. The original query was: " + query
+                # Use original query here for context if no results, as it's the user's direct input
+                synthesis_input_summary = "No definitive information was found by local models. The original query was: " + user_query_original
             
-            synthesis_prompt = get_minions_synthesis_claude_prompt(query, synthesis_input_summary, valves)
+            # Synthesis prompt should use the user_query (potentially expanded) that tasks were based on,
+            # but the original query might also be useful context for Claude if expansion was heavy.
+            # For now, stick to user_query for consistency with decomposition.
+            synthesis_prompt = get_minions_synthesis_claude_prompt(user_query, synthesis_input_summary, valves)
             synthesis_prompts_history.append(synthesis_prompt)
             
             start_time_claude_synth = 0
@@ -725,9 +769,10 @@ async def _execute_minions_protocol(
     summary_for_stats = synthesis_input_summary if not claude_provided_final_answer else scratchpad_content
 
     stats = calculate_token_savings(
-        decomposition_prompts_history, synthesis_prompts_history,
-        summary_for_stats, final_response,
-        len(context), len(query), total_chunks_processed_for_stats, total_tasks_executed_local
+        decomposition_prompts_history, synthesis_prompts_history, # Prompts
+        summary_for_stats, final_response, # Responses
+        len(context), len(user_query_original), # Lengths (use original query length for user perspective)
+        total_chunks_processed_for_stats, total_tasks_executed_local # Counts
     )
     
     # Override the total_rounds if needed to show actual rounds executed

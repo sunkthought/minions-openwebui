@@ -48,6 +48,7 @@
       "common_context_utils.py",
       "common_file_processing.py",
       "query_analyzer.py",
+      "query_expander.py",
       "minions_prompts.py",
       "minions_decomposition_logic.py",
       "minions_protocol_logic.py",
