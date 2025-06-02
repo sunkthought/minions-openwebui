@@ -51,6 +51,7 @@
       "minions_decomposition_logic.py",
       "minions_protocol_logic.py",
       "minion_sufficiency_analyzer.py",
+      "minion_convergence_detector.py",
       "minions_pipe_method.py"
     ],
     "specific_imports_map": {},

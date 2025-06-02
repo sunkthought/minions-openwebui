@@ -12,6 +12,7 @@ from .common_context_utils import extract_context_from_messages, extract_context
 from .minions_decomposition_logic import decompose_task
 from .minions_prompts import get_minions_synthesis_claude_prompt
 from .minion_sufficiency_analyzer import InformationSufficiencyAnalyzer # Added import
+from .minion_convergence_detector import ConvergenceDetector # Added import
 # Removed: from .common_query_utils import QueryComplexityClassifier, QueryComplexity
 
 # --- Content from common_query_utils.py START ---
@@ -129,6 +130,11 @@ async def _execute_minions_protocol(
     if valves.debug_mode:
         debug_log.append(f"🧠 Sufficiency Analyzer initialized for query: {user_query[:100]}...")
         debug_log.append(f"   Identified components: {list(analyzer.components.keys())}")
+
+    # Instantiate Convergence Detector
+    convergence_detector = ConvergenceDetector(debug_mode=valves.debug_mode)
+    if valves.debug_mode:
+        debug_log.append(f"🧠 Convergence Detector initialized.")
 
     # Initialize Query Complexity Classifier and Classify Query
     query_classifier = QueryComplexityClassifier(debug_mode=valves.debug_mode)
@@ -325,7 +331,25 @@ async def _execute_minions_protocol(
                     debug_log.append(f"   [Debug] Component Status: {metric_to_update.information_components}")
 
                 # Format and append metrics summary (now includes redundancy AND sufficiency)
-                # Simplified component status for logging brevity
+                # --> Convergence Detection Calculations (after sufficiency is updated) <--
+                if metric_to_update: # Ensure we have the current round's metric object
+                    previous_round_metric_obj = all_round_metrics[-2] if len(all_round_metrics) > 1 else None
+
+                    convergence_calcs = convergence_detector.calculate_round_convergence_metrics(
+                        current_round_metric=metric_to_update,
+                        previous_round_metric=previous_round_metric_obj
+                    )
+
+                    metric_to_update.information_gain_rate = convergence_calcs.get("information_gain_rate", 0.0)
+                    metric_to_update.novel_findings_percentage_this_round = convergence_calcs.get("novel_findings_percentage_this_round", 0.0)
+                    metric_to_update.task_failure_rate_trend = convergence_calcs.get("task_failure_rate_trend", "N/A")
+                    metric_to_update.predicted_value_of_next_round = convergence_calcs.get("predicted_value_of_next_round", "N/A")
+                    # convergence_detected_this_round is set by check_for_convergence below
+
+                    if valves.debug_mode:
+                        debug_log.append(f"   [Debug] Convergence Detector calculated for round {metric_to_update.round_number}: InfoGain={metric_to_update.information_gain_rate:.0f}, Novelty={metric_to_update.novel_findings_percentage_this_round:.2%}, FailTrend={metric_to_update.task_failure_rate_trend}, NextRoundValue={metric_to_update.predicted_value_of_next_round}")
+
+                # Format and append metrics summary (now includes redundancy, sufficiency, AND convergence calcs)
                 component_status_summary = {k: ('Met' if v else 'Not Met') for k,v in metric_to_update.information_components.items()}
                 metrics_summary = (
                     f"**📊 Round {metric_to_update.round_number} Metrics:**\n"
@@ -337,6 +361,9 @@ async def _execute_minions_protocol(
                     f"  - Confidence Dist (H/M/L): {metric_to_update.confidence_distribution.get('HIGH',0)}/{metric_to_update.confidence_distribution.get('MEDIUM',0)}/{metric_to_update.confidence_distribution.get('LOW',0)}\n"
                     f"  - Sufficiency Score: {metric_to_update.sufficiency_score:.2f}, Info Coverage: {metric_to_update.component_coverage_percentage:.2%}\n"
                     f"  - Components Status: {component_status_summary}\n"
+                    f"  - Info Gain Rate: {metric_to_update.information_gain_rate:.0f}, Novelty This Round: {metric_to_update.novel_findings_percentage_this_round:.1%}\n"
+                    f"  - Task Fail Trend: {metric_to_update.task_failure_rate_trend}, Predicted Next Round Value: {metric_to_update.predicted_value_of_next_round}\n"
+                    f"  - Converged This Round: {'Yes' if metric_to_update.convergence_detected_this_round else 'No'}\n" # Will be updated by convergence check later
                     f"  - Round Time: {metric_to_update.execution_time_ms:.0f} ms, Avg Chunk Time: {metric_to_update.avg_chunk_processing_time_ms:.0f} ms"
                 )
                 scratchpad_content += f"\n\n{metrics_summary}"
@@ -382,22 +409,70 @@ async def _execute_minions_protocol(
         # Placeholder for Sufficiency-Based Stopping Logic (Debug)
         # This is checked *before* other early stopping conditions like confidence thresholds.
         # The 'metric_to_update' variable should be the most up-to-date version of the current round's metrics.
+        # It now includes sufficiency and initial convergence calculation fields.
         if valves.debug_mode and 'metric_to_update' in locals() and metric_to_update:
-            hypothetical_sufficiency_threshold = 0.75 # Example threshold
+            # Placeholder Debug for Sufficiency (already exists)
+            hypothetical_sufficiency_threshold = 0.75
             if metric_to_update.sufficiency_score >= hypothetical_sufficiency_threshold:
                 debug_log.append(
                     f"   [Debug Placeholder] Sufficiency score {metric_to_update.sufficiency_score:.2f} >= "
                     f"{hypothetical_sufficiency_threshold}. "
-                    f"IF stopping logic for sufficiency active, would consider stopping here."
+                    f"IF sufficiency-only stopping logic active, would consider stopping here."
                 )
             else:
                 debug_log.append(
                     f"   [Debug Placeholder] Sufficiency score {metric_to_update.sufficiency_score:.2f} < "
                     f"{hypothetical_sufficiency_threshold}. "
-                    f"Would continue based on this sufficiency placeholder."
+                    f"Would continue based on this sufficiency-only placeholder."
                 )
 
-        # Early Stopping Logic
+        # --> Convergence Check (for early stopping) <--
+        # This comes before the original early stopping logic. If convergence is met, we stop.
+        if 'metric_to_update' in locals() and metric_to_update and valves.enable_early_stopping: # Ensure metric_to_update exists
+            converged, convergence_reason = convergence_detector.check_for_convergence(
+                current_round_metric=metric_to_update,
+                sufficiency_score=metric_to_update.sufficiency_score,
+                total_rounds_executed=current_round + 1,
+                valves=valves,
+                all_round_metrics=all_round_metrics
+            )
+            if converged:
+                metric_to_update.convergence_detected_this_round = True # Update the metric
+                # Update the metrics_summary in scratchpad and conversation_log one last time with Converged=Yes
+                # This is a bit repetitive but ensures the log reflects the final state that caused the stop.
+                component_status_summary = {k: ('Met' if v else 'Not Met') for k,v in metric_to_update.information_components.items()}
+                updated_metrics_summary_for_convergence_stop = (
+                    f"**📊 Round {metric_to_update.round_number} Metrics (Final Update Before Convergence Stop):**\n"
+                    f"  - Tasks Executed: {metric_to_update.tasks_executed}, Success Rate: {metric_to_update.success_rate:.2%}\n"
+                    f"  - Task Counts (S/F): {metric_to_update.task_success_count}/{metric_to_update.task_failure_count}\n"
+                    f"  - Findings (New/Dup): {metric_to_update.new_findings_count_this_round}/{metric_to_update.duplicate_findings_count_this_round}, Total Unique: {metric_to_update.total_unique_findings_count}\n"
+                    f"  - Redundancy This Round: {metric_to_update.redundancy_percentage_this_round:.1f}%\n"
+                    f"  - Avg Confidence: {metric_to_update.avg_confidence_score:.2f} ({metric_to_update.confidence_trend})\n"
+                    f"  - Confidence Dist (H/M/L): {metric_to_update.confidence_distribution.get('HIGH',0)}/{metric_to_update.confidence_distribution.get('MEDIUM',0)}/{metric_to_update.confidence_distribution.get('LOW',0)}\n"
+                    f"  - Sufficiency Score: {metric_to_update.sufficiency_score:.2f}, Info Coverage: {metric_to_update.component_coverage_percentage:.2%}\n"
+                    f"  - Components Status: {component_status_summary}\n"
+                    f"  - Info Gain Rate: {metric_to_update.information_gain_rate:.0f}, Novelty This Round: {metric_to_update.novel_findings_percentage_this_round:.1%}\n"
+                    f"  - Task Fail Trend: {metric_to_update.task_failure_rate_trend}, Predicted Next Round Value: {metric_to_update.predicted_value_of_next_round}\n"
+                    f"  - Converged This Round: {'Yes' if metric_to_update.convergence_detected_this_round else 'No'}\n"
+                    f"  - Round Time: {metric_to_update.execution_time_ms:.0f} ms, Avg Chunk Time: {metric_to_update.avg_chunk_processing_time_ms:.0f} ms"
+                )
+                scratchpad_content += f"\n\n{updated_metrics_summary_for_convergence_stop}" # Append the final metrics to scratchpad
+                if valves.show_conversation: # Replace the last metrics log with the fully updated one
+                    if conversation_log and conversation_log[-1].startswith("**📊 Round"): conversation_log[-1] = updated_metrics_summary_for_convergence_stop
+                    else: conversation_log.append(updated_metrics_summary_for_convergence_stop)
+
+                early_stopping_reason_for_output = convergence_reason
+                if valves.show_conversation:
+                    conversation_log.append(f"**⚠️ Early Stopping Triggered (Convergence):** {convergence_reason}")
+                if valves.debug_mode:
+                    debug_log.append(f"**⚠️ Early Stopping Triggered (Convergence):** {convergence_reason} (Debug Mode)")
+                scratchpad_content += f"\n\n**EARLY STOPPING (Convergence Round {current_round + 1}):** {convergence_reason}"
+                if valves.debug_mode:
+                     debug_log.append(f"**🏁 Breaking loop due to convergence in Round {current_round + 1}. (Debug Mode)**")
+                break # Exit the round loop
+
+        # Original Early Stopping Logic (Confidence-based)
+        # This will only be reached if convergence was NOT met and we didn't break above.
         # Note: 'round_metric' is the original metric object from raw_metrics_data,
         # 'metric_to_update' is the same object, but after being updated with sufficiency.
         # So, using 'metric_to_update' here for consistency if we were to integrate sufficiency into this logic.

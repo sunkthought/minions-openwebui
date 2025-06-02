@@ -96,6 +96,29 @@ class MinionsValves(BaseModel):
     )
     # max_rounds (already exists) will be used for COMPLEX queries.
 
+    # New fields for Iteration 5: Convergence Detection Based Early Stopping
+    convergence_novelty_threshold: float = Field(
+        default=0.10,
+        title="Convergence Novelty Threshold",
+        description="Minimum percentage of novel findings required per round to consider it non-convergent. E.g., 0.10 means less than 10% new findings might indicate convergence if other criteria met.",
+        ge=0, le=1
+    )
+    convergence_rounds_min_novelty: int = Field(
+        default=2,
+        title="Convergence Rounds for Minimum Novelty",
+        description="Number of consecutive rounds novelty must be below 'convergence_novelty_threshold' to trigger convergence.",
+        ge=1
+    )
+    convergence_sufficiency_threshold: float = Field(
+        default=0.7,
+        title="Convergence Sufficiency Threshold",
+        description="Minimum sufficiency score required for convergence-based early stopping. E.g., 0.7 means 70% sufficiency needed.",
+        ge=0, le=1
+    )
+    # min_rounds_before_convergence_check could be added if distinct from min_rounds_before_stopping
+    # For now, ConvergenceDetector uses its own default or relies on min_rounds_before_stopping implicitly
+    # if min_rounds_before_convergence_check is not explicitly set in valves.
+
     class Config:
         extra = "ignore" # Ignore any extra fields passed to the model
         # an_example = MinionsValves().dict() # For schema generation
