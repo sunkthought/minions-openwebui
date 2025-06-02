@@ -3,19 +3,16 @@ This module defines the ReferenceResolver class for resolving
 pronouns and indirect references in text.
 """
 
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, TYPE_CHECKING
 
-# Placeholder import for Entity, assuming it's in a sibling module
-# This might need adjustment based on the actual project structure.
-try:
-    from .entity_resolver import Entity
-except ImportError:
-    # Fallback for environments where relative imports might not work as expected
-    # during development or if the file is run as a script.
-    # Define a placeholder Entity if the import fails.
-    class Entity(dict):  # type: ignore
-        """Placeholder for Entity TypedDict if import fails."""
-        pass
+# The Entity TypedDict is expected to be defined in the global scope
+# due to concatenation order specified in generation_config.json,
+# with entity_resolver.py appearing before this file.
+if TYPE_CHECKING:
+    # This allows type checkers to recognize Entity without a runtime import error
+    # It assumes Entity is defined in entity_resolver.py and has the expected structure.
+    # For runtime, Entity will be globally available.
+    from .entity_resolver import Entity # type: ignore
 
 
 class ReferenceResolver:
@@ -37,7 +34,7 @@ class ReferenceResolver:
         self,
         query: str,
         conversation_history: List[str],
-        entity_registry: Dict[str, Entity],
+        entity_registry: Dict[str, 'Entity'], # Use forward reference string if needed by linters
         document_context: Optional[Dict] = None,
     ) -> str:
         """
@@ -62,7 +59,7 @@ class ReferenceResolver:
     def resolve_indirect_references(
         self,
         query: str,
-        entity_registry: Dict[str, Entity],
+        entity_registry: Dict[str, 'Entity'], # Use forward reference string
         document_context: Optional[Dict] = None,
     ) -> str:
         """
@@ -86,7 +83,7 @@ class ReferenceResolver:
     def resolve_references_in_query(
         self,
         query: str,
-        entity_registry: Dict[str, Entity],
+        entity_registry: Dict[str, 'Entity'], # Use forward reference string
         conversation_history: Optional[List[str]] = None,
         document_context: Optional[Dict] = None,
     ) -> str:
