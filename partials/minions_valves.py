@@ -70,6 +70,32 @@ class MinionsValves(BaseModel):
         default=0.7, title="Confidence Threshold", description="Minimum confidence level for the LLM's response for each task (0.0-1.0). Primarily a suggestion to the LLM.", ge=0, le=1
     )
 
+    # New fields for Iteration 5: Static Early Stopping Rules
+    enable_early_stopping: bool = Field(
+        default=False,
+        title="Enable Early Stopping",
+        description="Enable early stopping of rounds based on confidence and query complexity."
+    )
+    simple_query_confidence_threshold: float = Field(
+        default=0.85,
+        title="Simple Query Confidence Threshold",
+        description="Confidence threshold (0.0-1.0) to stop early for SIMPLE queries.",
+        ge=0, le=1
+    )
+    medium_query_confidence_threshold: float = Field(
+        default=0.75,
+        title="Medium Query Confidence Threshold",
+        description="Confidence threshold (0.0-1.0) to stop early for MEDIUM queries.",
+        ge=0, le=1
+    )
+    min_rounds_before_stopping: int = Field(
+        default=1,
+        title="Minimum Rounds Before Stopping",
+        description="Minimum number of rounds to execute before early stopping can be triggered.",
+        ge=1
+    )
+    # max_rounds (already exists) will be used for COMPLEX queries.
+
     class Config:
         extra = "ignore" # Ignore any extra fields passed to the model
         # an_example = MinionsValves().dict() # For schema generation

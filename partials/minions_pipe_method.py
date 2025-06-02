@@ -112,6 +112,7 @@ async def _execute_minions_protocol(
     total_chunks_processed_for_stats = 0
     total_chunk_processing_timeouts_accumulated = 0
     synthesis_input_summary = ""
+    early_stopping_reason_for_output = None # Initialize for storing stopping reason
 
     overall_start_time = asyncio.get_event_loop().time()
     if valves.debug_mode:
@@ -346,6 +347,46 @@ async def _execute_minions_protocol(
         all_round_results_aggregated.extend(current_round_task_results)
         total_chunk_processing_timeouts_accumulated += round_chunk_timeouts
 
+        # Early Stopping Logic
+        if valves.enable_early_stopping and round_metric: # Ensure round_metric exists
+            stop_early = False
+            stopping_reason = ""
+
+            # Ensure we've met the minimum number of rounds
+            if (current_round + 1) >= valves.min_rounds_before_stopping:
+                current_avg_confidence = round_metric.avg_confidence_score
+
+                if query_complexity_level == QueryComplexity.SIMPLE:
+                    if current_avg_confidence >= valves.simple_query_confidence_threshold:
+                        stop_early = True
+                        stopping_reason = (
+                            f"SIMPLE query confidence ({current_avg_confidence:.2f}) "
+                            f"met/exceeded threshold ({valves.simple_query_confidence_threshold:.2f}) "
+                            f"after round {current_round + 1}."
+                        )
+                elif query_complexity_level == QueryComplexity.MEDIUM:
+                    if current_avg_confidence >= valves.medium_query_confidence_threshold:
+                        stop_early = True
+                        stopping_reason = (
+                            f"MEDIUM query confidence ({current_avg_confidence:.2f}) "
+                            f"met/exceeded threshold ({valves.medium_query_confidence_threshold:.2f}) "
+                            f"after round {current_round + 1}."
+                        )
+                # No specific early stopping rule for COMPLEX queries based on confidence; they run max_rounds.
+
+            if stop_early:
+                if valves.show_conversation:
+                    conversation_log.append(f"**⚠️ Early Stopping Triggered:** {stopping_reason}")
+                if valves.debug_mode:
+                    debug_log.append(f"**⚠️ Early Stopping Triggered:** {stopping_reason} (Debug Mode)")
+
+                early_stopping_reason_for_output = stopping_reason # Store it for final output
+                scratchpad_content += f"\n\n**EARLY STOPPING TRIGGERED (Round {current_round + 1}):** {stopping_reason}"
+                # Add a final log message before breaking, as the "Completed Round" message will be skipped
+                if valves.debug_mode:
+                     debug_log.append(f"**🏁 Breaking loop due to early stopping in Round {current_round + 1}. (Debug Mode)**")
+                break # Exit the round loop
+
         if valves.debug_mode:
             current_cumulative_time = asyncio.get_event_loop().time() - overall_start_time
             debug_log.append(f"**🏁 Completed Round {current_round + 1}. Cumulative time: {current_cumulative_time:.2f}s. (Debug Mode)**")
@@ -424,6 +465,8 @@ async def _execute_minions_protocol(
     output_parts.append(f"- **Total individual chunk processing timeouts (local):** {total_chunk_processing_timeouts_accumulated}")
     output_parts.append(f"- **Chunks processed per task (local):** {stats['total_chunks_processed_local'] if stats['total_tasks_executed_local'] > 0 else 0}")
     output_parts.append(f"- **Context size:** {len(context):,} characters")
+    if early_stopping_reason_for_output:
+        output_parts.append(f"- **Early Stopping Triggered:** {early_stopping_reason_for_output}")
     output_parts.append(f"\n## 💰 Token Savings Analysis (Claude: {valves.remote_model})")
     output_parts.append(f"- **Traditional single call (est.):** ~{stats['traditional_tokens_claude']:,} tokens")
     output_parts.append(f"- **MinionS multi-round (Claude only):** ~{stats['minions_tokens_claude']:,} tokens")
