@@ -1,14 +1,88 @@
 import asyncio
+import re # Added re
+from enum import Enum # Ensured Enum is present
 from typing import Any, List, Callable, Dict
 from fastapi import Request
 
 from .common_api_calls import call_claude, call_ollama
 from .minions_protocol_logic import execute_tasks_on_chunks, calculate_token_savings
 from .common_file_processing import create_chunks
-from .minions_models import TaskResult
+from .minions_models import TaskResult, RoundMetrics # Import RoundMetrics
 from .common_context_utils import extract_context_from_messages, extract_context_from_files
 from .minions_decomposition_logic import decompose_task
 from .minions_prompts import get_minions_synthesis_claude_prompt
+# Removed: from .common_query_utils import QueryComplexityClassifier, QueryComplexity
+
+# --- Content from common_query_utils.py START ---
+class QueryComplexity(Enum):
+    SIMPLE = "SIMPLE"
+    MEDIUM = "MEDIUM"
+    COMPLEX = "COMPLEX"
+
+class QueryComplexityClassifier:
+    def __init__(self, debug_mode: bool = False):
+        self.debug_mode = debug_mode
+        # Keywords indicating complexity
+        self.complex_keywords = [
+            "analyze", "compare", "contrast", "summarize", "explain in detail",
+            "discuss", "critique", "evaluate", "recommend", "predict", "what if",
+            "how does", "why does", "implications"
+        ]
+        self.medium_keywords = [
+            "list", "describe", "details of", "tell me about", "what are the"
+        ]
+        # Question words (simple ones often start fact-based questions)
+        self.simple_question_starters = ["what is", "who is", "when was", "where is", "define"]
+
+    def classify_query(self, query: str) -> QueryComplexity:
+        query_lower = query.lower().strip()
+        word_count = len(query_lower.split())
+
+        if self.debug_mode:
+            print(f"DEBUG QueryComplexityClassifier: Query='{query_lower}', WordCount={word_count}")
+
+        # Rule 1: Complex Keywords
+        for keyword in self.complex_keywords:
+            if keyword in query_lower:
+                if self.debug_mode:
+                    print(f"DEBUG QueryComplexityClassifier: Matched complex keyword '{keyword}'")
+                return QueryComplexity.COMPLEX
+
+        # Rule 2: Word Count for Complex
+        if word_count > 25:
+            if self.debug_mode:
+                print(f"DEBUG QueryComplexityClassifier: Matched complex by word count (>25)")
+            return QueryComplexity.COMPLEX
+
+        # Rule 3: Word Count for Simple (and simple question starters)
+        if word_count < 10:
+            is_simple_starter = any(query_lower.startswith(starter) for starter in self.simple_question_starters)
+            if is_simple_starter:
+                if self.debug_mode:
+                    print(f"DEBUG QueryComplexityClassifier: Matched simple by word count (<10) and starter.")
+                return QueryComplexity.SIMPLE
+
+        # Rule 4: Medium Keywords
+        for keyword in self.medium_keywords:
+            if keyword in query_lower:
+                if self.debug_mode:
+                    print(f"DEBUG QueryComplexityClassifier: Matched medium keyword '{keyword}'")
+                return QueryComplexity.MEDIUM
+
+        if word_count >= 10 and word_count <= 25:
+            if self.debug_mode:
+                print(f"DEBUG QueryComplexityClassifier: Matched medium by word count (10-25)")
+            return QueryComplexity.MEDIUM
+
+        if word_count < 10: # Default for short queries not caught by simple_question_starters
+             if self.debug_mode:
+                print(f"DEBUG QueryComplexityClassifier: Defaulting short query to MEDIUM (no simple starter)")
+             return QueryComplexity.MEDIUM
+
+        if self.debug_mode:
+            print(f"DEBUG QueryComplexityClassifier: Defaulting to MEDIUM (no other rules matched clearly)")
+        return QueryComplexity.MEDIUM
+# --- Content from common_query_utils.py END ---
 
 
 async def _call_claude_directly(valves: Any, query: str, call_claude_func: Callable) -> str:
@@ -28,6 +102,8 @@ async def _execute_minions_protocol(
     debug_log = []
     scratchpad_content = ""
     all_round_results_aggregated = []
+    all_round_metrics: List[RoundMetrics] = [] # Initialize Metrics List
+    global_unique_fingerprints_seen = set() # Initialize Global Fingerprint Set
     decomposition_prompts_history = []
     synthesis_prompts_history = []
     final_response = "No answer could be synthesized."
@@ -36,11 +112,22 @@ async def _execute_minions_protocol(
     total_chunks_processed_for_stats = 0
     total_chunk_processing_timeouts_accumulated = 0
     synthesis_input_summary = ""
+    early_stopping_reason_for_output = None # Initialize for storing stopping reason
 
     overall_start_time = asyncio.get_event_loop().time()
     if valves.debug_mode:
         debug_log.append(f"🔍 **Debug Info (MinionS v0.2.0):**\n- Query: {query[:100]}...\n- Context length: {len(context)} chars")
         debug_log.append(f"**⏱️ Overall process started. (Debug Mode)**")
+
+    # Initialize Query Complexity Classifier and Classify Query
+    query_classifier = QueryComplexityClassifier(debug_mode=valves.debug_mode)
+    query_complexity_level = query_classifier.classify_query(query)
+
+    if valves.debug_mode:
+        debug_log.append(f"🧠 Query classified as: {query_complexity_level.value} (Debug Mode)")
+    # Optional: Add to conversation_log if you want user to see it always
+    # if valves.show_conversation:
+    #     conversation_log.append(f"🧠 Initial query classified as complexity: {query_complexity_level.value}")
 
     chunks = create_chunks(context, valves.chunk_size, valves.max_chunks)
     if not chunks and context:
@@ -134,6 +221,104 @@ async def _execute_minions_protocol(
         round_chunk_attempts = execution_details["total_chunk_processing_attempts"]
         round_chunk_timeouts = execution_details["total_chunk_processing_timeouts"]
 
+        # Process Metrics After execute_tasks_on_chunks
+        raw_metrics_data = execution_details.get("round_metrics_data")
+
+        # Extract and Calculate Confidence Metrics
+        confidence_data = execution_details.get("confidence_metrics_data")
+        task_confidences = confidence_data.get("task_confidences", []) if confidence_data else []
+
+        round_avg_numeric_confidence = 0.0
+        if task_confidences:
+            total_confidence_sum = sum(tc['avg_numeric_confidence'] for tc in task_confidences if tc.get('contributing_successful_chunks', 0) > 0)
+            num_successful_tasks_with_confidence = sum(1 for tc in task_confidences if tc.get('contributing_successful_chunks', 0) > 0)
+            if num_successful_tasks_with_confidence > 0:
+                round_avg_numeric_confidence = total_confidence_sum / num_successful_tasks_with_confidence
+
+        round_confidence_distribution = confidence_data.get("round_confidence_distribution", {"HIGH": 0, "MEDIUM": 0, "LOW": 0}) if confidence_data else {"HIGH": 0, "MEDIUM": 0, "LOW": 0}
+
+        # Determine Confidence Trend (before creating current RoundMetrics object)
+        confidence_trend = "N/A"
+        if all_round_metrics: # Check if there are previous rounds' metrics
+            previous_round_metric = all_round_metrics[-1]
+            previous_avg_confidence = previous_round_metric.avg_confidence_score
+            diff = round_avg_numeric_confidence - previous_avg_confidence
+            if diff > 0.05:
+                confidence_trend = "improving"
+            elif diff < -0.05:
+                confidence_trend = "declining"
+            else:
+                confidence_trend = "stable"
+
+        if raw_metrics_data:
+            # Process Findings for Redundancy Metrics
+            current_round_new_findings = 0
+            current_round_duplicate_findings = 0
+            # current_round_fingerprints_seen_this_round = set() # Not strictly needed for plan's definition
+
+            task_execution_results = execution_details.get("results", [])
+            for task_result in task_execution_results:
+                if task_result.get("status") == "success" and task_result.get("detailed_findings"):
+                    for finding in task_result["detailed_findings"]:
+                        fingerprint = finding.get("fingerprint")
+                        if fingerprint:
+                            # Check against global set first for duplicates from previous rounds or earlier in this round
+                            if fingerprint in global_unique_fingerprints_seen:
+                                current_round_duplicate_findings += 1
+                            else:
+                                current_round_new_findings += 1
+                                global_unique_fingerprints_seen.add(fingerprint)
+                            # current_round_fingerprints_seen_this_round.add(fingerprint)
+
+
+            total_findings_this_round = current_round_new_findings + current_round_duplicate_findings
+            redundancy_percentage_this_round = (current_round_duplicate_findings / total_findings_this_round) * 100 if total_findings_this_round > 0 else 0.0
+
+            try: # Add a try-except block for robustness when creating RoundMetrics
+                round_metric = RoundMetrics(
+                    round_number=raw_metrics_data["round_number"],
+                    tasks_executed=raw_metrics_data["tasks_executed"],
+                    task_success_count=raw_metrics_data["task_success_count"],
+                    task_failure_count=raw_metrics_data["task_failure_count"],
+                    avg_chunk_processing_time_ms=raw_metrics_data["avg_chunk_processing_time_ms"],
+                    # total_unique_findings_count=0,  # Placeholder for Iteration 1 REMOVED
+                    execution_time_ms=raw_metrics_data["execution_time_ms"],
+                    success_rate=raw_metrics_data["success_rate"],
+                    # Add new confidence fields
+                    avg_confidence_score=round_avg_numeric_confidence,
+                    confidence_distribution=round_confidence_distribution,
+                    confidence_trend=confidence_trend,
+                    # Add new redundancy fields
+                    new_findings_count_this_round=current_round_new_findings,
+                    duplicate_findings_count_this_round=current_round_duplicate_findings,
+                    redundancy_percentage_this_round=redundancy_percentage_this_round,
+                    total_unique_findings_count=len(global_unique_fingerprints_seen)
+                )
+                all_round_metrics.append(round_metric)
+
+                # Format and append metrics summary (now includes redundancy)
+                metrics_summary = (
+                    f"**📊 Round {round_metric.round_number} Metrics:**\n"
+                    f"  - Tasks Executed: {round_metric.tasks_executed}, Success Rate: {round_metric.success_rate:.2%}\n"
+                    f"  - Task Counts (S/F): {round_metric.task_success_count}/{round_metric.task_failure_count}\n"
+                    f"  - Findings (New/Dup): {round_metric.new_findings_count_this_round}/{round_metric.duplicate_findings_count_this_round}, Total Unique: {round_metric.total_unique_findings_count}\n"
+                    f"  - Redundancy This Round: {round_metric.redundancy_percentage_this_round:.1f}%\n"
+                    f"  - Avg Confidence: {round_metric.avg_confidence_score:.2f} ({round_metric.confidence_trend})\n"
+                    f"  - Confidence Dist (H/M/L): {round_metric.confidence_distribution.get('HIGH',0)}/{round_metric.confidence_distribution.get('MEDIUM',0)}/{round_metric.confidence_distribution.get('LOW',0)}\n"
+                    f"  - Round Time: {round_metric.execution_time_ms:.0f} ms, Avg Chunk Time: {round_metric.avg_chunk_processing_time_ms:.0f} ms"
+                )
+                scratchpad_content += f"\n\n{metrics_summary}"
+                if valves.show_conversation:
+                    conversation_log.append(metrics_summary)
+
+            except KeyError as e:
+                if valves.debug_mode:
+                    debug_log.append(f"⚠️ **Metrics Error:** Missing key {e} in round_metrics_data for round {current_round + 1}. Skipping metrics for this round.")
+            except Exception as e: # Catch any other validation error from Pydantic
+                 if valves.debug_mode:
+                    debug_log.append(f"⚠️ **Metrics Error:** Could not create RoundMetrics object for round {current_round + 1} due to {type(e).__name__}: {e}. Skipping metrics for this round.")
+
+
         if round_chunk_attempts > 0:
             timeout_percentage_this_round = (round_chunk_timeouts / round_chunk_attempts) * 100
             log_msg_timeout_stat = f"**📈 Round {current_round + 1} Local LLM Timeout Stats:** {round_chunk_timeouts}/{round_chunk_attempts} chunk calls timed out ({timeout_percentage_this_round:.1f}%)."
@@ -161,6 +346,46 @@ async def _execute_minions_protocol(
         
         all_round_results_aggregated.extend(current_round_task_results)
         total_chunk_processing_timeouts_accumulated += round_chunk_timeouts
+
+        # Early Stopping Logic
+        if valves.enable_early_stopping and round_metric: # Ensure round_metric exists
+            stop_early = False
+            stopping_reason = ""
+
+            # Ensure we've met the minimum number of rounds
+            if (current_round + 1) >= valves.min_rounds_before_stopping:
+                current_avg_confidence = round_metric.avg_confidence_score
+
+                if query_complexity_level == QueryComplexity.SIMPLE:
+                    if current_avg_confidence >= valves.simple_query_confidence_threshold:
+                        stop_early = True
+                        stopping_reason = (
+                            f"SIMPLE query confidence ({current_avg_confidence:.2f}) "
+                            f"met/exceeded threshold ({valves.simple_query_confidence_threshold:.2f}) "
+                            f"after round {current_round + 1}."
+                        )
+                elif query_complexity_level == QueryComplexity.MEDIUM:
+                    if current_avg_confidence >= valves.medium_query_confidence_threshold:
+                        stop_early = True
+                        stopping_reason = (
+                            f"MEDIUM query confidence ({current_avg_confidence:.2f}) "
+                            f"met/exceeded threshold ({valves.medium_query_confidence_threshold:.2f}) "
+                            f"after round {current_round + 1}."
+                        )
+                # No specific early stopping rule for COMPLEX queries based on confidence; they run max_rounds.
+
+            if stop_early:
+                if valves.show_conversation:
+                    conversation_log.append(f"**⚠️ Early Stopping Triggered:** {stopping_reason}")
+                if valves.debug_mode:
+                    debug_log.append(f"**⚠️ Early Stopping Triggered:** {stopping_reason} (Debug Mode)")
+
+                early_stopping_reason_for_output = stopping_reason # Store it for final output
+                scratchpad_content += f"\n\n**EARLY STOPPING TRIGGERED (Round {current_round + 1}):** {stopping_reason}"
+                # Add a final log message before breaking, as the "Completed Round" message will be skipped
+                if valves.debug_mode:
+                     debug_log.append(f"**🏁 Breaking loop due to early stopping in Round {current_round + 1}. (Debug Mode)**")
+                break # Exit the round loop
 
         if valves.debug_mode:
             current_cumulative_time = asyncio.get_event_loop().time() - overall_start_time
@@ -232,6 +457,7 @@ async def _execute_minions_protocol(
 
     output_parts.append(f"\n## 📊 MinionS Efficiency Stats (v0.2.0)")
     output_parts.append(f"- **Protocol:** MinionS (Multi-Round)")
+    output_parts.append(f"- **Query Complexity:** {query_complexity_level.value}") # Display Query Complexity
     output_parts.append(f"- **Rounds executed:** {actual_rounds_executed}/{valves.max_rounds}")
     output_parts.append(f"- **Total tasks for local LLM:** {stats['total_tasks_executed_local']}")
     output_parts.append(f"- **Successful tasks (local):** {total_successful_tasks}")
@@ -239,6 +465,8 @@ async def _execute_minions_protocol(
     output_parts.append(f"- **Total individual chunk processing timeouts (local):** {total_chunk_processing_timeouts_accumulated}")
     output_parts.append(f"- **Chunks processed per task (local):** {stats['total_chunks_processed_local'] if stats['total_tasks_executed_local'] > 0 else 0}")
     output_parts.append(f"- **Context size:** {len(context):,} characters")
+    if early_stopping_reason_for_output:
+        output_parts.append(f"- **Early Stopping Triggered:** {early_stopping_reason_for_output}")
     output_parts.append(f"\n## 💰 Token Savings Analysis (Claude: {valves.remote_model})")
     output_parts.append(f"- **Traditional single call (est.):** ~{stats['traditional_tokens_claude']:,} tokens")
     output_parts.append(f"- **MinionS multi-round (Claude only):** ~{stats['minions_tokens_claude']:,} tokens")

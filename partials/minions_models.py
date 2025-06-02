@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Optional, Dict # Add Dict
 from pydantic import BaseModel, Field
 
 class TaskResult(BaseModel):
@@ -34,3 +34,27 @@ class TaskResult(BaseModel):
         #         "confidence": "HIGH"
         #     }
         # }
+
+class RoundMetrics(BaseModel):
+    round_number: int
+    tasks_executed: int
+    task_success_count: int
+    task_failure_count: int
+    avg_chunk_processing_time_ms: float
+    total_unique_findings_count: int = 0 # Defaulting as per plan for Iteration 1
+    execution_time_ms: float
+    success_rate: float # Calculated as task_success_count / tasks_executed
+
+    # New fields for Iteration 2
+    avg_confidence_score: float = 0.0 # Default to 0.0
+    confidence_distribution: Dict[str, int] = Field(default_factory=lambda: {"HIGH": 0, "MEDIUM": 0, "LOW": 0})
+    confidence_trend: str = "N/A" # Default to N/A
+
+    # New fields for Iteration 3
+    new_findings_count_this_round: int = 0
+    duplicate_findings_count_this_round: int = 0
+    redundancy_percentage_this_round: float = 0.0
+    # cross_round_similarity_score: float = 0.0 # Deferred
+
+    class Config:
+        extra = "ignore"
