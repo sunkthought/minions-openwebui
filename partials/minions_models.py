@@ -56,5 +56,17 @@ class RoundMetrics(BaseModel):
     redundancy_percentage_this_round: float = 0.0
     # cross_round_similarity_score: float = 0.0 # Deferred
 
+    # New fields for Iteration 4
+    sufficiency_score: float = Field(default=0.0, description="Overall information sufficiency score (0-1).")
+    information_components: Dict[str, bool] = Field(default_factory=dict, description="Status of identified information components from the query.")
+    component_coverage_percentage: float = Field(default=0.0, description="Percentage of information components addressed (0-1).")
+
+    # New fields for Iteration 5 (Convergence Detection)
+    information_gain_rate: float = Field(default=0.0, description="Rate of new information gained in this round, typically based on the count of new findings.")
+    novel_findings_percentage_this_round: float = Field(default=0.0, description="Percentage of findings in this round that are new compared to all findings from this round (new + duplicate).")
+    task_failure_rate_trend: str = Field(default="N/A", description="Trend of task failures (e.g., 'increasing', 'decreasing', 'stable') compared to the previous round.")
+    convergence_detected_this_round: bool = Field(default=False, description="Flag indicating if convergence criteria were met based on this round's analysis.")
+    predicted_value_of_next_round: str = Field(default="N/A", description="Qualitative prediction of the potential value of executing another round (e.g., 'low', 'medium', 'high').")
+
     class Config:
         extra = "ignore"

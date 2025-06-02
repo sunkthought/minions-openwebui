@@ -22,39 +22,6 @@ This approach aims to improve efficiency, reduce costs, and enhance AI capabilit
 *   **Original Research Paper**: [MinionS: A Protocol for Scalable and Cost-Effective AI Collaboration (PDF)](https://arxiv.org/pdf/2502.15964)
 *   **HazyResearch GitHub Repository**: [github.com/HazyResearch/minions](https://github.com/HazyResearch/minions)
 
-## Version History
-
-### v0.3.3 - Adaptive Round Management
-- **Smart iteration control**: The system now dynamically adjusts the number of rounds based on task complexity and progress
-- **Early termination logic**: Automatically stops when sufficient information is gathered, saving costs
-- **Improved efficiency**: Reduces unnecessary API calls while maintaining answer quality
-
-### v0.3.2 - Custom Prompts
-- **User-defined prompts**: Added support for custom task instructions and synthesis prompts
-- **Enhanced flexibility**: Users can now fine-tune how the supervisor decomposes tasks and synthesizes results
-- **Better domain adaptation**: Custom prompts allow optimization for specific document types or query patterns
-
-### v0.3.1 - Task-Specific Instructions and Advanced Prompts
-- **Context-aware task generation**: Tasks now include specific instructions based on document content
-- **Improved local model guidance**: Better prompting strategies for local models to extract relevant information
-- **Enhanced accuracy**: More precise task execution leads to better overall results
-
-### v0.3.0 - Code-Based Task Decomposition
-- **Dynamic task generation**: The supervisor now generates Python code to create tasks programmatically
-- **Document-aware decomposition**: Tasks are created based on actual document structure and content
-- **Scalable approach**: Can handle documents of varying sizes and structures more effectively
-- **Improved Minion protocol**: Enhanced conversation flow and better final answer detection
-
-### v0.2.1 - Refactored Architecture
-- **Modular design**: Separated concerns into dedicated partials for better maintainability
-- **Enhanced error handling**: Improved timeout management and error recovery
-- **Better token savings calculation**: More accurate cost estimation
-
-### v0.2.0 - Initial Release
-- Basic Minion and MinionS protocol implementation
-- Support for Claude and Ollama integration
-- Token savings analysis
-
 ## Minion/MinionS for Open WebUI
 
 This repository provides an implementation of the Minion and MinionS protocols specifically designed to be used as **Functions** within the [Open WebUI](https://github.com/open-webui/open-webui) platform. This allows users to leverage these advanced collaborative AI techniques directly from their Open WebUI interface when interacting with compatible models.
@@ -127,6 +94,31 @@ Key valves to configure:
 *   `timeout_local`: Timeout for each local model call in seconds (default: 30).
 *   `max_round_timeout_failure_threshold_percent`: Warning threshold for timeouts (default: 50).
 *   `use_structured_output`: Enable JSON structured output (default: false).
+
+##### Performance Profile
+*   `performance_profile`: Overall performance profile: 'high_quality', 'balanced', 'fastest_results'. Affects base thresholds and max_rounds before other adaptive modifiers. (default: "balanced", options: ["high_quality", "balanced", "fastest_results"])
+
+##### Early Stopping & Convergence Settings
+*   `enable_early_stopping`: Enable early stopping of rounds based on confidence, query complexity, or convergence. (default: false)
+*   `simple_query_confidence_threshold`: Confidence threshold (0.0-1.0) to stop early for SIMPLE queries. (default: 0.85)
+*   `medium_query_confidence_threshold`: Confidence threshold (0.0-1.0) to stop early for MEDIUM queries. (default: 0.75)
+*   `min_rounds_before_stopping`: Minimum number of rounds to execute before early stopping (confidence or convergence) can be triggered. (default: 1)
+*   `convergence_novelty_threshold`: Minimum percentage of novel findings required per round to consider it non-convergent. E.g., 0.10 means less than 10% new findings might indicate convergence if other criteria met. (default: 0.10)
+*   `convergence_rounds_min_novelty`: Number of consecutive rounds novelty must be below `convergence_novelty_threshold` to trigger convergence. (default: 2)
+*   `convergence_sufficiency_threshold`: Minimum sufficiency score required for convergence-based early stopping. E.g., 0.7 means 70% sufficiency needed. (default: 0.7)
+
+##### Adaptive Threshold Settings
+*   `enable_adaptive_thresholds`: Allow the system to dynamically adjust confidence, sufficiency, and novelty thresholds based on document size, query complexity, and first-round performance. (default: true)
+*   `doc_size_small_char_limit`: Documents with character count below this are considered 'small' for threshold adjustments. (default: 5000)
+*   `doc_size_large_char_start`: Documents with character count above this are considered 'large' for threshold adjustments. (default: 50000)
+*   `confidence_modifier_small_doc`: Value added to base confidence thresholds if document is small (e.g., -0.05 to be less strict). (default: 0.0)
+*   `confidence_modifier_large_doc`: Value added to base confidence thresholds if document is large (e.g., +0.05 to be more strict). (default: 0.0)
+*   `sufficiency_modifier_simple_query`: Value added to base sufficiency thresholds for simple queries (e.g., -0.1 to require less sufficiency). (default: 0.0)
+*   `sufficiency_modifier_complex_query`: Value added to base sufficiency thresholds for complex queries (e.g., +0.1 to require more). (default: 0.0)
+*   `novelty_modifier_simple_query`: Value added to the base novelty threshold for simple queries. (default: 0.0)
+*   `novelty_modifier_complex_query`: Value added to the base novelty threshold for complex queries. (default: 0.0)
+*   `first_round_high_novelty_threshold`: If first round's novel findings percentage is above this (e.g., 0.75 for 75%), it's a high novelty first round. (default: 0.75)
+*   `sufficiency_modifier_high_first_round_novelty`: Value added to sufficiency thresholds if first round novelty is high (e.g., -0.05 to relax sufficiency requirement). (default: -0.05)
 
 #### Advanced Settings
 *   `debug_mode`: Enable verbose logging and technical details (default: false).
@@ -290,12 +282,56 @@ Let's say you want a version of the Minion function that uses a slightly differe
 
 This modular approach provides a powerful way to adapt and evolve the Minion/MinionS functions to fit a wide variety of use cases and preferences.
 
+## Version History
+
+### v0.3.4 - Advanced Adaptive Round Management & Performance Insights
+- **Smart Information Sufficiency**: Implemented information sufficiency scoring that considers query component coverage and confidence of addressed components, moving beyond simple confidence metrics.
+- **Dynamic Convergence Detection**: MinionS can now detect diminishing returns by tracking per-round information gain, novelty of findings, and task failure trends. This allows the system to stop early if further rounds are unlikely to yield significant new information, especially when sufficiency is met.
+- **Adaptive Thresholds**: Key decision thresholds (for confidence-based early stopping, sufficiency requirements, and novelty sensitivity in convergence) are now dynamically adjusted based on:
+    - Document size (small, medium, large).
+    - Query complexity (simple, medium, complex).
+    - First-round performance (high novelty can relax subsequent sufficiency needs).
+- **Performance Profiles**: Introduced 'high_quality', 'balanced', and 'fastest_results' profiles to allow users to easily tune the base operational parameters (max rounds, base thresholds) before adaptive adjustments.
+- **Comprehensive Performance Report**: The final output now includes a detailed report summarizing total rounds, stopping reasons, final sufficiency and convergence scores, and the effective thresholds used during the run.
+- **Numerous new valves** added to configure these adaptive behaviors, convergence criteria, and performance profiles.
+
+### v0.3.3 - Adaptive Round Management
+- **Smart iteration control**: The system now dynamically adjusts the number of rounds based on task complexity and progress
+- **Early termination logic**: Automatically stops when sufficient information is gathered, saving costs
+- **Improved efficiency**: Reduces unnecessary API calls while maintaining answer quality
+
+### v0.3.2 - Custom Prompts
+- **User-defined prompts**: Added support for custom task instructions and synthesis prompts
+- **Enhanced flexibility**: Users can now fine-tune how the supervisor decomposes tasks and synthesizes results
+- **Better domain adaptation**: Custom prompts allow optimization for specific document types or query patterns
+
+### v0.3.1 - Task-Specific Instructions and Advanced Prompts
+- **Context-aware task generation**: Tasks now include specific instructions based on document content
+- **Improved local model guidance**: Better prompting strategies for local models to extract relevant information
+- **Enhanced accuracy**: More precise task execution leads to better overall results
+
+### v0.3.0 - Code-Based Task Decomposition
+- **Dynamic task generation**: The supervisor now generates Python code to create tasks programmatically
+- **Document-aware decomposition**: Tasks are created based on actual document structure and content
+- **Scalable approach**: Can handle documents of varying sizes and structures more effectively
+- **Improved Minion protocol**: Enhanced conversation flow and better final answer detection
+
+### v0.2.1 - Refactored Architecture
+- **Modular design**: Separated concerns into dedicated partials for better maintainability
+- **Enhanced error handling**: Improved timeout management and error recovery
+- **Better token savings calculation**: More accurate cost estimation
+
+### v0.2.0 - Initial Release
+- Basic Minion and MinionS protocol implementation
+- Support for Claude and Ollama integration
+- Token savings analysis
+
 ## License
 
 This project is licensed under the MIT License. See the LICENSE file for details.
 
 ## Acknowledgments
 
-- The HazyResearch team for creating the original Minion and MinionS protocols
-- The Open WebUI community for providing an excellent platform for AI interactions
-- The SunkThought Team: Jules by GoogleLabs, Anthropic's Claude 4 family, and Wil Everts 😇
+- The @HazyResearch team for creating the original Minion and MinionS protocols
+- The @OpenWebUI community for providing an excellent platform for AI interactions
+- The @SunkThought Team: Jules by GoogleLabs, Anthropic's Claude 4 family, and Wil Everts 😇

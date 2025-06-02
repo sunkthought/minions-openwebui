@@ -5,7 +5,7 @@ author_url: https://github.com/SunkThought/minions-openwebui
 original_author: Copyright (c) 2025 Sabri Eyuboglu, Avanika Narayan, Dan Biderman, and the rest of the Minions team (@HazyResearch wrote the original MinionS Protocol paper and code examples on github that spawned this)
 original_author_url: https://github.com/HazyResearch/
 funding_url: https://github.com/HazyResearch/minions
-version: 0.3.1
+version: 0.3.4
 description: Basic Minion protocol - conversational collaboration between local and cloud models
 required_open_webui_version: 0.5.0
 license: MIT License
@@ -58,7 +58,8 @@ class MinionValves(BaseModel):
     """
     Configuration settings (valves) specifically for the Minion (conversational) pipe.
     These settings control the behavior of the Minion protocol, including API keys,
-    model selections, timeouts, and operational parameters.
+    model selections, timeouts, operational parameters, extraction instructions,
+    expected output format, and confidence threshold.
     """
     # Essential configuration only
     anthropic_api_key: str = Field(
@@ -102,6 +103,15 @@ class MinionValves(BaseModel):
     )
     debug_mode: bool = Field(
         default=False, description="Show additional technical details and verbose logs."
+    )
+    extraction_instructions: str = Field(
+        default="", title="Extraction Instructions", description="Specific instructions for the LLM on what to extract or how to process the information."
+    )
+    expected_format: str = Field(
+        default="text", title="Expected Output Format", description="Desired format for the LLM's output (e.g., 'text', 'JSON', 'bullet points')."
+    )
+    confidence_threshold: float = Field(
+        default=0.7, title="Confidence Threshold", description="Minimum confidence level for the LLM's response (0.0-1.0). Primarily a suggestion to the LLM.", ge=0, le=1
     )
 
     # The following class is part of the Pydantic configuration and is standard.
@@ -345,14 +355,34 @@ def get_minion_local_prompt(context: str, query: str, claude_request: str, valve
     """
     # 'valves' not strictly needed for this specific prompt's text content from original version
     # but could be used for schema instructions if valves.use_structured_output was considered here.
-    # The original prompt did include a generic instruction about JSON.
-    return f"""You have access to the full context below. Claude (Anthropic's AI) is collaborating with you to answer a user's question.
-CONTEXT:
+
+    # claude_request is the specific question from Claude to the local model.
+    # query is the original user query.
+    # context is the document chunk.
+
+    return f"""You are an AI assistant. You have access to the following DOCUMENT:
+<document>
 {context}
-ORIGINAL QUESTION: {query}
-CLAUDE'S REQUEST: {claude_request}
-Please provide a helpful, accurate response based on the context you have access to. Extract relevant information that answers Claude's specific question. Be concise but thorough.
-If you are instructed to provide a JSON response (e.g., by a schema appended to this prompt), ensure your entire response is ONLY that valid JSON object, without any surrounding text, explanations, or markdown formatting like ```json ... ```."""
+</document>
+
+Claude (another AI) is asking you a specific question about this document. Claude's question is:
+<claude_question>
+{claude_request}
+</claude_question>
+
+Your task is to answer Claude's question based *only* on the DOCUMENT provided.
+
+Your response MUST be a single JSON object. Do not include any text, explanations, or markdown formatting (like ```json ... ```) outside of this JSON object.
+
+The JSON object must have the following keys:
+- "explanation": A concise statement of your reasoning or how you concluded your answer.
+- "citation": A direct snippet of the text from the DOCUMENT that supports your answer. If no supporting text is found in the DOCUMENT, this field must be null.
+- "answer": The extracted answer to Claude's question. If the answer cannot be determined from the DOCUMENT, this field must be null.
+
+IMPORTANT: If you cannot confidently determine the information from the DOCUMENT to answer Claude's question, ALL THREE fields ("explanation", "citation", "answer") in the JSON object must be null.
+
+Provide only the JSON object in your response.
+"""
 
 import asyncio
 import json
@@ -676,7 +706,7 @@ class Pipe:
 
     def __init__(self):
         self.valves = self.Valves()
-        self.name = "Minion v0.3.1 (Conversational)"
+        self.name = "Minion v0.3.4 (Conversational)"
 
     def pipes(self):
         """Define the available models"""
