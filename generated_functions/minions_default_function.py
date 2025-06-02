@@ -77,6 +77,18 @@ class RoundMetrics(BaseModel):
     redundancy_percentage_this_round: float = 0.0
     # cross_round_similarity_score: float = 0.0 # Deferred
 
+    # New fields for Iteration 4
+    sufficiency_score: float = Field(default=0.0, description="Overall information sufficiency score (0-1).")
+    information_components: Dict[str, bool] = Field(default_factory=dict, description="Status of identified information components from the query.")
+    component_coverage_percentage: float = Field(default=0.0, description="Percentage of information components addressed (0-1).")
+
+    # New fields for Iteration 5 (Convergence Detection)
+    information_gain_rate: float = Field(default=0.0, description="Rate of new information gained in this round, typically based on the count of new findings.")
+    novel_findings_percentage_this_round: float = Field(default=0.0, description="Percentage of findings in this round that are new compared to all findings from this round (new + duplicate).")
+    task_failure_rate_trend: str = Field(default="N/A", description="Trend of task failures (e.g., 'increasing', 'decreasing', 'stable') compared to the previous round.")
+    convergence_detected_this_round: bool = Field(default=False, description="Flag indicating if convergence criteria were met based on this round's analysis.")
+    predicted_value_of_next_round: str = Field(default="N/A", description="Qualitative prediction of the potential value of executing another round (e.g., 'low', 'medium', 'high').")
+
     class Config:
         extra = "ignore"
 
@@ -178,6 +190,29 @@ class MinionsValves(BaseModel):
         ge=1
     )
     # max_rounds (already exists) will be used for COMPLEX queries.
+
+    # New fields for Iteration 5: Convergence Detection Based Early Stopping
+    convergence_novelty_threshold: float = Field(
+        default=0.10,
+        title="Convergence Novelty Threshold",
+        description="Minimum percentage of novel findings required per round to consider it non-convergent. E.g., 0.10 means less than 10% new findings might indicate convergence if other criteria met.",
+        ge=0, le=1
+    )
+    convergence_rounds_min_novelty: int = Field(
+        default=2,
+        title="Convergence Rounds for Minimum Novelty",
+        description="Number of consecutive rounds novelty must be below 'convergence_novelty_threshold' to trigger convergence.",
+        ge=1
+    )
+    convergence_sufficiency_threshold: float = Field(
+        default=0.7,
+        title="Convergence Sufficiency Threshold",
+        description="Minimum sufficiency score required for convergence-based early stopping. E.g., 0.7 means 70% sufficiency needed.",
+        ge=0, le=1
+    )
+    # min_rounds_before_convergence_check could be added if distinct from min_rounds_before_stopping
+    # For now, ConvergenceDetector uses its own default or relies on min_rounds_before_stopping implicitly
+    # if min_rounds_before_convergence_check is not explicitly set in valves.
 
     class Config:
         extra = "ignore" # Ignore any extra fields passed to the model
@@ -919,6 +954,270 @@ def calculate_token_savings(
         'total_tasks_executed_local': total_tasks,
     }
 
+import re
+from typing import Dict, List, Tuple, Any
+
+class InformationSufficiencyAnalyzer:
+    def __init__(self, query: str, debug_mode: bool = False):
+        self.query = query
+        self.debug_mode = debug_mode
+        self.components: Dict[str, Dict[str, Any]] = {} # Stores {component_name: {"keywords": [...], "is_addressed": False, "confidence": 0.0}}
+        self._identify_components()
+
+    def _identify_components(self):
+        # Basic keyword extraction. This is a simple heuristic and can be expanded.
+        # It looks for Nouns, Proper Nouns, and Adjectives, trying to form simple topics.
+        # Example: "Compare the budget and timeline for Project Alpha and Project Beta"
+        # Might identify: "budget", "timeline", "Project Alpha", "Project Beta"
+        # Then forms components like "budget Project Alpha", "timeline Project Alpha", etc.
+
+        # For simplicity in this iteration, we'll use a more direct approach:
+        # Look for quoted phrases or capitalized words as potential components.
+        # Or, define a few generic components if query is too simple.
+
+        # Let's try to find quoted phrases first
+        quoted_phrases = re.findall(r'"([^"]+)"', self.query)
+        for phrase in quoted_phrases:
+            self.components[phrase] = {"keywords": [kw.lower() for kw in phrase.split()], "is_addressed": False, "confidence": 0.0}
+
+        # If no quoted phrases, look for capitalized words/phrases (potential proper nouns or topics)
+        if not self.components:
+            # Regex to find sequences of capitalized words, possibly including 'and', 'or', 'for', 'the'
+            # Using \b for word boundaries to ensure whole words are matched
+            potential_topics = re.findall(r'\b[A-Z][a-zA-Z]*(?:\s+(?:and|or|for|the|[A-Z][a-zA-Z]*))*\b', self.query)
+            # Filter out very short capitalized words unless they are acronyms
+            topics = [pt for pt in potential_topics if len(pt) > 2 or pt.isupper()]
+
+            for topic in topics:
+                # Avoid adding overlapping sub-phrases if a larger phrase is already a component
+                is_sub_phrase = False
+                for existing_comp in self.components.keys():
+                    if topic in existing_comp and topic != existing_comp:
+                        is_sub_phrase = True
+                        break
+                if not is_sub_phrase:
+                    self.components[topic] = {"keywords": [kw.lower() for kw in topic.split()], "is_addressed": False, "confidence": 0.0}
+
+        # If still no components (e.g., simple query like "summarize this"), create generic ones.
+        if not self.components:
+            if "compare" in self.query.lower() or "contrast" in self.query.lower():
+                self.components["comparison points"] = {"keywords": ["compare", "contrast", "similarit", "difference"], "is_addressed": False, "confidence": 0.0} # Added common keywords
+                self.components["subject 1 details"] = {"keywords": [], "is_addressed": False, "confidence": 0.0} # Placeholder, keyword matching might be hard
+                self.components["subject 2 details"] = {"keywords": [], "is_addressed": False, "confidence": 0.0} # Placeholder
+            elif "summarize" in self.query.lower() or "overview" in self.query.lower():
+                self.components["main points"] = {"keywords": ["summary", "summarize", "overview", "main point", "key aspect"], "is_addressed": False, "confidence": 0.0}
+                self.components["details"] = {"keywords": ["detail", "specific", "elaborate"], "is_addressed": False, "confidence": 0.0}
+            else: # Default fallback component
+                self.components["overall query"] = {"keywords": [kw.lower() for kw in self.query.split()[:5]], "is_addressed": False, "confidence": 0.0} # Use first few words of query
+
+        if self.debug_mode:
+            print(f"DEBUG [SufficiencyAnalyzer]: Identified components: {list(self.components.keys())}")
+
+    def update_components(self, text_to_analyze: str, round_avg_confidence: float):
+        # In this version, we'll use round_avg_confidence as a proxy for the confidence
+        # of the information that might address a component.
+        # A more advanced version could try to link specific task confidences.
+        text_lower = text_to_analyze.lower()
+        if self.debug_mode:
+            print(f"DEBUG [SufficiencyAnalyzer]: Updating components based on text (first 100 chars): {text_lower[:100]}...")
+
+        for comp_name, comp_data in self.components.items():
+            if not comp_data["is_addressed"]:
+                # If keywords are defined, require all keywords for the component to be present.
+                # This is a strict rule and might need adjustment (e.g., any keyword, or a percentage).
+                if comp_data["keywords"]:
+                    all_keywords_present = all(kw in text_lower for kw in comp_data["keywords"])
+                    if all_keywords_present:
+                        comp_data["is_addressed"] = True
+                        comp_data["confidence"] = round_avg_confidence # Use round's average confidence
+                        if self.debug_mode:
+                            print(f"DEBUG [SufficiencyAnalyzer]: Component '{comp_name}' ADDRESSED by keyword match. Confidence set to {round_avg_confidence:.2f}")
+                # If no keywords (e.g. generic components like "subject 1 details"), this logic won't address them.
+                # This is a limitation of the current basic keyword approach for generic components.
+                # For this iteration, such components might remain unaddressed unless their names/generic keywords appear.
+
+    def calculate_sufficiency_score(self) -> Tuple[float, float, Dict[str, bool]]:
+        if not self.components:
+            return 0.0, 0.0, {}
+
+        addressed_components_count = 0
+        total_confidence_of_addressed = 0.0
+        component_status_for_metrics: Dict[str, bool] = {}
+
+        for comp_name, comp_data in self.components.items():
+            component_status_for_metrics[comp_name] = comp_data["is_addressed"]
+            if comp_data["is_addressed"]:
+                addressed_components_count += 1
+                total_confidence_of_addressed += comp_data["confidence"]
+
+        if self.debug_mode:
+            print(f"DEBUG [SufficiencyAnalyzer]: Addressed components: {addressed_components_count}/{len(self.components)}")
+
+        component_coverage_percentage = (addressed_components_count / len(self.components)) if len(self.components) > 0 else 0.0
+
+        avg_confidence_of_addressed = (total_confidence_of_addressed / addressed_components_count) if addressed_components_count > 0 else 0.0
+
+        # Score is a product of coverage and average confidence of what's covered.
+        sufficiency_score = component_coverage_percentage * avg_confidence_of_addressed
+
+        if self.debug_mode:
+            print(f"DEBUG [SufficiencyAnalyzer]: Coverage: {component_coverage_percentage:.2f}, Avg Confidence of Addressed: {avg_confidence_of_addressed:.2f}, Sufficiency Score: {sufficiency_score:.2f}")
+
+        return sufficiency_score, component_coverage_percentage, component_status_for_metrics
+
+    def get_analysis_details(self) -> Dict[str, Any]:
+        sufficiency_score, component_coverage_percentage, component_status = self.calculate_sufficiency_score()
+        return {
+            "sufficiency_score": sufficiency_score,
+            "component_coverage_percentage": component_coverage_percentage,
+            "information_components_status": component_status # Changed key name slightly to avoid conflict if used directly in RoundMetrics
+        }
+
+
+from typing import Optional, List, Dict, Any, Tuple
+
+# Attempt to import RoundMetrics and Valves type hints for clarity,
+# but handle potential circular dependency or generation-time issues
+# by using 'Any' if direct import is problematic during generation.
+try:
+    # Assuming valves structure will be available, or use Any
+    # from .minions_valves import MinionSValves # This might not exist as a direct importable type
+    ValvesType = Any # Placeholder for valve types from pipe_self.valves
+except ImportError:
+    RoundMetrics = Any
+    ValvesType = Any
+
+class ConvergenceDetector:
+    def __init__(self, debug_mode: bool = False):
+        self.debug_mode = debug_mode
+        if self.debug_mode:
+            print("DEBUG [ConvergenceDetector]: Initialized.")
+
+    def calculate_round_convergence_metrics(
+        self,
+        current_round_metric: RoundMetrics,
+        previous_round_metric: Optional[RoundMetrics]
+    ) -> Dict[str, Any]:
+        """
+        Calculates specific convergence-related metrics for the current round.
+        These will be used to update the current_round_metric object.
+        """
+        calculated_metrics = {}
+
+        # 1. Information Gain Rate (using new_findings_count_this_round)
+        # Ensure current_round_metric has the attribute, otherwise default to 0. Useful if RoundMetrics is Any.
+        calculated_metrics["information_gain_rate"] = float(getattr(current_round_metric, "new_findings_count_this_round", 0))
+
+        # 2. Novel Findings Percentage for this round
+        new_findings = getattr(current_round_metric, "new_findings_count_this_round", 0)
+        duplicate_findings = getattr(current_round_metric, "duplicate_findings_count_this_round", 0)
+        total_findings_this_round = new_findings + duplicate_findings
+
+        if total_findings_this_round > 0:
+            calculated_metrics["novel_findings_percentage_this_round"] = new_findings / total_findings_this_round
+        else:
+            calculated_metrics["novel_findings_percentage_this_round"] = 0.0
+
+        # 3. Task Failure Rate Trend
+        trend = "N/A"
+        if previous_round_metric:
+            current_success_rate = getattr(current_round_metric, "success_rate", 0.0)
+            previous_success_rate = getattr(previous_round_metric, "success_rate", 0.0)
+            tolerance = 0.05
+            if current_success_rate < previous_success_rate - tolerance:
+                trend = "increasing_failures"
+            elif current_success_rate > previous_success_rate + tolerance:
+                trend = "decreasing_failures"
+            else:
+                trend = "stable_failures"
+        calculated_metrics["task_failure_rate_trend"] = trend
+
+        # 4. Predicted Value of Next Round (simple heuristic)
+        predicted_value = "medium"
+        novelty_current_round = calculated_metrics["novel_findings_percentage_this_round"]
+
+        if novelty_current_round > 0.5:
+            predicted_value = "high"
+        elif novelty_current_round < 0.1:
+            predicted_value = "low"
+
+        if trend == "increasing_failures" and predicted_value == "medium":
+            predicted_value = "low"
+        elif trend == "decreasing_failures" and predicted_value == "medium":
+            predicted_value = "high"
+
+        calculated_metrics["predicted_value_of_next_round"] = predicted_value
+
+        if self.debug_mode:
+            round_num_debug = getattr(current_round_metric, "round_number", "Unknown")
+            print(f"DEBUG [ConvergenceDetector]: Calculated metrics for round {round_num_debug}: {calculated_metrics}")
+
+        return calculated_metrics
+
+    def check_for_convergence(
+        self,
+        current_round_metric: RoundMetrics, # This should already be updated with metrics from calculate_round_convergence_metrics
+        sufficiency_score: float, # Passed directly, as it's on current_round_metric but good to be explicit
+        total_rounds_executed: int,
+        valves: ValvesType,
+        all_round_metrics: List[RoundMetrics]
+    ) -> Tuple[bool, str]:
+        """
+        Checks if convergence criteria are met.
+        Uses metrics already populated in current_round_metric.
+        """
+        min_rounds_for_conv_check = getattr(valves, "min_rounds_before_convergence_check", 2) # Different from min_rounds_before_stopping
+        if total_rounds_executed < min_rounds_for_conv_check:
+             if self.debug_mode:
+                print(f"DEBUG [ConvergenceDetector]: Skipping convergence check for round {getattr(current_round_metric, 'round_number', 'N/A')}, min rounds not met ({total_rounds_executed}/{min_rounds_for_conv_check}).")
+             return False, ""
+
+        # Convergence criteria:
+        # 1. Low novelty for a certain number of consecutive rounds.
+        # 2. Sufficiency score is above a threshold.
+
+        low_novelty_streak = 0
+        required_streak_length = getattr(valves, "convergence_rounds_min_novelty", 2)
+        novelty_threshold = getattr(valves, "convergence_novelty_threshold", 0.10) # e.g., 10%
+
+        if len(all_round_metrics) >= required_streak_length:
+            is_streak = True
+            # Check the last 'required_streak_length' metrics objects
+            for i in range(required_streak_length):
+                metric_to_check = all_round_metrics[-(i+1)] # Last, then second to last, etc.
+
+                # Ensure the metric object actually has the field, especially if RoundMetrics is Any
+                if not hasattr(metric_to_check, 'novel_findings_percentage_this_round') or \
+                   getattr(metric_to_check, 'novel_findings_percentage_this_round') >= novelty_threshold:
+                    is_streak = False
+                    break
+            if is_streak:
+                low_novelty_streak = required_streak_length
+
+        current_round_num_debug = getattr(current_round_metric, "round_number", "N/A")
+        sufficiency_threshold_valve = getattr(valves, "convergence_sufficiency_threshold", 0.7)
+
+        if self.debug_mode:
+            print(f"DEBUG [ConvergenceDetector]: Checking convergence for round {current_round_num_debug}:")
+            print(f"  Low novelty threshold: {novelty_threshold}, Required streak: {required_streak_length}")
+            print(f"  Actual low novelty streak achieve for check: {low_novelty_streak} (needs to be >= {required_streak_length})")
+            print(f"  Sufficiency score: {sufficiency_score:.2f}, Sufficiency threshold: {sufficiency_threshold_valve}")
+
+        if low_novelty_streak >= required_streak_length and sufficiency_score >= sufficiency_threshold_valve:
+            reason = (
+                f"Convergence detected: Novelty < {novelty_threshold*100:.0f}% "
+                f"for {low_novelty_streak} round(s) AND "
+                f"Sufficiency ({sufficiency_score:.2f}) >= {sufficiency_threshold_valve}."
+            )
+            if self.debug_mode:
+                print(f"DEBUG [ConvergenceDetector]: {reason}")
+            return True, reason
+
+        return False, ""
+
+```
+
+
 import asyncio
 import re # Added re
 from enum import Enum # Ensured Enum is present
@@ -1029,9 +1328,24 @@ async def _execute_minions_protocol(
     early_stopping_reason_for_output = None # Initialize for storing stopping reason
 
     overall_start_time = asyncio.get_event_loop().time()
+
+    # User query is passed directly to _execute_minions_protocol
+    user_query = query # Use the passed 'query' as user_query for clarity if needed elsewhere
+
     if valves.debug_mode:
-        debug_log.append(f"🔍 **Debug Info (MinionS v0.2.0):**\n- Query: {query[:100]}...\n- Context length: {len(context)} chars")
+        debug_log.append(f"🔍 **Debug Info (MinionS v0.2.0):**\n- Query: {user_query[:100]}...\n- Context length: {len(context)} chars")
         debug_log.append(f"**⏱️ Overall process started. (Debug Mode)**")
+
+    # Instantiate Sufficiency Analyzer
+    analyzer = InformationSufficiencyAnalyzer(query=user_query, debug_mode=valves.debug_mode)
+    if valves.debug_mode:
+        debug_log.append(f"🧠 Sufficiency Analyzer initialized for query: {user_query[:100]}...")
+        debug_log.append(f"   Identified components: {list(analyzer.components.keys())}")
+
+    # Instantiate Convergence Detector
+    convergence_detector = ConvergenceDetector(debug_mode=valves.debug_mode)
+    if valves.debug_mode:
+        debug_log.append(f"🧠 Convergence Detector initialized.")
 
     # Initialize Query Complexity Classifier and Classify Query
     query_classifier = QueryComplexityClassifier(debug_mode=valves.debug_mode)
@@ -1207,19 +1521,61 @@ async def _execute_minions_protocol(
                     duplicate_findings_count_this_round=current_round_duplicate_findings,
                     redundancy_percentage_this_round=redundancy_percentage_this_round,
                     total_unique_findings_count=len(global_unique_fingerprints_seen)
+                    # Sufficiency fields will be added below
                 )
-                all_round_metrics.append(round_metric)
+                all_round_metrics.append(round_metric) # Add before sufficiency update
 
-                # Format and append metrics summary (now includes redundancy)
+                # --> Sufficiency Analysis <--
+                metric_to_update = round_metric # This is the one we just added
+                if valves.debug_mode:
+                    debug_log.append(f"   [Debug] Updating Sufficiency Analyzer with scratchpad content for round {current_round + 1}...")
+
+                analyzer.update_components(text_to_analyze=scratchpad_content, round_avg_confidence=metric_to_update.avg_confidence_score)
+                sufficiency_details = analyzer.get_analysis_details()
+
+                metric_to_update.sufficiency_score = sufficiency_details["sufficiency_score"]
+                metric_to_update.component_coverage_percentage = sufficiency_details["component_coverage_percentage"]
+                metric_to_update.information_components = sufficiency_details["information_components_status"]
+
+                if valves.debug_mode:
+                    debug_log.append(f"   [Debug] Sufficiency for round {current_round + 1}: Score={metric_to_update.sufficiency_score:.2f}, Coverage={metric_to_update.component_coverage_percentage:.2f}")
+                    debug_log.append(f"   [Debug] Component Status: {metric_to_update.information_components}")
+
+                # Format and append metrics summary (now includes redundancy AND sufficiency)
+                # --> Convergence Detection Calculations (after sufficiency is updated) <--
+                if metric_to_update: # Ensure we have the current round's metric object
+                    previous_round_metric_obj = all_round_metrics[-2] if len(all_round_metrics) > 1 else None
+
+                    convergence_calcs = convergence_detector.calculate_round_convergence_metrics(
+                        current_round_metric=metric_to_update,
+                        previous_round_metric=previous_round_metric_obj
+                    )
+
+                    metric_to_update.information_gain_rate = convergence_calcs.get("information_gain_rate", 0.0)
+                    metric_to_update.novel_findings_percentage_this_round = convergence_calcs.get("novel_findings_percentage_this_round", 0.0)
+                    metric_to_update.task_failure_rate_trend = convergence_calcs.get("task_failure_rate_trend", "N/A")
+                    metric_to_update.predicted_value_of_next_round = convergence_calcs.get("predicted_value_of_next_round", "N/A")
+                    # convergence_detected_this_round is set by check_for_convergence below
+
+                    if valves.debug_mode:
+                        debug_log.append(f"   [Debug] Convergence Detector calculated for round {metric_to_update.round_number}: InfoGain={metric_to_update.information_gain_rate:.0f}, Novelty={metric_to_update.novel_findings_percentage_this_round:.2%}, FailTrend={metric_to_update.task_failure_rate_trend}, NextRoundValue={metric_to_update.predicted_value_of_next_round}")
+
+                # Format and append metrics summary (now includes redundancy, sufficiency, AND convergence calcs)
+                component_status_summary = {k: ('Met' if v else 'Not Met') for k,v in metric_to_update.information_components.items()}
                 metrics_summary = (
-                    f"**📊 Round {round_metric.round_number} Metrics:**\n"
-                    f"  - Tasks Executed: {round_metric.tasks_executed}, Success Rate: {round_metric.success_rate:.2%}\n"
-                    f"  - Task Counts (S/F): {round_metric.task_success_count}/{round_metric.task_failure_count}\n"
-                    f"  - Findings (New/Dup): {round_metric.new_findings_count_this_round}/{round_metric.duplicate_findings_count_this_round}, Total Unique: {round_metric.total_unique_findings_count}\n"
-                    f"  - Redundancy This Round: {round_metric.redundancy_percentage_this_round:.1f}%\n"
-                    f"  - Avg Confidence: {round_metric.avg_confidence_score:.2f} ({round_metric.confidence_trend})\n"
-                    f"  - Confidence Dist (H/M/L): {round_metric.confidence_distribution.get('HIGH',0)}/{round_metric.confidence_distribution.get('MEDIUM',0)}/{round_metric.confidence_distribution.get('LOW',0)}\n"
-                    f"  - Round Time: {round_metric.execution_time_ms:.0f} ms, Avg Chunk Time: {round_metric.avg_chunk_processing_time_ms:.0f} ms"
+                    f"**📊 Round {metric_to_update.round_number} Metrics:**\n"
+                    f"  - Tasks Executed: {metric_to_update.tasks_executed}, Success Rate: {metric_to_update.success_rate:.2%}\n"
+                    f"  - Task Counts (S/F): {metric_to_update.task_success_count}/{metric_to_update.task_failure_count}\n"
+                    f"  - Findings (New/Dup): {metric_to_update.new_findings_count_this_round}/{metric_to_update.duplicate_findings_count_this_round}, Total Unique: {metric_to_update.total_unique_findings_count}\n"
+                    f"  - Redundancy This Round: {metric_to_update.redundancy_percentage_this_round:.1f}%\n"
+                    f"  - Avg Confidence: {metric_to_update.avg_confidence_score:.2f} ({metric_to_update.confidence_trend})\n"
+                    f"  - Confidence Dist (H/M/L): {metric_to_update.confidence_distribution.get('HIGH',0)}/{metric_to_update.confidence_distribution.get('MEDIUM',0)}/{metric_to_update.confidence_distribution.get('LOW',0)}\n"
+                    f"  - Sufficiency Score: {metric_to_update.sufficiency_score:.2f}, Info Coverage: {metric_to_update.component_coverage_percentage:.2%}\n"
+                    f"  - Components Status: {component_status_summary}\n"
+                    f"  - Info Gain Rate: {metric_to_update.information_gain_rate:.0f}, Novelty This Round: {metric_to_update.novel_findings_percentage_this_round:.1%}\n"
+                    f"  - Task Fail Trend: {metric_to_update.task_failure_rate_trend}, Predicted Next Round Value: {metric_to_update.predicted_value_of_next_round}\n"
+                    f"  - Converged This Round: {'Yes' if metric_to_update.convergence_detected_this_round else 'No'}\n" # Will be updated by convergence check later
+                    f"  - Round Time: {metric_to_update.execution_time_ms:.0f} ms, Avg Chunk Time: {metric_to_update.avg_chunk_processing_time_ms:.0f} ms"
                 )
                 scratchpad_content += f"\n\n{metrics_summary}"
                 if valves.show_conversation:
@@ -1261,7 +1617,79 @@ async def _execute_minions_protocol(
         all_round_results_aggregated.extend(current_round_task_results)
         total_chunk_processing_timeouts_accumulated += round_chunk_timeouts
 
-        # Early Stopping Logic
+        # Placeholder for Sufficiency-Based Stopping Logic (Debug)
+        # This is checked *before* other early stopping conditions like confidence thresholds.
+        # The 'metric_to_update' variable should be the most up-to-date version of the current round's metrics.
+        # It now includes sufficiency and initial convergence calculation fields.
+        if valves.debug_mode and 'metric_to_update' in locals() and metric_to_update:
+            # Placeholder Debug for Sufficiency (already exists)
+            hypothetical_sufficiency_threshold = 0.75
+            if metric_to_update.sufficiency_score >= hypothetical_sufficiency_threshold:
+                debug_log.append(
+                    f"   [Debug Placeholder] Sufficiency score {metric_to_update.sufficiency_score:.2f} >= "
+                    f"{hypothetical_sufficiency_threshold}. "
+                    f"IF sufficiency-only stopping logic active, would consider stopping here."
+                )
+            else:
+                debug_log.append(
+                    f"   [Debug Placeholder] Sufficiency score {metric_to_update.sufficiency_score:.2f} < "
+                    f"{hypothetical_sufficiency_threshold}. "
+                    f"Would continue based on this sufficiency-only placeholder."
+                )
+
+        # --> Convergence Check (for early stopping) <--
+        # This comes before the original early stopping logic. If convergence is met, we stop.
+        if 'metric_to_update' in locals() and metric_to_update and valves.enable_early_stopping: # Ensure metric_to_update exists
+            converged, convergence_reason = convergence_detector.check_for_convergence(
+                current_round_metric=metric_to_update,
+                sufficiency_score=metric_to_update.sufficiency_score,
+                total_rounds_executed=current_round + 1,
+                valves=valves,
+                all_round_metrics=all_round_metrics
+            )
+            if converged:
+                metric_to_update.convergence_detected_this_round = True # Update the metric
+                # Update the metrics_summary in scratchpad and conversation_log one last time with Converged=Yes
+                # This is a bit repetitive but ensures the log reflects the final state that caused the stop.
+                component_status_summary = {k: ('Met' if v else 'Not Met') for k,v in metric_to_update.information_components.items()}
+                updated_metrics_summary_for_convergence_stop = (
+                    f"**📊 Round {metric_to_update.round_number} Metrics (Final Update Before Convergence Stop):**\n"
+                    f"  - Tasks Executed: {metric_to_update.tasks_executed}, Success Rate: {metric_to_update.success_rate:.2%}\n"
+                    f"  - Task Counts (S/F): {metric_to_update.task_success_count}/{metric_to_update.task_failure_count}\n"
+                    f"  - Findings (New/Dup): {metric_to_update.new_findings_count_this_round}/{metric_to_update.duplicate_findings_count_this_round}, Total Unique: {metric_to_update.total_unique_findings_count}\n"
+                    f"  - Redundancy This Round: {metric_to_update.redundancy_percentage_this_round:.1f}%\n"
+                    f"  - Avg Confidence: {metric_to_update.avg_confidence_score:.2f} ({metric_to_update.confidence_trend})\n"
+                    f"  - Confidence Dist (H/M/L): {metric_to_update.confidence_distribution.get('HIGH',0)}/{metric_to_update.confidence_distribution.get('MEDIUM',0)}/{metric_to_update.confidence_distribution.get('LOW',0)}\n"
+                    f"  - Sufficiency Score: {metric_to_update.sufficiency_score:.2f}, Info Coverage: {metric_to_update.component_coverage_percentage:.2%}\n"
+                    f"  - Components Status: {component_status_summary}\n"
+                    f"  - Info Gain Rate: {metric_to_update.information_gain_rate:.0f}, Novelty This Round: {metric_to_update.novel_findings_percentage_this_round:.1%}\n"
+                    f"  - Task Fail Trend: {metric_to_update.task_failure_rate_trend}, Predicted Next Round Value: {metric_to_update.predicted_value_of_next_round}\n"
+                    f"  - Converged This Round: {'Yes' if metric_to_update.convergence_detected_this_round else 'No'}\n"
+                    f"  - Round Time: {metric_to_update.execution_time_ms:.0f} ms, Avg Chunk Time: {metric_to_update.avg_chunk_processing_time_ms:.0f} ms"
+                )
+                scratchpad_content += f"\n\n{updated_metrics_summary_for_convergence_stop}" # Append the final metrics to scratchpad
+                if valves.show_conversation: # Replace the last metrics log with the fully updated one
+                    if conversation_log and conversation_log[-1].startswith("**📊 Round"): conversation_log[-1] = updated_metrics_summary_for_convergence_stop
+                    else: conversation_log.append(updated_metrics_summary_for_convergence_stop)
+
+                early_stopping_reason_for_output = convergence_reason
+                if valves.show_conversation:
+                    conversation_log.append(f"**⚠️ Early Stopping Triggered (Convergence):** {convergence_reason}")
+                if valves.debug_mode:
+                    debug_log.append(f"**⚠️ Early Stopping Triggered (Convergence):** {convergence_reason} (Debug Mode)")
+                scratchpad_content += f"\n\n**EARLY STOPPING (Convergence Round {current_round + 1}):** {convergence_reason}"
+                if valves.debug_mode:
+                     debug_log.append(f"**🏁 Breaking loop due to convergence in Round {current_round + 1}. (Debug Mode)**")
+                break # Exit the round loop
+
+        # Original Early Stopping Logic (Confidence-based)
+        # This will only be reached if convergence was NOT met and we didn't break above.
+        # Note: 'round_metric' is the original metric object from raw_metrics_data,
+        # 'metric_to_update' is the same object, but after being updated with sufficiency.
+        # So, using 'metric_to_update' here for consistency if we were to integrate sufficiency into this logic.
+        # However, the current early stopping is based on avg_confidence_score which is set before sufficiency.
+        # For now, we keep `round_metric` for the existing logic as it was originally.
+        # If sufficiency were to be a primary driver for early stopping, this would need refactoring.
         if valves.enable_early_stopping and round_metric: # Ensure round_metric exists
             stop_early = False
             stopping_reason = ""
