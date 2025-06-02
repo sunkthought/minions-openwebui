@@ -32,7 +32,15 @@ class IntelligentQueryReformulator:
 
         ambiguity_score = query_metadata.get('ambiguity_score', 0.0)
         decomposability_score = query_metadata.get('decomposability_score', 0.0) # Assuming this is present
-        query_type = query_metadata.get('query_type', {}).get('value', 'UNKNOWN') # Access .value if QueryType is an Enum
+        
+        query_type_obj = query_metadata.get('query_type')
+        if hasattr(query_type_obj, 'value'): # Check if it's an enum instance with a .value attribute
+            query_type = query_type_obj.value
+        elif isinstance(query_type_obj, str): # If it's already a string (e.g. from a deserialized dict)
+            query_type = query_type_obj
+        else: # Fallback for unexpected types or if it's missing
+            query_type = 'UNKNOWN'
+        self._log_debug(f"Determined query_type for strategy selection: {query_type}")
 
         # Access new valves for thresholds
         min_ambiguity_threshold = getattr(self.valves, 'min_ambiguity_for_intelligent_reformulation', 0.5)
