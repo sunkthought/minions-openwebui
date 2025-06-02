@@ -1,4 +1,5 @@
-from typing import List, Callable, Any, Dict # Added Dict
+# Partials File: partials/minions_decomposition_logic.py
+from typing import List, Callable, Any, Dict, Awaitable, Tuple # Added Dict, Awaitable, Tuple
 import asyncio # Added asyncio as call_claude_func is async
 
 # This helper will be based on the current parse_tasks from minions_protocol_logic.py

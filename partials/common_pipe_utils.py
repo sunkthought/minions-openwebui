@@ -1,3 +1,6 @@
+# Partials File: partials/common_pipe_utils.py
+from typing import List, Dict, Any # Added for type hints
+
 class PipeBase:
     def __init__(self, name: str = "Base Pipe", id: str = "base-pipe"):
         """Base constructor for Pipe classes."""

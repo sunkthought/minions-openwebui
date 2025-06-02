@@ -1,3 +1,6 @@
+# Partials File: partials/common_context_utils.py
+from typing import List, Dict, Any # Added for type hints used in functions
+
 def extract_context_from_messages(messages: List[Dict[str, Any]]) -> str:
     """Extract context from conversation history"""
     context_parts = []

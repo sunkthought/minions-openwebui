@@ -1,3 +1,4 @@
+# Partials File: partials/minion_protocol_logic.py
 import asyncio
 import json
 from typing import List, Dict, Any, Tuple, Callable
@@ -6,10 +7,10 @@ def _calculate_token_savings(conversation_history: List[Tuple[str, str]], contex
     """Calculate token savings for the Minion protocol"""
     chars_per_token = 3.5
     
-    # Traditional approach: entire context + query sent to Claude
+    # Traditional approach: entire context + query sent to remote model
     traditional_tokens = int((len(context) + len(query)) / chars_per_token)
     
-    # Minion approach: only conversation messages sent to Claude
+    # Minion approach: only conversation messages sent to remote model
     conversation_content = " ".join(
         [msg[1] for msg in conversation_history if msg[0] == "assistant"]
     )
@@ -27,9 +28,6 @@ def _calculate_token_savings(conversation_history: List[Tuple[str, str]], contex
         'token_savings': token_savings,
         'percentage_savings': percentage_savings
     }
-
-# _build_conversation_context function definition removed as its logic was moved to minion_prompts.py
-# and it's no longer called directly in this file.
 
 def _is_final_answer(response: str) -> bool:
     """Check if response contains the specific final answer marker."""
@@ -64,7 +62,7 @@ async def _execute_minion_protocol(
     conversation_log = []
     debug_log = []
     conversation_history = []
-    actual_final_answer = "No final answer was explicitly provided by Claude."
+    actual_final_answer = "No final answer was explicitly provided by the remote model."
     claude_declared_final = False
 
     overall_start_time = 0
@@ -76,7 +74,7 @@ async def _execute_minion_protocol(
         debug_log.append(f"  - Max rounds: {valves.max_rounds}")
         debug_log.append(f"  - Remote model: {valves.remote_model}")
         debug_log.append(f"  - Local model: {valves.local_model}")
-        debug_log.append(f"  - Timeouts: Claude={valves.timeout_claude}s, Local={valves.timeout_local}s")
+        debug_log.append(f"  - Timeouts: Remote={valves.timeout_claude}s, Local={valves.timeout_local}s")
         debug_log.append(f"**⏱️ Overall process started. (Debug Mode)**\n")
 
     for round_num in range(valves.max_rounds):
@@ -126,30 +124,30 @@ Respond with "FINAL ANSWER READY." followed by your synthesized answer. Do NOT a
             if valves.debug_mode:
                 end_time_claude = asyncio.get_event_loop().time()
                 time_taken_claude = end_time_claude - start_time_claude
-                debug_log.append(f"  ⏱️ Claude call in round {round_num + 1} took {time_taken_claude:.2f}s. (Debug Mode)")
+                debug_log.append(f"  ⏱️ Remote model call in round {round_num + 1} took {time_taken_claude:.2f}s. (Debug Mode)")
         except Exception as e:
-            error_message = f"❌ Error calling Claude in round {round_num + 1}: {e}"
+            error_message = f"❌ Error calling the remote model in round {round_num + 1}: {e}"
             conversation_log.append(error_message)
             if valves.debug_mode: 
                 debug_log.append(f"  {error_message} (Debug Mode)")
-            actual_final_answer = "Minion protocol failed due to Claude API error."
+            actual_final_answer = "Minion protocol failed due to remote API error."
             break
 
         conversation_history.append(("assistant", claude_response))
         if valves.show_conversation:
-            conversation_log.append(f"**🤖 Claude ({valves.remote_model}):**")
+            conversation_log.append(f"**🤖 Remote Model ({valves.remote_model}):**")
             conversation_log.append(f"{claude_response}\n")
 
         if _is_final_answer(claude_response):
             actual_final_answer = claude_response.split("FINAL ANSWER READY.", 1)[1].strip()
             claude_declared_final = True
             if valves.show_conversation:
-                conversation_log.append(f"✅ **Claude indicates FINAL ANSWER READY.**\n")
+                conversation_log.append(f"✅ **The remote model indicates FINAL ANSWER READY.**\n")
             if valves.debug_mode:
-                debug_log.append(f"  🏁 Claude declared FINAL ANSWER READY in round {round_num + 1}. (Debug Mode)")
+                debug_log.append(f"  🏁 The remote model declared FINAL ANSWER READY in round {round_num + 1}. (Debug Mode)")
             break
 
-        # Skip local model call if this was the last round and Claude provided final answer
+        # Skip local model call if this was the last round and the remote model provided final answer
         if round_num == valves.max_rounds - 1:
             continue
 
@@ -208,10 +206,10 @@ Respond with "FINAL ANSWER READY." followed by your synthesized answer. Do NOT a
     
     if not claude_declared_final and conversation_history:
         # This shouldn't happen with the fix above, but keep as fallback
-        last_claude_msg = conversation_history[-1][1] if conversation_history[-1][0] == "assistant" else (conversation_history[-2][1] if len(conversation_history) > 1 and conversation_history[-2][0] == "assistant" else "No suitable final message from Claude found.")
-        actual_final_answer = f"Protocol ended without explicit final answer. Claude's last response was: \"{last_claude_msg}\""
+        last_remote_msg = conversation_history[-1][1] if conversation_history[-1][0] == "assistant" else (conversation_history[-2][1] if len(conversation_history) > 1 and conversation_history[-2][0] == "assistant" else "No suitable final message from the remote model found.")
+        actual_final_answer = f"Protocol ended without explicit final answer. The remote model's last response was: \"{last_remote_msg}\""
         if valves.show_conversation:
-            conversation_log.append(f"⚠️ Protocol ended without Claude providing a final answer.\n")
+            conversation_log.append(f"⚠️ Protocol ended without the remote model providing a final answer.\n")
 
     if valves.debug_mode:
         total_execution_time = asyncio.get_event_loop().time() - overall_start_time

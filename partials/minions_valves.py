@@ -1,3 +1,4 @@
+# Partials File: partials/minions_valves.py
 from pydantic import BaseModel, Field
 
 class MinionsValves(BaseModel):
@@ -8,7 +9,7 @@ class MinionsValves(BaseModel):
     extraction instructions, expected output format, and confidence threshold.
     """
     anthropic_api_key: str = Field(
-        default="", description="Anthropic API key for Claude."
+        default="", description="Anthropic API key for the remote model (e.g., Claude)."
     )
     remote_model: str = Field(
         default="claude-3-5-haiku-20241022",
@@ -47,11 +48,11 @@ class MinionsValves(BaseModel):
         default=50, 
         description="If this percentage of local model calls (chunk executions) in a round time out, a warning is issued. This suggests results for that round might be incomplete."
     )
-    max_tokens_claude: int = Field( # Renamed from max_tokens_claude for consistency if used generally
-        default=2000, description="Maximum tokens for remote model (Claude) API calls during decomposition and synthesis."
+    max_tokens_claude: int = Field(
+        default=2000, description="Maximum tokens for remote model API calls during decomposition and synthesis."
     )
-    timeout_claude: int = Field( # Renamed from timeout_claude for consistency
-        default=60, description="Timeout in seconds for remote model (Claude) API calls."
+    timeout_claude: int = Field(
+        default=60, description="Timeout in seconds for remote model API calls."
     )
     ollama_num_predict: int = Field(
         default=1000, description="Maximum tokens (num_predict) for local Ollama model responses during task execution."

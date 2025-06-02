@@ -1,14 +1,25 @@
+# Partials File: partials/minion_sufficiency_analyzer.py
 import re
 from typing import Dict, List, Tuple, Any
 
 class InformationSufficiencyAnalyzer:
+    """
+    Analyzes text to determine if it sufficiently addresses components of an initial query.
+    """
     def __init__(self, query: str, debug_mode: bool = False):
+        """
+        Initializes the analyzer with the user's query and debug mode.
+        """
         self.query = query
         self.debug_mode = debug_mode
         self.components: Dict[str, Dict[str, Any]] = {} # Stores {component_name: {"keywords": [...], "is_addressed": False, "confidence": 0.0}}
         self._identify_components()
 
     def _identify_components(self):
+        """
+        Identifies key components or topics from the user's query.
+        Uses heuristics like quoted phrases, capitalized words, and generic fallbacks.
+        """
         # Basic keyword extraction. This is a simple heuristic and can be expanded.
         # It looks for Nouns, Proper Nouns, and Adjectives, trying to form simple topics.
         # Example: "Compare the budget and timeline for Project Alpha and Project Beta"
@@ -81,6 +92,10 @@ class InformationSufficiencyAnalyzer:
             print(f"DEBUG [SufficiencyAnalyzer]: Identified components: {list(self.components.keys())}")
 
     def update_components(self, text_to_analyze: str, round_avg_confidence: float):
+        """
+        Updates the status of query components based on the provided text and confidence.
+        Marks components as addressed if their keywords are found in the text.
+        """
         # In this version, we'll use round_avg_confidence as a proxy for the confidence
         # of the information that might address a component.
         # A more advanced version could try to link specific task confidences.
@@ -104,6 +119,10 @@ class InformationSufficiencyAnalyzer:
                 # For this iteration, such components might remain unaddressed unless their names/generic keywords appear.
 
     def calculate_sufficiency_score(self) -> Tuple[float, float, Dict[str, bool]]:
+        """
+        Calculates the overall sufficiency score based on component coverage and confidence.
+        Returns score, coverage percentage, and status of each component.
+        """
         if not self.components:
             return 0.0, 0.0, {}
 
@@ -133,6 +152,9 @@ class InformationSufficiencyAnalyzer:
         return sufficiency_score, component_coverage_percentage, component_status_for_metrics
 
     def get_analysis_details(self) -> Dict[str, Any]:
+        """
+        Returns a dictionary with the sufficiency score, coverage, and component status.
+        """
         sufficiency_score, component_coverage_percentage, component_status = self.calculate_sufficiency_score()
         return {
             "sufficiency_score": sufficiency_score,

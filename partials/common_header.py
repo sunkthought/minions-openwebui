@@ -1,3 +1,4 @@
+# Partials File: partials/common_header.py
 """
 title: {TITLE}
 author: {AUTHOR}
