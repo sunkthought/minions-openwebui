@@ -286,9 +286,10 @@ async def _execute_minions_protocol(
         if "FINAL ANSWER READY." in claude_response_for_decomposition:
             final_response = claude_response_for_decomposition.split("FINAL ANSWER READY.", 1)[1].strip()
             claude_provided_final_answer = True
-            if valves.show_conversation:
+            early_stopping_reason_for_output = "Claude provided FINAL ANSWER READY." # Explicitly set reason
+            if valves.show_conversation: # This log already exists
                 conversation_log.append(f"**🤖 Claude indicates final answer is ready in round {current_round + 1}.**")
-            scratchpad_content += f"\n\n**Round {current_round + 1}:** Claude provided final answer."
+            scratchpad_content += f"\n\n**Round {current_round + 1}:** Claude provided final answer. Stopping." # Added "Stopping."
             break
 
         if not tasks:

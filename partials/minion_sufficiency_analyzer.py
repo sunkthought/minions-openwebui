@@ -26,11 +26,34 @@ class InformationSufficiencyAnalyzer:
 
         # If no quoted phrases, look for capitalized words/phrases (potential proper nouns or topics)
         if not self.components:
+            common_fillers = [
+                "Here", "The", "This", "That", "There", "It", "Who", "What", "When", "Where", "Why", "How",
+                "Is", "Are", "Was", "Were", "My", "Your", "His", "Her", "Its", "Our", "Their", "An",
+                "As", "At", "But", "By", "For", "From", "In", "Into", "Of", "On", "Or", "Over",
+                "So", "Then", "To", "Under", "Up", "With", "I"
+            ]
+            common_fillers_lower = [f.lower() for f in common_fillers]
+
             # Regex to find sequences of capitalized words, possibly including 'and', 'or', 'for', 'the'
-            # Using \b for word boundaries to ensure whole words are matched
             potential_topics = re.findall(r'\b[A-Z][a-zA-Z]*(?:\s+(?:and|or|for|the|[A-Z][a-zA-Z]*))*\b', self.query)
-            # Filter out very short capitalized words unless they are acronyms
-            topics = [pt for pt in potential_topics if len(pt) > 2 or pt.isupper()]
+
+            topics = []
+            for pt in potential_topics:
+                is_multi_word = ' ' in pt
+                # A single word is a common filler if its lowercased version is in common_fillers_lower
+                is_common_filler_single_word = not is_multi_word and pt.lower() in common_fillers_lower
+                # A single word is significant if it's an acronym (all upper) or longer than 3 chars
+                is_significant_single_word = not is_multi_word and (pt.isupper() or len(pt) > 3)
+
+                if is_multi_word: # Always include multi-word capitalized phrases
+                    topics.append(pt)
+                elif is_significant_single_word and not is_common_filler_single_word:
+                    # Include significant single words only if they are NOT common fillers
+                    topics.append(pt)
+
+            if self.debug_mode and potential_topics:
+                 print(f"DEBUG [SufficiencyAnalyzer]: Potential capitalized topics found: {potential_topics}")
+                 print(f"DEBUG [SufficiencyAnalyzer]: Filtered topics after common word/length check: {topics}")
 
             for topic in topics:
                 # Avoid adding overlapping sub-phrases if a larger phrase is already a component
