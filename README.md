@@ -8,7 +8,7 @@ MinionS (and its predecessor, Minion) is a protocol designed by HazyResearch to 
 
 Key concepts include:
 
-*   **Task Decomposition (MinionS)**: A complex user query is broken down into smaller, manageable sub-tasks by a capable remote "supervisor" model.
+*   **Task Decomposition (MinionS)**: A complex user query is broken down into smaller, manageable sub-tasks by a capable remote "supervisor" model. **Version 0.3.0+** now features advanced code-based task decomposition, where the supervisor generates Python code to dynamically create tasks based on document structure.
 *   **Specialized Roles**: Different models take on specific roles. In this implementation:
     *   A remote "supervisor" model (e.g., Claude) decomposes tasks (MinionS) or guides the conversation (Minion), and synthesizes final answers.
     *   Local "worker" models (e.g., Ollama-based models) execute specific sub-tasks on portions of data (MinionS) or provide information from the full context (Minion).
@@ -21,6 +21,39 @@ This approach aims to improve efficiency, reduce costs, and enhance AI capabilit
 **Learn More:**
 *   **Original Research Paper**: [MinionS: A Protocol for Scalable and Cost-Effective AI Collaboration (PDF)](https://arxiv.org/pdf/2502.15964)
 *   **HazyResearch GitHub Repository**: [github.com/HazyResearch/minions](https://github.com/HazyResearch/minions)
+
+## Version History
+
+### v0.3.3 - Adaptive Round Management
+- **Smart iteration control**: The system now dynamically adjusts the number of rounds based on task complexity and progress
+- **Early termination logic**: Automatically stops when sufficient information is gathered, saving costs
+- **Improved efficiency**: Reduces unnecessary API calls while maintaining answer quality
+
+### v0.3.2 - Custom Prompts
+- **User-defined prompts**: Added support for custom task instructions and synthesis prompts
+- **Enhanced flexibility**: Users can now fine-tune how the supervisor decomposes tasks and synthesizes results
+- **Better domain adaptation**: Custom prompts allow optimization for specific document types or query patterns
+
+### v0.3.1 - Task-Specific Instructions and Advanced Prompts
+- **Context-aware task generation**: Tasks now include specific instructions based on document content
+- **Improved local model guidance**: Better prompting strategies for local models to extract relevant information
+- **Enhanced accuracy**: More precise task execution leads to better overall results
+
+### v0.3.0 - Code-Based Task Decomposition
+- **Dynamic task generation**: The supervisor now generates Python code to create tasks programmatically
+- **Document-aware decomposition**: Tasks are created based on actual document structure and content
+- **Scalable approach**: Can handle documents of varying sizes and structures more effectively
+- **Improved Minion protocol**: Enhanced conversation flow and better final answer detection
+
+### v0.2.1 - Refactored Architecture
+- **Modular design**: Separated concerns into dedicated partials for better maintainability
+- **Enhanced error handling**: Improved timeout management and error recovery
+- **Better token savings calculation**: More accurate cost estimation
+
+### v0.2.0 - Initial Release
+- Basic Minion and MinionS protocol implementation
+- Support for Claude and Ollama integration
+- Token savings analysis
 
 ## Minion/MinionS for Open WebUI
 
@@ -54,34 +87,50 @@ docker run -d -p 3000:8080 --add-host=host.docker.internal:host-gateway -v open-
 ### 2. Add Minion/MinionS Function to Open WebUI
 
 Once Open WebUI is running:
-1.  Navigate to **Settings** (usually a gear icon in the sidebar).
-2.  Under the "Admin" section, click on **Functions**.
-3.  Click the **+ Add Function** button.
-4.  **Set a Title**: Give your function a descriptive name, for example:
-    *   `Minion Protocol - Claude/Ollama`
-    *   `MinionS Protocol - Claude/Ollama`
-5.  **Paste Function Code**:
+1.  Navigate to **Workspace** > **Functions**.
+2.  Click the **Import Functions** button.
+3.  **Paste Function Code**:
     *   In this repository (`SunkThought/minions-openwebui`), navigate to the `generated_functions/` directory.
     *   Open the desired default function file:
         *   For the Minion protocol: `minion_default_function.py`
         *   For the MinionS protocol: `minions_default_function.py`
     *   Copy the **entire content** of this file.
-    *   Paste it into the large text area labeled "Function Code" in Open WebUI.
-6.  Click **Save** (or "Create Function").
+    *   Paste it into the import dialog in Open WebUI.
+4.  Click **Import** to add the function.
 
 ### 3. Configure Function Valves
 
-"Valves" are the settings you can adjust for the Minion/MinionS function each time you use it in Open WebUI. After adding the function and selecting it for a model, these settings will appear in the right-hand panel under "Function Calling" > "Valves".
+"Valves" are the settings you can adjust for the Minion/MinionS function. After importing the function, you can configure these settings in the Function editor or when enabling the function for a model.
 
 Key valves to configure:
 
+#### Essential Settings
 *   `anthropic_api_key`: **Required**. Your API key for Anthropic Claude.
-*   `remote_model`: The Claude model you wish to use (e.g., `claude-3-5-sonnet-20240620`, `claude-3-haiku-20240307`).
+*   `remote_model`: The Claude model you wish to use (e.g., `claude-3-5-haiku-20241022` for cost efficiency, `claude-3-5-sonnet-20241022` for quality).
 *   `ollama_base_url`: The base URL of your Ollama server. Default is `http://localhost:11434`.
-*   `local_model`: The name of the local Ollama model you want to use (e.g., `llama3.1`, `mistral`). Ensure this model is available in your Ollama instance (e.g., via `ollama pull llama3.1`).
-*   `max_rounds` (Minion/MinionS): Maximum number of conversation rounds (Minion) or decomposition/execution rounds (MinionS).
-*   `show_conversation` (Minion/MinionS): Set to `true` to see the detailed interaction log between models in the output, or `false` to only see the final answer. This is very useful for debugging and understanding the process.
-*   `timeout_local`, `timeout_claude`: Timeouts in seconds for API calls to the local and remote models, respectively.
+*   `local_model`: The name of the local Ollama model you want to use (e.g., `llama3.2`, `mistral`). Ensure this model is available in your Ollama instance (e.g., via `ollama pull llama3.2`).
+
+#### Protocol Settings (Minion)
+*   `max_rounds`: Maximum conversation rounds between models (default: 2).
+*   `show_conversation`: Show detailed interaction log (default: true).
+*   `timeout_local`: Timeout for local model calls in seconds (default: 60).
+*   `timeout_claude`: Timeout for Claude API calls in seconds (default: 60).
+*   `max_tokens_claude`: Maximum tokens for Claude's responses (default: 4000).
+*   `use_structured_output`: Enable JSON structured output for local model responses (default: false).
+
+#### Protocol Settings (MinionS)
+*   `max_rounds`: Maximum task decomposition rounds (default: 2).
+*   `max_tasks_per_round`: Maximum sub-tasks per round (default: 3).
+*   `chunk_size`: Maximum chunk size in characters (default: 5000).
+*   `max_chunks`: Maximum chunks to process per task (default: 2).
+*   `show_conversation`: Show full task decomposition and execution details (default: true).
+*   `timeout_local`: Timeout for each local model call in seconds (default: 30).
+*   `max_round_timeout_failure_threshold_percent`: Warning threshold for timeouts (default: 50).
+*   `use_structured_output`: Enable JSON structured output (default: false).
+
+#### Advanced Settings
+*   `debug_mode`: Enable verbose logging and technical details (default: false).
+*   `ollama_num_predict`: Maximum output tokens for local model (default: 1000).
 
 **⚠️ Important: `ollama_base_url` for Docker Users**
 
@@ -93,16 +142,27 @@ If you are running Open WebUI in a Docker container (which is common) and your O
     *   **Ollama in Docker**: If Ollama is also running as a Docker container, ensure both Open WebUI and Ollama containers are on the same custom Docker network. You can then use the Ollama container's name as the hostname (e.g., `http://ollama:11434`, assuming your Ollama container is named `ollama`).
 *   Refer to Docker networking documentation or Open WebUI's troubleshooting guides for more comprehensive help.
 
-### 4. Run the Function in Open WebUI
+### 4. Enable the Function for a Model
 
-1.  Start or select a chat in Open WebUI.
-2.  In the chat settings (often accessible via a model selection dropdown or a settings icon near the model name):
-    *   Choose a model that will act as the "entry point" or "main model" for the chat. This model's own capabilities are less important when a function is active, as the function dictates the primary logic.
-    *   Enable **Function calling**.
-    *   From the dropdown list of available functions, select the Minion or MinionS function you added (e.g., "Minion Protocol - Claude/Ollama").
-3.  Once the function is selected, its configurable **Valves** should appear in the UI (typically in the right-hand panel). Adjust them as needed (e.g., paste your API key, verify model names).
-4.  Type your query in the chat input. If you are providing context (like a document paste), do so along with your query. If you have uploaded files, the function will attempt to use them if you reference them or if your query implies their use.
-5.  Send the message. The Minion/MinionS protocol will execute, and you should see the results in the chat. If `show_conversation` is true, you'll see a detailed log; otherwise, just the final answer.
+1.  Navigate to **Workspace** > **Models**.
+2.  Select the model you want to use with Minion/MinionS.
+3.  Click the pencil icon to edit the model.
+4.  Scroll down to the **Functions** section.
+5.  Check the box next to the Minion or MinionS function you imported.
+6.  Click **Save**.
+
+### 5. Use the Function in a Chat
+
+1.  Start a new chat or select an existing one.
+2.  Select the model you configured with the Minion/MinionS function.
+3.  The function will automatically activate when you provide context (documents, long text) along with your query.
+4.  Type your query and send the message. The Minion/MinionS protocol will execute, and you should see the results in the chat.
+
+**Tips for best results:**
+- Provide clear context by pasting documents or uploading files
+- Ask specific questions about the provided context
+- Use `show_conversation` valve to see the detailed collaboration process
+- Adjust timeout settings if you're working with particularly long documents
 
 ## Choosing Your Minion: Minion vs. MinionS
 
@@ -125,14 +185,15 @@ Both Minion and MinionS are designed for collaborative AI, but they employ diffe
 ### MinionS Protocol: Parallel Task Decomposer & Synthesizer
 
 *   **Approach**: The MinionS (Minion Supervisor) protocol takes a more structured, multi-step approach, particularly useful for complex queries over large contexts:
-    1.  **Decomposition**: The remote supervisor model (e.g., Claude) first analyzes the user's query and the overall context. It then breaks down the main query into several smaller, independent sub-tasks.
-    2.  **Chunking & Task Execution**: The provided context is divided into smaller chunks. Each sub-task is then typically executed by local models (e.g., Ollama models) on each relevant chunk of the document. This step gathers information related to each sub-task from across the document.
-    3.  **Aggregation & Synthesis**: The results from all sub-tasks across all chunks are collected. This aggregated information is then sent back to the remote supervisor model, which synthesizes it into a comprehensive final answer to the original query. The supervisor might also initiate further rounds of decomposition and execution if the initial results are insufficient.
+    1.  **Code-Based Decomposition (v0.3.0+)**: The remote supervisor model analyzes the query and generates Python code that dynamically creates sub-tasks based on document structure.
+    2.  **Chunking & Task Execution**: The provided context is divided into smaller chunks. Each sub-task is then executed by local models on relevant chunks of the document.
+    3.  **Aggregation & Synthesis**: The results from all sub-tasks across all chunks are collected. This aggregated information is then sent back to the remote supervisor model, which synthesizes it into a comprehensive final answer. The supervisor might also initiate further rounds of decomposition and execution if the initial results are insufficient.
 *   **Strengths**:
     *   Excellent for broad analysis of large documents or complex queries that can be broken down into parallelizable sub-parts.
     *   Can be significantly more efficient for tasks that benefit from parallel processing of information across different document segments.
     *   Handles multifaceted queries well (e.g., "Summarize this document, list all key personnel mentioned, and identify potential future risks discussed.").
     *   Reduces the amount of data sent to the expensive remote model by processing chunks locally.
+    *   **v0.3.0+**: Dynamic task generation based on actual document content and structure.
 *   **Best Suited For**:
     *   Comprehensive analysis of one or more large documents where multiple pieces of information need to be found and correlated.
     *   Queries that require identifying and correlating different types of information from various parts of a text (e.g., "Find all mentions of project Alpha, who was involved, and what were the outcomes from each phase described in this report.").
@@ -143,10 +204,12 @@ Both Minion and MinionS are designed for collaborative AI, but they employ diffe
 
 | Feature          | Minion                                     | MinionS                                            |
 |------------------|--------------------------------------------|----------------------------------------------------|
-| **Primary Method** | Iterative Conversational Q&A             | Task Decomposition, Chunk-based Local Execution, Synthesis |
+| **Primary Method** | Iterative Conversational Q&A             | Code-Based Task Decomposition, Chunk Execution, Synthesis |
 | **Complexity**   | Simpler, direct interaction flow           | More complex, multi-step orchestration             |
 | **Context Handling**| Local model sees full context per query  | Local models see chunks of context per sub-task    |
-| **Best For**     | Focused Q&A, iterative context refinement | Broad analysis, multifaceted queries, large docs   |
+| **Best For**     | Focused Q&A, iterative refinement         | Broad analysis, multifaceted queries, large docs   |
+| **Task Generation** | Natural language questions              | Python code generating dynamic tasks (v0.3.0+)     |
+| **Efficiency**   | Good for specific queries                  | Better for comprehensive analysis                  |
 
 By understanding these differences, you can choose the protocol that best fits the complexity and nature of your task when using these functions in Open WebUI.
 
@@ -226,3 +289,13 @@ Let's say you want a version of the Minion function that uses a slightly differe
     This will create `minion_custom_prompt_function.py` in the `generated_functions/` directory. You can now add this new function to Open WebUI alongside the default one.
 
 This modular approach provides a powerful way to adapt and evolve the Minion/MinionS functions to fit a wide variety of use cases and preferences.
+
+## License
+
+This project is licensed under the MIT License. See the LICENSE file for details.
+
+## Acknowledgments
+
+- The HazyResearch team for creating the original Minion and MinionS protocols
+- The Open WebUI community for providing an excellent platform for AI interactions
+- All contributors who have helped improve this implementation
