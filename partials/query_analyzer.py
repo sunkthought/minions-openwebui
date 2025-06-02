@@ -17,29 +17,16 @@ except ImportError:
     NLP = None
     print("Warning: spaCy not found. Falling back to basic entity extraction for QueryAnalyzer.")
 
-# Import new resolvers and Entity type
-try:
-    from .entity_resolver import EntityResolver, Entity
-    from .reference_resolver import ReferenceResolver
-except ImportError:
-    print("Warning: EntityResolver or ReferenceResolver not found. Query resolution features will be disabled.")
-    # Define dummy classes if import fails, so the rest of the class can be structured
-    class Entity(TypedDict):
-        text: str
-        label: str
-        start_char: int
-        end_char: int
-        source: Optional[str]
-        confidence: Optional[float]
+# EntityResolver, ReferenceResolver, and Entity are expected to be defined
+# in the global scope due to concatenation order specified in generation_config.json.
+# No direct imports or dummy classes needed here for those.
 
-    class EntityResolver:
-        def __init__(self, debug_mode: bool = False): self.debug_mode = debug_mode
-        def resolve_entities_in_query(self, query: str, document_metadata: Optional[List[Dict]] = None, conversation_history: Optional[List[str]] = None) -> Tuple[str, List[Entity]]: return query, []
-        def build_entity_registry(self, context: List[str], document_entities: List[Entity]) -> Dict[str, Entity]: return {}
-
-    class ReferenceResolver:
-        def __init__(self, debug_mode: bool = False): self.debug_mode = debug_mode
-        def resolve_references_in_query(self, query: str, entity_registry: Dict[str, Entity], conversation_history: Optional[List[str]] = None, document_context: Optional[Dict] = None) -> str: return query
+# Note: The `Entity` TypedDict, if it was also part of the try-except ImportError block
+# for `entity_resolver`, would also be assumed to be globally available.
+# If `Entity` was defined outside that block or imported separately, it remains.
+# Based on previous steps, `Entity` was part of the dummy definitions, so its
+# definition here (if any outside a try-except) should also be removed if we expect
+# it from entity_resolver.py. Assuming `Entity` is also globally available.
 
 class QueryType(Enum):
     QUESTION = "question"
@@ -54,8 +41,7 @@ class ScopeIndicator(Enum):
     COMPREHENSIVE = "comprehensive"
     UNKNOWN = "unknown"
 
-# Entity TypedDict is now imported from .entity_resolver
-# If the import fails, a dummy one is created above.
+# Entity TypedDict is expected to be globally available from entity_resolver.py
 
 # New TypedDict for ResolvedEntity
 class ResolvedEntity(TypedDict):
@@ -111,15 +97,11 @@ class QueryAnalyzer:
             self.doc = None
         
         # Initialize resolvers
-        try:
-            self.entity_resolver = EntityResolver(debug_mode=self.debug_mode)
-            self.reference_resolver = ReferenceResolver(debug_mode=self.debug_mode)
-            self._log_debug("EntityResolver and ReferenceResolver initialized.")
-        except NameError: # In case the dummy classes are used due to import failure
-            self.entity_resolver = EntityResolver(debug_mode=self.debug_mode) # type: ignore
-            self.reference_resolver = ReferenceResolver(debug_mode=self.debug_mode) # type: ignore
-            self._log_debug("Using dummy EntityResolver and ReferenceResolver due to import issues.")
-
+        # These classes (EntityResolver, ReferenceResolver) are expected to be in the
+        # global scope when the final script is concatenated.
+        self.entity_resolver = EntityResolver(debug_mode=self.debug_mode) # type: ignore
+        self.reference_resolver = ReferenceResolver(debug_mode=self.debug_mode) # type: ignore
+        self._log_debug("EntityResolver and ReferenceResolver initialized directly.")
 
         # Predefined lists (some might be expanded for ambiguity detection)
         self.action_verbs_keywords = {
