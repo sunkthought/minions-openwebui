@@ -1,3 +1,4 @@
+# Partials File: partials/minion_convergence_detector.py
 from typing import Optional, List, Dict, Any, Tuple
 
 # Attempt to import RoundMetrics and Valves type hints for clarity,
@@ -14,6 +15,7 @@ except ImportError:
 
 class ConvergenceDetector:
     def __init__(self, debug_mode: bool = False):
+        """Initializes the ConvergenceDetector."""
         self.debug_mode = debug_mode
         if self.debug_mode:
             print("DEBUG [ConvergenceDetector]: Initialized.")

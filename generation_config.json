@@ -3,12 +3,12 @@
     "description": "Default Minion function using Claude for conversational collaboration.",
     "output_filename_template": "{profile_name}_function.py",
     "target_pipe_class_name": "Pipe",
-    "target_pipe_name_in_init": "Minion v0.3.4 (Conversational)",
+    "target_pipe_name_in_init": "Minion v0.3.4b (Conversational)",
     "target_pipe_id_in_init": "minion-claude",
     "header_placeholders": {
       "TITLE": "Minion Protocol Integration for Open WebUI",
       "AUTHOR": "Wil Everts and the @SunkThought team",
-      "VERSION": "0.3.4",
+      "VERSION": "0.3.4b",
       "DESCRIPTION": "Basic Minion protocol - conversational collaboration between local and cloud models",
       "REQUIRED_OPEN_WEBUI_VERSION": "0.5.0"
     },
@@ -30,12 +30,12 @@
     "description": "Default MinionS function using Claude for task decomposition.",
     "output_filename_template": "{profile_name}_function.py",
     "target_pipe_class_name": "Pipe",
-    "target_pipe_name_in_init": "MinionS v0.3.4 (Task Decomposition)",
+    "target_pipe_name_in_init": "MinionS v0.3.4b (Task Decomposition)",
     "target_pipe_id_in_init": "minions-claude",
     "header_placeholders": {
       "TITLE": "MinionS Protocol Integration for Open WebUI",
       "AUTHOR": "Wil Everts and the @SunkThought team",
-      "VERSION": "0.3.4",
+      "VERSION": "0.3.4b",
       "DESCRIPTION": "MinionS protocol - task decomposition and parallel processing between local and cloud models",
       "REQUIRED_OPEN_WEBUI_VERSION": "0.5.0"
     },

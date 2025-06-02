@@ -1,3 +1,4 @@
+# Partials File: partials/minions_protocol_logic.py
 import asyncio
 import json
 import hashlib # Import hashlib

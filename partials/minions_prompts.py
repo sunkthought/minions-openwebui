@@ -1,3 +1,4 @@
+# Partials File: partials/minions_prompts.py
 from typing import List, Any, Optional
 
 # This file will store prompt generation functions for the MinionS (multi-turn, multi-task) protocol.

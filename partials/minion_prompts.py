@@ -1,3 +1,4 @@
+# Partials File: partials/minion_prompts.py
 from typing import List, Tuple, Any
 
 # This file will store prompt generation functions for the Minion (single-turn) protocol.
@@ -67,33 +68,30 @@ def get_minion_local_prompt(context: str, query: str, claude_request: str, valve
     Returns the prompt for the local Ollama model in the Minion protocol.
     Moved from _execute_minion_protocol in minion_protocol_logic.py.
     """
-    # 'valves' not strictly needed for this specific prompt's text content from original version
-    # but could be used for schema instructions if valves.use_structured_output was considered here.
-
-    # claude_request is the specific question from Claude to the local model.
     # query is the original user query.
     # context is the document chunk.
+    # claude_request (the parameter) is the specific question from the remote model to the local model.
 
     return f"""You are an AI assistant. You have access to the following DOCUMENT:
 <document>
 {context}
 </document>
 
-Claude (another AI) is asking you a specific question about this document. Claude's question is:
-<claude_question>
+The remote model (another AI) is asking you a specific question about this document. The remote model's question is:
+<remote_model_question>
 {claude_request}
-</claude_question>
+</remote_model_question>
 
-Your task is to answer Claude's question based *only* on the DOCUMENT provided.
+Your task is to answer the remote model's question based *only* on the DOCUMENT provided.
 
 Your response MUST be a single JSON object. Do not include any text, explanations, or markdown formatting (like ```json ... ```) outside of this JSON object.
 
 The JSON object must have the following keys:
 - "explanation": A concise statement of your reasoning or how you concluded your answer.
 - "citation": A direct snippet of the text from the DOCUMENT that supports your answer. If no supporting text is found in the DOCUMENT, this field must be null.
-- "answer": The extracted answer to Claude's question. If the answer cannot be determined from the DOCUMENT, this field must be null.
+- "answer": The extracted answer to the remote model's question. If the answer cannot be determined from the DOCUMENT, this field must be null.
 
-IMPORTANT: If you cannot confidently determine the information from the DOCUMENT to answer Claude's question, ALL THREE fields ("explanation", "citation", "answer") in the JSON object must be null.
+IMPORTANT: If you cannot confidently determine the information from the DOCUMENT to answer the remote model's question, ALL THREE fields ("explanation", "citation", "answer") in the JSON object must be null.
 
 Provide only the JSON object in your response.
 """

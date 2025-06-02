@@ -1,3 +1,4 @@
+# Partials File: partials/minion_valves.py
 from pydantic import BaseModel, Field
 
 class MinionValves(BaseModel):
@@ -9,11 +10,11 @@ class MinionValves(BaseModel):
     """
     # Essential configuration only
     anthropic_api_key: str = Field(
-        default="", description="Anthropic API key for Claude"
+        default="", description="Anthropic API key for the remote model (e.g., Claude)"
     )
     remote_model: str = Field(
         default="claude-3-5-haiku-20241022",
-        description="Claude model (claude-3-5-haiku-20241022 for cost efficiency, claude-3-5-sonnet-20241022 for quality)",
+        description="Remote model identifier (e.g., for Anthropic: claude-3-5-haiku-20241022 for cost efficiency, claude-3-5-sonnet-20241022 for quality)",
     )
     ollama_base_url: str = Field(
         default="http://localhost:11434", description="Ollama server URL"
@@ -34,10 +35,10 @@ class MinionValves(BaseModel):
         description="Timeout for local model calls in seconds. Local model processes full context."
     )
     timeout_claude: int = Field(
-        default=60, description="Timeout for Claude API calls in seconds."
+        default=60, description="Timeout for remote model API calls in seconds."
     )
     max_tokens_claude: int = Field(
-        default=4000, description="Maximum tokens for Claude's responses."
+        default=4000, description="Maximum tokens for remote model's responses."
     )
     ollama_num_predict: int = Field(
         default=1000, 

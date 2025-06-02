@@ -1,3 +1,4 @@
+# Partials File: partials/minions_models.py
 from typing import Optional, Dict # Add Dict
 from pydantic import BaseModel, Field
 
@@ -36,6 +37,9 @@ class TaskResult(BaseModel):
         # }
 
 class RoundMetrics(BaseModel):
+    """
+    Model to store various metrics collected during a single round of the MinionS protocol.
+    """
     round_number: int
     tasks_executed: int
     task_success_count: int

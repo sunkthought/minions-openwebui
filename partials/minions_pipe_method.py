@@ -1,3 +1,4 @@
+# Partials File: partials/minions_pipe_method.py
 import asyncio
 import re # Added re
 from enum import Enum # Ensured Enum is present
@@ -22,7 +23,9 @@ class QueryComplexity(Enum):
     COMPLEX = "COMPLEX"
 
 class QueryComplexityClassifier:
+    """Classifies query complexity based on keywords and length."""
     def __init__(self, debug_mode: bool = False):
+        """Initializes the classifier with debug mode."""
         self.debug_mode = debug_mode
         # Keywords indicating complexity
         self.complex_keywords = [
@@ -37,6 +40,10 @@ class QueryComplexityClassifier:
         self.simple_question_starters = ["what is", "who is", "when was", "where is", "define"]
 
     def classify_query(self, query: str) -> QueryComplexity:
+        """
+        Classifies the given query into SIMPLE, MEDIUM, or COMPLEX.
+        Uses rules based on keywords and word count.
+        """
         query_lower = query.lower().strip()
         word_count = len(query_lower.split())
 
@@ -402,7 +409,6 @@ async def _execute_minions_protocol(
                     debug_log.append(f"   [Debug] Sufficiency for round {current_round + 1}: Score={metric_to_update.sufficiency_score:.2f}, Coverage={metric_to_update.component_coverage_percentage:.2f}")
                     debug_log.append(f"   [Debug] Component Status: {metric_to_update.information_components}")
 
-                # Format and append metrics summary (now includes redundancy AND sufficiency)
                 # --> Convergence Detection Calculations (after sufficiency is updated) <--
                 if metric_to_update: # Ensure we have the current round's metric object
                     previous_round_metric_obj = all_round_metrics[-2] if len(all_round_metrics) > 1 else None

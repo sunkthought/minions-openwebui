@@ -1,3 +1,4 @@
+# Partials File: partials/minion_token_savings.py
 from typing import List, Dict, Any, Tuple
 
 def calculate_minion_token_savings(
@@ -27,8 +28,8 @@ def calculate_minion_token_savings(
     traditional_tokens = int((len(context) + len(query)) / chars_per_token)
     
     # Calculate tokens for the Minion approach
-    # This typically counts tokens from messages involving the remote model (e.g., Claude)
-    # In this specific Minion protocol, 'assistant' messages in history are Claude's.
+    # This typically counts tokens from messages involving the remote model.
+    # In this specific Minion protocol, 'assistant' messages in history are from the remote model.
     minion_protocol_remote_model_tokens = 0
     for role, message_content in conversation_history:
         if role == "assistant":  # Messages from/to the remote model

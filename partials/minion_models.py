@@ -1,3 +1,4 @@
+# Partials File: partials/minion_models.py
 from typing import List, Optional
 from pydantic import BaseModel, Field
 
@@ -5,7 +6,7 @@ class LocalAssistantResponse(BaseModel):
     """
     Structured response format for the local assistant in the Minion (conversational) protocol.
     This model defines the expected output structure when the local model processes
-    a request from the remote (Claude) model.
+    a request from the remote model.
     """
     answer: str = Field(description="The main response to the question posed by the remote model.")
     confidence: str = Field(description="Confidence level of the answer (e.g., HIGH, MEDIUM, LOW).")
