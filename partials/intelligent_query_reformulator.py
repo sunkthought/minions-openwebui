@@ -1,4 +1,5 @@
 import json
+from enum import Enum # Added import
 from typing import Any, Callable, List, Optional, Dict
 
 # Forward declaration for QueryMetadata if it's not directly importable
@@ -8,6 +9,12 @@ from typing import Any, Callable, List, Optional, Dict
 # Placeholder to be refined if direct type hinting from QueryAnalyzer is problematic in concatenated file.
 QueryMetadata = Dict[str, Any]
 
+# Custom JSON encoder to handle Enum objects
+class CustomEnumEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, Enum):
+            return obj.value
+        return json.JSONEncoder.default(self, obj)
 
 class IntelligentQueryReformulator:
     def __init__(self, debug_mode: bool = False, valves: Optional[Any] = None, call_claude_func: Optional[Callable] = None):
@@ -79,7 +86,7 @@ class IntelligentQueryReformulator:
             "You are an expert query reformulator. Your goal is to refine user queries to make them clearer, more specific, and better structured for a multi-agent question-answering system (MinionS).",
             "The system first analyzes the query, and the following metadata is available:",
             f'Original Query: "{query}"',
-            f"Query Metadata: {json.dumps(query_metadata, indent=2)}",
+            f"Query Metadata: {json.dumps(query_metadata, indent=2, cls=CustomEnumEncoder)}",
         ]
 
         if conversation_history:
@@ -198,38 +205,64 @@ if __name__ == '__main__':
         test_queries_metadata = [
             {
                 "query": "Tell me about the economy.",
-                "metadata": {"original_query": "Tell me about the economy.", "ambiguity_score": 0.8, "decomposability_score": 0.7, "query_type": {"value": "ANALYSIS_REQUEST"}, "scope": {"value": "BROAD"}},
+                "metadata": {"original_query": "Tell me about the economy.", "ambiguity_score": 0.8, "decomposability_score": 0.7, "query_type": "ANALYSIS_REQUEST", "scope": "BROAD"}, # Example with string query_type
                 "history": ["User: What's new today?", "Assistant: Markets are up."]
             },
             {
                 "query": "Analyze the impact of AI on healthcare and suggest investment opportunities.",
-                "metadata": {"original_query": "Analyze the impact of AI on healthcare and suggest investment opportunities.", "ambiguity_score": 0.4, "decomposability_score": 0.3, "query_type": {"value": "ANALYSIS_REQUEST"}, "detected_patterns": [{"type": "MULTI_PART", "text": "AI on healthcare AND investment opportunities"}]},
+                "metadata": {"original_query": "Analyze the impact of AI on healthcare and suggest investment opportunities.", "ambiguity_score": 0.4, "decomposability_score": 0.3, "query_type": "ANALYSIS_REQUEST", "detected_patterns": [{"type": "MULTI_PART", "text": "AI on healthcare AND investment opportunities"}]},
                 "history": None
             },
             {
                 "query": "Everything about renewable energy.",
-                "metadata": {"original_query": "Everything about renewable energy.", "ambiguity_score": 0.6, "decomposability_score": 0.6, "query_type": {"value": "ANALYSIS_REQUEST"}, "scope": {"value": "COMPREHENSIVE"}},
+                "metadata": {"original_query": "Everything about renewable energy.", "ambiguity_score": 0.6, "decomposability_score": 0.6, "query_type": "ANALYSIS_REQUEST", "scope": "COMPREHENSIVE"},
                 "history": None
             },
             {
                 "query": "What is the current price of Bitcoin?", # Should skip reformulation by default thresholds
-                "metadata": {"original_query": "What is the current price of Bitcoin?", "ambiguity_score": 0.1, "decomposability_score": 0.9, "query_type": {"value": "QUESTION"}, "scope": {"value": "SPECIFIC"}},
+                "metadata": {"original_query": "What is the current price of Bitcoin?", "ambiguity_score": 0.1, "decomposability_score": 0.9, "query_type": "QUESTION", "scope": "SPECIFIC"},
                 "history": None
             },
         ]
         
-        query_to_test_no_change = "Is the sky blue?"
-        test_queries_metadata.append(
-             {
-                "query": query_to_test_no_change, 
-                "metadata": {"original_query": query_to_test_no_change, "ambiguity_score": 0.9, "decomposability_score": 0.9, "query_type": {"value": "QUESTION"}, "scope": {"value": "SPECIFIC"}}, # High ambiguity to trigger, but prompt asks Claude to return original if optimal
-                "history": None
-            }
-        )
+        # Example of QueryType and ScopeIndicator enums if they were defined and used
+        # class QueryTypeEnum(Enum): ANALYSIS_REQUEST = "ANALYSIS_REQUEST"; QUESTION = "QUESTION"
+        # class ScopeIndicatorEnum(Enum): BROAD = "BROAD"; COMPREHENSIVE = "COMPREHENSIVE"; SPECIFIC = "SPECIFIC"
+
+        # query_to_test_no_change = "Is the sky blue?"
+        # test_queries_metadata.append(
+        #      {
+        #         "query": query_to_test_no_change, 
+        #         "metadata": {
+        #             "original_query": query_to_test_no_change, 
+        #             "ambiguity_score": 0.9, "decomposability_score": 0.9, 
+        #             "query_type": QueryTypeEnum.QUESTION, # Using enum instance
+        #             "scope": ScopeIndicatorEnum.SPECIFIC # Using enum instance
+        #         },
+        #         "history": None
+        #     }
+        # )
 
 
         for item in test_queries_metadata:
             print(f"\n--- Testing Query: '{item['query']}' ---")
+            # Ensure metadata for test has 'value' if it's an object, or is a string
+            # The main code now handles if query_metadata['query_type'] is an Enum or string.
+            # For the test data, if it's meant to simulate an Enum, it should be an object with a .value
+            # If it's meant to simulate a simple string (like from JSON), it should be a string.
+            # The example metadata above uses strings for query_type and scope, which is fine.
+            # If QueryAnalyzer produces Enum objects, then the test data should reflect that for more accuracy.
+            # For now, string types in metadata are fine for testing the CustomEnumEncoder path
+            # if those strings were hypothetically Enum objects.
+            
+            # Let's adjust one test item to use a mock Enum to test the encoder more directly if it were an Enum
+            if item["query"] == "Tell me about the economy.":
+                 class MockQueryTypeEnum(Enum): ANALYSIS_REQUEST = "ANALYSIS_REQUEST"
+                 class MockScopeEnum(Enum): BROAD = "BROAD"
+                 item["metadata"]["query_type"] = MockQueryTypeEnum.ANALYSIS_REQUEST
+                 item["metadata"]["scope"] = MockScopeEnum.BROAD
+
+
             reformulated = await reformulator.reformulate(item["query"], item["metadata"], conversation_history=item.get("history"))
             print(f"Original: {item['query']}")
             print(f"Reformulated: {reformulated}")
