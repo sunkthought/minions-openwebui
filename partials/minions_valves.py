@@ -70,6 +70,14 @@ class MinionsValves(BaseModel):
         default=0.7, title="Confidence Threshold", description="Minimum confidence level for the LLM's response for each task (0.0-1.0). Primarily a suggestion to the LLM.", ge=0, le=1
     )
 
+    # --- Performance Profile Valve ---
+    performance_profile: str = Field(
+        default="balanced",
+        title="Performance Profile",
+        description="Overall performance profile: 'high_quality', 'balanced', 'fastest_results'. Affects base thresholds and max_rounds before other adaptive modifiers.",
+        json_schema_extra={"enum": ["high_quality", "balanced", "fastest_results"]}
+    )
+
     # New fields for Iteration 5: Static Early Stopping Rules
     enable_early_stopping: bool = Field(
         default=False,
@@ -118,6 +126,64 @@ class MinionsValves(BaseModel):
     # min_rounds_before_convergence_check could be added if distinct from min_rounds_before_stopping
     # For now, ConvergenceDetector uses its own default or relies on min_rounds_before_stopping implicitly
     # if min_rounds_before_convergence_check is not explicitly set in valves.
+
+    # --- Adaptive Threshold Valves ---
+    enable_adaptive_thresholds: bool = Field(
+        default=True,
+        title="Enable Adaptive Thresholds",
+        description="Allow the system to dynamically adjust confidence, sufficiency, and novelty thresholds based on document size, query complexity, and first-round performance."
+    )
+    doc_size_small_char_limit: int = Field(
+        default=5000,
+        title="Small Document Character Limit",
+        description="Documents with character count below this are considered 'small' for threshold adjustments."
+    )
+    doc_size_large_char_start: int = Field(
+        default=50000,
+        title="Large Document Character Start",
+        description="Documents with character count above this are considered 'large' for threshold adjustments."
+    )
+    confidence_modifier_small_doc: float = Field(
+        default=0.0,
+        title="Confidence Modifier for Small Docs",
+        description="Value added to base confidence thresholds if document is small (e.g., -0.05 to be less strict). Applied to general confidence checks if any."
+    )
+    confidence_modifier_large_doc: float = Field(
+        default=0.0,
+        title="Confidence Modifier for Large Docs",
+        description="Value added to base confidence thresholds if document is large (e.g., +0.05 to be more strict)."
+    )
+    sufficiency_modifier_simple_query: float = Field(
+        default=0.0,
+        title="Sufficiency Modifier for Simple Queries",
+        description="Value added to base sufficiency thresholds for simple queries (e.g., -0.1 to require less sufficiency)."
+    )
+    sufficiency_modifier_complex_query: float = Field(
+        default=0.0,
+        title="Sufficiency Modifier for Complex Queries",
+        description="Value added to base sufficiency thresholds for complex queries (e.g., +0.1 to require more)."
+    )
+    novelty_modifier_simple_query: float = Field(
+        default=0.0,
+        title="Novelty Threshold Modifier for Simple Queries",
+        description="Value added to the base novelty threshold (making it potentially easier to achieve 'low novelty') for simple queries."
+    )
+    novelty_modifier_complex_query: float = Field(
+        default=0.0,
+        title="Novelty Threshold Modifier for Complex Queries",
+        description="Value added to the base novelty threshold (making it potentially harder to achieve 'low novelty') for complex queries."
+    )
+    first_round_high_novelty_threshold: float = Field(
+        default=0.75,
+        title="First Round High Novelty Threshold (%)",
+        description="If first round's novel_findings_percentage_this_round is above this (e.g., 0.75 for 75%), it's considered a high novelty first round.",
+        ge=0, le=1
+    )
+    sufficiency_modifier_high_first_round_novelty: float = Field(
+        default=-0.05,
+        title="Sufficiency Modifier for High First Round Novelty",
+        description="Value added to sufficiency thresholds if first round novelty is high (e.g., -0.05 to relax sufficiency requirement)."
+    )
 
     class Config:
         extra = "ignore" # Ignore any extra fields passed to the model

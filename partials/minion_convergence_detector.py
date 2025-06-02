@@ -81,58 +81,57 @@ class ConvergenceDetector:
 
     def check_for_convergence(
         self,
-        current_round_metric: RoundMetrics, # This should already be updated with metrics from calculate_round_convergence_metrics
-        sufficiency_score: float, # Passed directly, as it's on current_round_metric but good to be explicit
+        current_round_metric: RoundMetrics,
+        sufficiency_score: float,
         total_rounds_executed: int,
-        valves: ValvesType,
+        effective_novelty_to_use: float, # New parameter for dynamic threshold
+        effective_sufficiency_to_use: float, # New parameter for dynamic threshold
+        valves: ValvesType, # Still needed for min_rounds_before_convergence_check, convergence_rounds_min_novelty
         all_round_metrics: List[RoundMetrics]
     ) -> Tuple[bool, str]:
         """
-        Checks if convergence criteria are met.
-        Uses metrics already populated in current_round_metric.
+        Checks if convergence criteria are met using potentially dynamic thresholds.
         """
-        min_rounds_for_conv_check = getattr(valves, "min_rounds_before_convergence_check", 2) # Different from min_rounds_before_stopping
+        min_rounds_for_conv_check = getattr(valves, "min_rounds_before_convergence_check", 2)
         if total_rounds_executed < min_rounds_for_conv_check:
              if self.debug_mode:
-                print(f"DEBUG [ConvergenceDetector]: Skipping convergence check for round {getattr(current_round_metric, 'round_number', 'N/A')}, min rounds not met ({total_rounds_executed}/{min_rounds_for_conv_check}).")
+                print(f"DEBUG [ConvergenceDetector]: Skipping convergence check for round {getattr(current_round_metric, 'round_number', 'N/A')}, min rounds for convergence check not met ({total_rounds_executed}/{min_rounds_for_conv_check}).")
              return False, ""
 
         # Convergence criteria:
-        # 1. Low novelty for a certain number of consecutive rounds.
-        # 2. Sufficiency score is above a threshold.
+        # 1. Low novelty for a certain number of consecutive rounds (using effective_novelty_to_use).
+        # 2. Sufficiency score is above a threshold (using effective_sufficiency_to_use).
 
         low_novelty_streak = 0
         required_streak_length = getattr(valves, "convergence_rounds_min_novelty", 2)
-        novelty_threshold = getattr(valves, "convergence_novelty_threshold", 0.10) # e.g., 10%
+        # Use the passed effective_novelty_to_use instead of getattr(valves, "convergence_novelty_threshold", 0.10)
 
         if len(all_round_metrics) >= required_streak_length:
             is_streak = True
-            # Check the last 'required_streak_length' metrics objects
             for i in range(required_streak_length):
-                metric_to_check = all_round_metrics[-(i+1)] # Last, then second to last, etc.
+                metric_to_check = all_round_metrics[-(i+1)]
 
-                # Ensure the metric object actually has the field, especially if RoundMetrics is Any
                 if not hasattr(metric_to_check, 'novel_findings_percentage_this_round') or \
-                   getattr(metric_to_check, 'novel_findings_percentage_this_round') >= novelty_threshold:
+                   getattr(metric_to_check, 'novel_findings_percentage_this_round') >= effective_novelty_to_use:
                     is_streak = False
                     break
             if is_streak:
                 low_novelty_streak = required_streak_length
 
         current_round_num_debug = getattr(current_round_metric, "round_number", "N/A")
-        sufficiency_threshold_valve = getattr(valves, "convergence_sufficiency_threshold", 0.7)
+        # Use the passed effective_sufficiency_to_use instead of getattr(valves, "convergence_sufficiency_threshold", 0.7)
 
         if self.debug_mode:
             print(f"DEBUG [ConvergenceDetector]: Checking convergence for round {current_round_num_debug}:")
-            print(f"  Low novelty threshold: {novelty_threshold}, Required streak: {required_streak_length}")
-            print(f"  Actual low novelty streak achieve for check: {low_novelty_streak} (needs to be >= {required_streak_length})")
-            print(f"  Sufficiency score: {sufficiency_score:.2f}, Sufficiency threshold: {sufficiency_threshold_valve}")
+            print(f"  Using Effective Novelty Threshold: {effective_novelty_to_use:.2f}, Required streak: {required_streak_length}")
+            print(f"  Actual low novelty streak achieved for check: {low_novelty_streak} (needs to be >= {required_streak_length})")
+            print(f"  Sufficiency score: {sufficiency_score:.2f}, Using Effective Sufficiency Threshold: {effective_sufficiency_to_use:.2f}")
 
-        if low_novelty_streak >= required_streak_length and sufficiency_score >= sufficiency_threshold_valve:
+        if low_novelty_streak >= required_streak_length and sufficiency_score >= effective_sufficiency_to_use:
             reason = (
-                f"Convergence detected: Novelty < {novelty_threshold*100:.0f}% "
+                f"Convergence detected: Novelty < {effective_novelty_to_use*100:.0f}% "
                 f"for {low_novelty_streak} round(s) AND "
-                f"Sufficiency ({sufficiency_score:.2f}) >= {sufficiency_threshold_valve}."
+                f"Sufficiency ({sufficiency_score:.2f}) >= {effective_sufficiency_to_use:.2f}."
             )
             if self.debug_mode:
                 print(f"DEBUG [ConvergenceDetector]: {reason}")
