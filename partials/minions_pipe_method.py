@@ -145,8 +145,18 @@ async def _execute_minions_protocol(
         debug_log.append(f"   Scope: {query_metadata['scope'].value}")
         debug_log.append(f"   Ambiguity Markers: {query_metadata['ambiguity_markers']}")
         debug_log.append(f"   Detected Patterns: {query_metadata['detected_patterns']}")
-        debug_log.append(f"   Ambiguity Score (Iter 1 Placeholder): {query_metadata['ambiguity_score']}")
-        debug_log.append(f"   Decomposability Score (Iter 1 Placeholder): {query_metadata['decomposability_score']}")
+        debug_log.append(f"   Ambiguity Score (Iter 2): {query_metadata['ambiguity_score']:.2f}")
+        debug_log.append(f"   Detailed Ambiguity Report (Iter 2): {query_metadata['detailed_ambiguity_report']}")
+        debug_log.append(f"   Decomposability Score (Iter 2): {query_metadata['decomposability_score']:.2f}")
+
+        # New warning for high ambiguity score
+        # Assuming a threshold can be added to valves, e.g., valves.high_ambiguity_threshold
+        # For now, hardcode 0.7 as per plan, but ideally this would be configurable.
+        high_ambiguity_threshold = getattr(valves, 'high_ambiguity_threshold', 0.7)
+        if query_metadata['ambiguity_score'] > high_ambiguity_threshold:
+            debug_log.append(f"   ⚠️ WARNING: High ambiguity score ({query_metadata['ambiguity_score']:.2f}) detected. "
+                             f"Query may require clarification for optimal processing. Threshold: {high_ambiguity_threshold}")
+
         debug_log.append("🧠 **Finished Query Analysis.**")
     # --- End Query Analysis ---
 
