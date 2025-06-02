@@ -298,4 +298,4 @@ This project is licensed under the MIT License. See the LICENSE file for details
 
 - The HazyResearch team for creating the original Minion and MinionS protocols
 - The Open WebUI community for providing an excellent platform for AI interactions
-- All contributors who have helped improve this implementation
+- The SunkThought Team: Jules by GoogleLabs, Anthropic's Claude 4 family, and Wil Everts 😇
