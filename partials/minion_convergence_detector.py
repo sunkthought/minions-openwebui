@@ -139,5 +139,3 @@ class ConvergenceDetector:
             return True, reason
 
         return False, ""
-
-```
