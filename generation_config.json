@@ -47,6 +47,8 @@
       "common_api_calls.py",
       "common_context_utils.py",
       "common_file_processing.py",
+      "entity_resolver.py",
+      "reference_resolver.py",
       "query_analyzer.py",
       "query_expander.py",
       "query_reformulator.py",
