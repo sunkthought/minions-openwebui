@@ -14,6 +14,7 @@ from .minions_decomposition_logic import decompose_task
 from .minions_prompts import get_minions_synthesis_claude_prompt
 from .minion_sufficiency_analyzer import InformationSufficiencyAnalyzer # Added import
 from .minion_convergence_detector import ConvergenceDetector # Added import
+from .query_analyzer import QueryAnalyzer, QueryMetadata, QueryType, ScopeIndicator # Assuming query_analyzer.py is in the same directory
 # Removed: from .common_query_utils import QueryComplexityClassifier, QueryComplexity
 
 # --- Content from common_query_utils.py START ---
@@ -127,6 +128,27 @@ async def _execute_minions_protocol(
 
     # User query is passed directly to _execute_minions_protocol
     user_query = query # Use the passed 'query' as user_query for clarity if needed elsewhere
+
+    # --- Query Analysis (Iteration 1) ---
+    if valves.debug_mode:
+        debug_log.append("🧠 **Starting Query Analysis... (Iteration 1)**")
+
+    query_analyzer = QueryAnalyzer(query=user_query, debug_mode=valves.debug_mode)
+    query_metadata: QueryMetadata = query_analyzer.analyze()
+
+    if valves.debug_mode:
+        debug_log.append(f"   Original Query: {query_metadata['original_query']}")
+        debug_log.append(f"   Query Type: {query_metadata['query_type'].value}")
+        debug_log.append(f"   Detected Entities: {query_metadata['entities']}")
+        debug_log.append(f"   Temporal References: {query_metadata['temporal_refs']}")
+        debug_log.append(f"   Action Verbs: {query_metadata['action_verbs']}")
+        debug_log.append(f"   Scope: {query_metadata['scope'].value}")
+        debug_log.append(f"   Ambiguity Markers: {query_metadata['ambiguity_markers']}")
+        debug_log.append(f"   Detected Patterns: {query_metadata['detected_patterns']}")
+        debug_log.append(f"   Ambiguity Score (Iter 1 Placeholder): {query_metadata['ambiguity_score']}")
+        debug_log.append(f"   Decomposability Score (Iter 1 Placeholder): {query_metadata['decomposability_score']}")
+        debug_log.append("🧠 **Finished Query Analysis.**")
+    # --- End Query Analysis ---
 
     # --- Performance Profile Logic ---
     current_run_max_rounds = valves.max_rounds
