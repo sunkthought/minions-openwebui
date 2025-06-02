@@ -70,7 +70,7 @@ class IntelligentQueryReformulator:
         prompt_parts = [
             "You are an expert query reformulator. Your goal is to refine user queries to make them clearer, more specific, and better structured for a multi-agent question-answering system (MinionS).",
             "The system first analyzes the query, and the following metadata is available:",
-            f"Original Query: "{query}"",
+            f'Original Query: "{query}"',
             f"Query Metadata: {json.dumps(query_metadata, indent=2)}",
         ]
 
