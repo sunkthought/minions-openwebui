@@ -56,5 +56,10 @@ class RoundMetrics(BaseModel):
     redundancy_percentage_this_round: float = 0.0
     # cross_round_similarity_score: float = 0.0 # Deferred
 
+    # New fields for Iteration 4
+    sufficiency_score: float = Field(default=0.0, description="Overall information sufficiency score (0-1).")
+    information_components: Dict[str, bool] = Field(default_factory=dict, description="Status of identified information components from the query.")
+    component_coverage_percentage: float = Field(default=0.0, description="Percentage of information components addressed (0-1).")
+
     class Config:
         extra = "ignore"

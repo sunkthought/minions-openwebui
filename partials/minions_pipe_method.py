@@ -11,6 +11,7 @@ from .minions_models import TaskResult, RoundMetrics # Import RoundMetrics
 from .common_context_utils import extract_context_from_messages, extract_context_from_files
 from .minions_decomposition_logic import decompose_task
 from .minions_prompts import get_minions_synthesis_claude_prompt
+from .minion_sufficiency_analyzer import InformationSufficiencyAnalyzer # Added import
 # Removed: from .common_query_utils import QueryComplexityClassifier, QueryComplexity
 
 # --- Content from common_query_utils.py START ---
@@ -115,9 +116,19 @@ async def _execute_minions_protocol(
     early_stopping_reason_for_output = None # Initialize for storing stopping reason
 
     overall_start_time = asyncio.get_event_loop().time()
+
+    # User query is passed directly to _execute_minions_protocol
+    user_query = query # Use the passed 'query' as user_query for clarity if needed elsewhere
+
     if valves.debug_mode:
-        debug_log.append(f"🔍 **Debug Info (MinionS v0.2.0):**\n- Query: {query[:100]}...\n- Context length: {len(context)} chars")
+        debug_log.append(f"🔍 **Debug Info (MinionS v0.2.0):**\n- Query: {user_query[:100]}...\n- Context length: {len(context)} chars")
         debug_log.append(f"**⏱️ Overall process started. (Debug Mode)**")
+
+    # Instantiate Sufficiency Analyzer
+    analyzer = InformationSufficiencyAnalyzer(query=user_query, debug_mode=valves.debug_mode)
+    if valves.debug_mode:
+        debug_log.append(f"🧠 Sufficiency Analyzer initialized for query: {user_query[:100]}...")
+        debug_log.append(f"   Identified components: {list(analyzer.components.keys())}")
 
     # Initialize Query Complexity Classifier and Classify Query
     query_classifier = QueryComplexityClassifier(debug_mode=valves.debug_mode)
@@ -293,19 +304,40 @@ async def _execute_minions_protocol(
                     duplicate_findings_count_this_round=current_round_duplicate_findings,
                     redundancy_percentage_this_round=redundancy_percentage_this_round,
                     total_unique_findings_count=len(global_unique_fingerprints_seen)
+                    # Sufficiency fields will be added below
                 )
-                all_round_metrics.append(round_metric)
+                all_round_metrics.append(round_metric) # Add before sufficiency update
 
-                # Format and append metrics summary (now includes redundancy)
+                # --> Sufficiency Analysis <--
+                metric_to_update = round_metric # This is the one we just added
+                if valves.debug_mode:
+                    debug_log.append(f"   [Debug] Updating Sufficiency Analyzer with scratchpad content for round {current_round + 1}...")
+
+                analyzer.update_components(text_to_analyze=scratchpad_content, round_avg_confidence=metric_to_update.avg_confidence_score)
+                sufficiency_details = analyzer.get_analysis_details()
+
+                metric_to_update.sufficiency_score = sufficiency_details["sufficiency_score"]
+                metric_to_update.component_coverage_percentage = sufficiency_details["component_coverage_percentage"]
+                metric_to_update.information_components = sufficiency_details["information_components_status"]
+
+                if valves.debug_mode:
+                    debug_log.append(f"   [Debug] Sufficiency for round {current_round + 1}: Score={metric_to_update.sufficiency_score:.2f}, Coverage={metric_to_update.component_coverage_percentage:.2f}")
+                    debug_log.append(f"   [Debug] Component Status: {metric_to_update.information_components}")
+
+                # Format and append metrics summary (now includes redundancy AND sufficiency)
+                # Simplified component status for logging brevity
+                component_status_summary = {k: ('Met' if v else 'Not Met') for k,v in metric_to_update.information_components.items()}
                 metrics_summary = (
-                    f"**📊 Round {round_metric.round_number} Metrics:**\n"
-                    f"  - Tasks Executed: {round_metric.tasks_executed}, Success Rate: {round_metric.success_rate:.2%}\n"
-                    f"  - Task Counts (S/F): {round_metric.task_success_count}/{round_metric.task_failure_count}\n"
-                    f"  - Findings (New/Dup): {round_metric.new_findings_count_this_round}/{round_metric.duplicate_findings_count_this_round}, Total Unique: {round_metric.total_unique_findings_count}\n"
-                    f"  - Redundancy This Round: {round_metric.redundancy_percentage_this_round:.1f}%\n"
-                    f"  - Avg Confidence: {round_metric.avg_confidence_score:.2f} ({round_metric.confidence_trend})\n"
-                    f"  - Confidence Dist (H/M/L): {round_metric.confidence_distribution.get('HIGH',0)}/{round_metric.confidence_distribution.get('MEDIUM',0)}/{round_metric.confidence_distribution.get('LOW',0)}\n"
-                    f"  - Round Time: {round_metric.execution_time_ms:.0f} ms, Avg Chunk Time: {round_metric.avg_chunk_processing_time_ms:.0f} ms"
+                    f"**📊 Round {metric_to_update.round_number} Metrics:**\n"
+                    f"  - Tasks Executed: {metric_to_update.tasks_executed}, Success Rate: {metric_to_update.success_rate:.2%}\n"
+                    f"  - Task Counts (S/F): {metric_to_update.task_success_count}/{metric_to_update.task_failure_count}\n"
+                    f"  - Findings (New/Dup): {metric_to_update.new_findings_count_this_round}/{metric_to_update.duplicate_findings_count_this_round}, Total Unique: {metric_to_update.total_unique_findings_count}\n"
+                    f"  - Redundancy This Round: {metric_to_update.redundancy_percentage_this_round:.1f}%\n"
+                    f"  - Avg Confidence: {metric_to_update.avg_confidence_score:.2f} ({metric_to_update.confidence_trend})\n"
+                    f"  - Confidence Dist (H/M/L): {metric_to_update.confidence_distribution.get('HIGH',0)}/{metric_to_update.confidence_distribution.get('MEDIUM',0)}/{metric_to_update.confidence_distribution.get('LOW',0)}\n"
+                    f"  - Sufficiency Score: {metric_to_update.sufficiency_score:.2f}, Info Coverage: {metric_to_update.component_coverage_percentage:.2%}\n"
+                    f"  - Components Status: {component_status_summary}\n"
+                    f"  - Round Time: {metric_to_update.execution_time_ms:.0f} ms, Avg Chunk Time: {metric_to_update.avg_chunk_processing_time_ms:.0f} ms"
                 )
                 scratchpad_content += f"\n\n{metrics_summary}"
                 if valves.show_conversation:
@@ -347,7 +379,31 @@ async def _execute_minions_protocol(
         all_round_results_aggregated.extend(current_round_task_results)
         total_chunk_processing_timeouts_accumulated += round_chunk_timeouts
 
+        # Placeholder for Sufficiency-Based Stopping Logic (Debug)
+        # This is checked *before* other early stopping conditions like confidence thresholds.
+        # The 'metric_to_update' variable should be the most up-to-date version of the current round's metrics.
+        if valves.debug_mode and 'metric_to_update' in locals() and metric_to_update:
+            hypothetical_sufficiency_threshold = 0.75 # Example threshold
+            if metric_to_update.sufficiency_score >= hypothetical_sufficiency_threshold:
+                debug_log.append(
+                    f"   [Debug Placeholder] Sufficiency score {metric_to_update.sufficiency_score:.2f} >= "
+                    f"{hypothetical_sufficiency_threshold}. "
+                    f"IF stopping logic for sufficiency active, would consider stopping here."
+                )
+            else:
+                debug_log.append(
+                    f"   [Debug Placeholder] Sufficiency score {metric_to_update.sufficiency_score:.2f} < "
+                    f"{hypothetical_sufficiency_threshold}. "
+                    f"Would continue based on this sufficiency placeholder."
+                )
+
         # Early Stopping Logic
+        # Note: 'round_metric' is the original metric object from raw_metrics_data,
+        # 'metric_to_update' is the same object, but after being updated with sufficiency.
+        # So, using 'metric_to_update' here for consistency if we were to integrate sufficiency into this logic.
+        # However, the current early stopping is based on avg_confidence_score which is set before sufficiency.
+        # For now, we keep `round_metric` for the existing logic as it was originally.
+        # If sufficiency were to be a primary driver for early stopping, this would need refactoring.
         if valves.enable_early_stopping and round_metric: # Ensure round_metric exists
             stop_early = False
             stopping_reason = ""

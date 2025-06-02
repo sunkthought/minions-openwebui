@@ -50,6 +50,7 @@
       "minions_prompts.py",
       "minions_decomposition_logic.py",
       "minions_protocol_logic.py",
+      "minion_sufficiency_analyzer.py",
       "minions_pipe_method.py"
     ],
     "specific_imports_map": {},
