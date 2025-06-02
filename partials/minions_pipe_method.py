@@ -744,8 +744,30 @@ async def _execute_minions_protocol(
     output_parts.append(f"- **Query Complexity:** {query_complexity_level.value}")
     output_parts.append(f"- **Rounds executed (Profile Max):** {actual_rounds_executed}/{current_run_max_rounds}") # Use current_run_max_rounds
     output_parts.append(f"- **Total tasks for local LLM:** {stats['total_tasks_executed_local']}")
-    output_parts.append(f"- **Successful tasks (local):** {total_successful_tasks}")
-    output_parts.append(f"- **Tasks where all chunks timed out (local):** {tasks_with_any_timeout}")
+
+    # --- Explicitly define variables for the MinionS Efficiency Stats block ---
+    # Ensure 'all_round_results_aggregated' is the correct list of task results.
+    # And 'valves' and 'debug_log' are assumed to be accessible in this scope for the warning.
+
+    explicit_total_successful_tasks = 0
+    explicit_tasks_with_any_timeout = 0 # Renamed for clarity from tasks_with_any_timeout
+
+    if 'all_round_results_aggregated' in locals() and isinstance(all_round_results_aggregated, list):
+        explicit_total_successful_tasks = len([
+            r for r in all_round_results_aggregated if isinstance(r, dict) and r.get('status') == 'success'
+        ])
+        explicit_tasks_with_any_timeout = len([
+            r for r in all_round_results_aggregated if isinstance(r, dict) and r.get('status') == 'timeout_all_chunks'
+        ])
+    else:
+        # This case should ideally not happen if the protocol ran correctly.
+        # Adding a log if debug_mode is on and valves is accessible.
+        if 'valves' in locals() and hasattr(valves, 'debug_mode') and valves.debug_mode and 'debug_log' in locals():
+            debug_log.append("⚠️ Warning: 'all_round_results_aggregated' not found or not a list when calculating final efficiency stats.")
+    # --- End of explicit definitions ---
+
+    output_parts.append(f"- **Successful tasks (local):** {explicit_total_successful_tasks}")
+    output_parts.append(f"- **Tasks where all chunks timed out (local):** {explicit_tasks_with_any_timeout}")
     output_parts.append(f"- **Total individual chunk processing timeouts (local):** {total_chunk_processing_timeouts_accumulated}")
     output_parts.append(f"- **Chunks processed per task (local):** {stats['total_chunks_processed_local'] if stats['total_tasks_executed_local'] > 0 else 0}")
     output_parts.append(f"- **Context size:** {len(context):,} characters")
