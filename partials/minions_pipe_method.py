@@ -17,7 +17,6 @@ from .minion_convergence_detector import ConvergenceDetector # Added import
 from .query_analyzer import QueryAnalyzer, QueryMetadata, QueryType, ScopeIndicator # Assuming query_analyzer.py is in the same directory
 from .query_expander import QueryExpander # Added for Iteration 3
 from .query_reformulator import QueryReformulator # Added for Iteration 7
-from .intelligent_query_reformulator import IntelligentQueryReformulator
 # Removed: from .common_query_utils import QueryComplexityClassifier, QueryComplexity
 
 # --- Content from common_query_utils.py START ---
@@ -284,43 +283,6 @@ async def _execute_minions_protocol(
         if valves.debug_mode:
             debug_log.append(f"ℹ️ Query Reformulation is DISABLED via valve 'enable_query_reformulation'. Using query from expansion/analysis phase.")
     # --- End Query Reformulation ---
-
-    # --- Intelligent Query Reformulation (Iteration 9) ---
-    if getattr(valves, "enable_intelligent_query_reformulation", True):
-        if valves.debug_mode:
-            debug_log.append(f"🧠✨ **Starting Intelligent Query Reformulation... (Iteration 9)**")
-            debug_log.append(f"   Query before intelligent reformulation: '{user_query}'")
-
-        iqr = IntelligentQueryReformulator(
-            debug_mode=valves.debug_mode,
-            valves=valves,
-            call_claude_func=call_claude # Pass the main call_claude from this scope
-        )
-        
-        # Ensure conversation_log is available, if not, pass empty list or None
-        # For _execute_minions_protocol, conversation_log is already initialized as a list.
-        intelligently_reformulated_query = await iqr.reformulate(
-            user_query, # This is the query post-template-reformulation
-            query_metadata, # This is from the QueryAnalyzer
-            conversation_log # Pass existing conversation log for context
-        )
-
-        if intelligently_reformulated_query != user_query:
-            if valves.debug_mode:
-                debug_log.append(f"   Intelligently reformulated query: '{intelligently_reformulated_query}'")
-            if valves.show_conversation:
-                conversation_log.append(f"ℹ️ Query has been intelligently refined to: \"{intelligently_reformulated_query}\"")
-            user_query = intelligently_reformulated_query
-        else:
-            if valves.debug_mode:
-                debug_log.append(f"   Intelligent Query Reformulator made no changes to the query.")
-        
-        if valves.debug_mode:
-            debug_log.append(f"🧠✨ **Finished Intelligent Query Reformulation.**")
-    else:
-        if valves.debug_mode:
-            debug_log.append(f"ℹ️ Intelligent Query Reformulation is DISABLED via valve 'enable_intelligent_query_reformulation'.")
-    # --- End Intelligent Query Reformulation ---
 
     # --- Performance Profile Logic ---
     # The user_query variable might have been updated by the reformulator
