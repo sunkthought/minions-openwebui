@@ -105,12 +105,6 @@ class MinionsValves(BaseModel):
     )
     # max_rounds (already exists) will be used for COMPLEX queries.
 
-    enable_query_reformulation: bool = Field(
-        default=True,
-        title="Enable Query Reformulation",
-        description="If True, QueryReformulator will attempt to break down complex queries or rephrase them."
-    )
-
     # New fields for Iteration 5: Convergence Detection Based Early Stopping
     convergence_novelty_threshold: float = Field(
         default=0.10,

@@ -16,7 +16,6 @@ from .minion_sufficiency_analyzer import InformationSufficiencyAnalyzer # Added 
 from .minion_convergence_detector import ConvergenceDetector # Added import
 from .query_analyzer import QueryAnalyzer, QueryMetadata, QueryType, ScopeIndicator # Assuming query_analyzer.py is in the same directory
 from .query_expander import QueryExpander # Added for Iteration 3
-from .query_reformulator import QueryReformulator # Added for Iteration 7
 # Removed: from .common_query_utils import QueryComplexityClassifier, QueryComplexity
 
 # --- Content from common_query_utils.py START ---
@@ -197,73 +196,7 @@ async def _execute_minions_protocol(
         debug_log.append("🧠 **Finished Query Analysis.**")
     # --- End Query Analysis ---
 
-    # --- Query Reformulation (Iteration 7) ---
-    # pipe_state equivalent here is to update user_query and log appropriately.
-    # query_metadata is available from the QueryAnalyzer.
-    # user_query holds the (potentially expanded) query.
-    
-    if getattr(valves, "enable_query_reformulation", True): # Default to True if valve not in older configs
-        if valves.debug_mode:
-            debug_log.append(f"🔄 **Starting Query Reformulation... (Iteration 7)**")
-            debug_log.append(f"   Query before reformulation: '{user_query}'")
-
-        reformulator = QueryReformulator(debug_mode=valves.debug_mode)
-        
-        # query_metadata is already available from the QueryAnalyzer step
-        reformulated_queries: List[str] = reformulator.reformulate(
-            user_query, # This is the post-expansion query
-            query_metadata # This is from the QueryAnalyzer
-        )
-
-        if valves.debug_mode:
-            debug_log.append(f"   Reformulator generated {len(reformulated_queries)} queries: {reformulated_queries}")
-
-        if reformulated_queries:
-            original_query_before_reformulation = user_query
-            # Update user_query with the first reformulated query
-            user_query = reformulated_queries[0] 
-
-            if user_query != original_query_before_reformulation:
-                if valves.show_conversation:
-                    conversation_log.append(f"ℹ️ Query has been reformulated for clarity/focus to: \"{user_query}\"")
-                if valves.debug_mode:
-                    debug_log.append(f"   Query after reformulation (using first): '{user_query}'")
-            elif len(reformulated_queries) == 1 and user_query == original_query_before_reformulation:
-                 if valves.debug_mode:
-                    debug_log.append(f"   Reformulator assessed the query and made no changes.")
-
-
-            if len(reformulated_queries) > 1:
-                # Log that multiple sub-queries were generated but only first is used
-                multi_query_log_msg = (
-                    f"   Reformulator generated {len(reformulated_queries)} sub-queries. "
-                    f"Using the first one ('{user_query}') for subsequent processing in this iteration. "
-                    f"Full list: {reformulated_queries}"
-                )
-                if valves.show_conversation: # Show this important info in main log too
-                    conversation_log.append(f"ℹ️ Query Reformulator generated {len(reformulated_queries)} sub-queries. Only the first will be processed in this version.")
-                if valves.debug_mode:
-                    debug_log.append(multi_query_log_msg)
-            
-            # For future use, the full list could be stored or passed.
-            # For now, it's logged if debug_mode is on.
-            # Example: pipe_state["all_reformulated_queries"] = reformulated_queries
-        else:
-            # This case should ideally not be hit if reformulator returns [original_query] on no-op/failure.
-            if valves.debug_mode:
-                debug_log.append(
-                    f"   Query Reformulator returned an empty list. "
-                    f"Continuing with the previous query: '{user_query}'."
-                )
-        if valves.debug_mode:
-            debug_log.append(f"🔄 **Finished Query Reformulation.**")
-    else:
-        if valves.debug_mode:
-            debug_log.append(f"ℹ️ Query Reformulation is DISABLED via valve 'enable_query_reformulation'. Using query from expansion/analysis phase.")
-    # --- End Query Reformulation ---
-
     # --- Performance Profile Logic ---
-    # The user_query variable might have been updated by the reformulator
     current_run_max_rounds = valves.max_rounds
     current_run_base_sufficiency_thresh = valves.convergence_sufficiency_threshold
     current_run_base_novelty_thresh = valves.convergence_novelty_threshold
