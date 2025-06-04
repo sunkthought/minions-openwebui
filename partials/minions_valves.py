@@ -198,6 +198,30 @@ class MinionsValves(BaseModel):
         description="Enable the new entity and reference resolution step. If true, QueryAnalyzer will attempt to resolve ambiguous entities and references."
     )
 
+    # --- Intelligent Query Reformulation Valves (Iteration 9) ---
+    enable_intelligent_query_reformulation: bool = Field(
+        default=True, 
+        title="Enable Intelligent Query Reformulation", 
+        description="If True, enables the Claude-based intelligent query reformulation step after template-based reformulation. Uses query metadata to decide if reformulation is beneficial."
+    )
+    intelligent_reformulation_model: str = Field(
+        default="claude-3-5-haiku-20241022", 
+        title="Intelligent Reformulation Model", 
+        description="Claude model to use for the intelligent query reformulation step. E.g., claude-3-5-haiku-20241022 or claude-3-5-sonnet-20241022."
+    )
+    min_ambiguity_for_intelligent_reformulation: float = Field(
+        default=0.5, 
+        title="Min Ambiguity for Intelligent Reformulation", 
+        description="Minimum ambiguity score (0.0-1.0) from QueryAnalyzer to trigger intelligent reformulation.", 
+        ge=0, le=1
+    )
+    min_decomposability_score_for_intelligent_reformulation: float = Field(
+        default=0.5, 
+        title="Min Decomposability for Intelligent Reformulation", 
+        description="Intelligent reformulation is triggered if decomposability score from QueryAnalyzer is *below* this threshold (0.0-1.0). Lower score means harder to decompose.", 
+        ge=0, le=1
+    )
+
     class Config:
         extra = "ignore" # Ignore any extra fields passed to the model
         # an_example = MinionsValves().dict() # For schema generation
