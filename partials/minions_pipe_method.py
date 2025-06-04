@@ -162,60 +162,38 @@ async def _execute_minions_protocol(
 
     user_query = processed_query # This is the query to be used by the rest of the protocol
 
-    # --- Query Analysis (Iteration 2, with Iteration 8 enhancements) ---
+    # --- Query Analysis (Iteration 1 became Iteration 2 with ambiguity) ---
     if valves.debug_mode:
-        debug_log.append("🧠 **Starting Query Analysis... (Iteration 2 + 8 Features)**")
+        debug_log.append("🧠 **Starting Query Analysis... (Iteration 2 Features)**") # Updated comment
 
+    # QueryAnalyzer should use the potentially expanded query
     query_analyzer = QueryAnalyzer(query=user_query, debug_mode=valves.debug_mode)
-    
-    # Retrieve the new valve for entity/reference resolution
-    enable_entity_reference_resolution = getattr(valves, "enable_entity_reference_resolution", True) # Default true if not set
-
-    if enable_entity_reference_resolution:
-        if valves.debug_mode:
-            debug_log.append("   Entity/Reference Resolution ENABLED.")
-        # document_metadata: self.document_chunks is not available as this is not a class method.
-        # `chunks` variable contains list of strings, QueryAnalyzer expects List[Dict].
-        # For now, passing None for document_metadata.
-        # conversation_history: `conversation_log` is available and is List[str].
-        query_metadata: QueryMetadata = query_analyzer.analyze(
-            document_metadata=None, # Passing None as `chunks` is List[str] not List[Dict]
-            conversation_history=conversation_log # `conversation_log` is List[str]
-        )
-    else:
-        if valves.debug_mode:
-            debug_log.append("   Entity/Reference Resolution DISABLED.")
-        query_metadata: QueryMetadata = query_analyzer.analyze() # Original call
+    query_metadata: QueryMetadata = query_analyzer.analyze()
 
     if valves.debug_mode:
+        # Log the original query if it was expanded, for comparison
         if user_query_original != user_query:
              debug_log.append(f"   Original Query (Pre-Expansion): {user_query_original}")
-        debug_log.append(f"   Analyzed Query (Post-Expansion, Pre-Resolution for old fields): {query_metadata['original_query']}")
+        debug_log.append(f"   Analyzed Query (Post-Expansion): {query_metadata['original_query']}") # This will be the processed_query
         debug_log.append(f"   Query Type: {query_metadata['query_type'].value}")
-        # Note: query_metadata['entities'] was renamed to query_metadata['extracted_entities']
-        debug_log.append(f"   Extracted Entities (from original query): {query_metadata['extracted_entities']}")
-        
-        if enable_entity_reference_resolution:
-            # Use .get() for new keys to avoid KeyError if they are not populated (e.g. if resolution is off or fails)
-            # self.logger.debug is not available, using debug_log.append
-            debug_log.append(f"   Resolved Query: {query_metadata.get('resolved_query')}")
-            debug_log.append(f"   Initial Resolved Entities: {query_metadata.get('initial_resolved_entities')}")
-            debug_log.append(f"   Resolved References (placeholder): {query_metadata.get('resolved_references')}")
-
+        debug_log.append(f"   Detected Entities: {query_metadata['entities']}")
         debug_log.append(f"   Temporal References: {query_metadata['temporal_refs']}")
         debug_log.append(f"   Action Verbs: {query_metadata['action_verbs']}")
         debug_log.append(f"   Scope: {query_metadata['scope'].value}")
         debug_log.append(f"   Ambiguity Markers: {query_metadata['ambiguity_markers']}")
         debug_log.append(f"   Detected Patterns: {query_metadata['detected_patterns']}")
-        debug_log.append(f"   Ambiguity Score: {query_metadata['ambiguity_score']:.2f}")
-        debug_log.append(f"   Detailed Ambiguity Report: {query_metadata['detailed_ambiguity_report']}")
-        debug_log.append(f"   Decomposability Score: {query_metadata['decomposability_score']:.2f}")
+        debug_log.append(f"   Ambiguity Score (Iter 2): {query_metadata['ambiguity_score']:.2f}")
+        debug_log.append(f"   Detailed Ambiguity Report (Iter 2): {query_metadata['detailed_ambiguity_report']}")
+        debug_log.append(f"   Decomposability Score (Iter 2): {query_metadata['decomposability_score']:.2f}")
 
+        # New warning for high ambiguity score
+        # Assuming a threshold can be added to valves, e.g., valves.high_ambiguity_threshold
+        # For now, hardcode 0.7 as per plan, but ideally this would be configurable.
         high_ambiguity_threshold = getattr(valves, 'high_ambiguity_threshold', 0.7)
         if query_metadata['ambiguity_score'] > high_ambiguity_threshold:
             debug_log.append(f"   ⚠️ WARNING: High ambiguity score ({query_metadata['ambiguity_score']:.2f}) detected. "
                              f"Query may require clarification for optimal processing. Threshold: {high_ambiguity_threshold}")
-        
+
         debug_log.append("🧠 **Finished Query Analysis.**")
     # --- End Query Analysis ---
 
