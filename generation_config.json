@@ -49,7 +49,6 @@
       "common_file_processing.py",
       "query_analyzer.py",
       "query_expander.py",
-      "query_reformulator.py",
       "minions_prompts.py",
       "minions_decomposition_logic.py",
       "minions_protocol_logic.py",
