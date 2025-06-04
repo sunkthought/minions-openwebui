@@ -292,12 +292,6 @@ class MinionsValves(BaseModel):
         description="Value added to sufficiency thresholds if first round novelty is high (e.g., -0.05 to relax sufficiency requirement)."
     )
 
-    # --- Entity and Reference Resolution Valve (Iteration 8) ---
-    enable_entity_reference_resolution: bool = Field(
-        default=True,
-        description="Enable the new entity and reference resolution step. If true, QueryAnalyzer will attempt to resolve ambiguous entities and references."
-    )
-
     class Config:
         extra = "ignore" # Ignore any extra fields passed to the model
         # an_example = MinionsValves().dict() # For schema generation
@@ -486,307 +480,26 @@ def create_chunks(context: str, chunk_size: int, max_chunks: int) -> List[str]:
     return chunks[:max_chunks] if max_chunks > 0 else chunks
 
 
-"""
-This module defines the Entity TypedDict and EntityResolver class
-for entity extraction and resolution.
-"""
-
-from typing import List, Dict, TypedDict, Optional, Tuple
-
-class Entity(TypedDict):
-    """
-    Represents a detected entity in text.
-    """
-    text: str  # The entity text
-    label: str  # The entity type (e.g., ORG, PERSON, GPE)
-    start_char: int  # Start character offset
-    end_char: int  # End character offset
-    source: Optional[str]  # E.g., 'doc_metadata', 'conversation', 'query_ner'
-    confidence: Optional[float]  # Confidence score of the entity detection
-
-class EntityResolver:
-    """
-    A class to resolve entities in text, including coreferences,
-    acronyms, and aliases.
-    """
-
-    def __init__(self, debug_mode: bool = False):
-        """
-        Initializes the EntityResolver.
-
-        Args:
-            debug_mode: If True, enables debug logging.
-        """
-        self.debug_mode = debug_mode
-
-    def extract_entities_from_metadata(
-        self, document_metadata: List[Dict]
-    ) -> List[Entity]:
-        """
-        Extracts entities from document metadata.
-        (Placeholder implementation)
-
-        Args:
-            document_metadata: A list of document metadata dictionaries.
-
-        Returns:
-            A list of extracted entities.
-        """
-        if self.debug_mode:
-            print("Extracting entities from metadata (placeholder)...")
-        return []
-
-    def build_entity_registry(
-        self, context: List[str], document_entities: List[Entity]
-    ) -> Dict[str, Entity]:
-        """
-        Builds an entity registry from context and document entities.
-        (Placeholder implementation)
-
-        Args:
-            context: A list of text strings providing context.
-            document_entities: A list of entities extracted from documents.
-
-        Returns:
-            An entity registry dictionary.
-        """
-        if self.debug_mode:
-            print("Building entity registry (placeholder)...")
-        return {}
-
-    def resolve_coreferences(
-        self,
-        query: str,
-        entities: List[Entity],
-        conversation_history: List[str],
-        entity_registry: Dict[str, Entity],
-    ) -> str:
-        """
-        Resolves coreferences in the query.
-        (Placeholder implementation)
-
-        Args:
-            query: The input query string.
-            entities: A list of entities detected in the query.
-            conversation_history: A list of previous conversation turns.
-            entity_registry: The entity registry.
-
-        Returns:
-            The query with resolved coreferences.
-        """
-        if self.debug_mode:
-            print("Resolving coreferences (placeholder)...")
-        return query
-
-    def resolve_acronyms_aliases(
-        self, text_segment: str, entity_registry: Dict[str, Entity]
-    ) -> str:
-        """
-        Resolves acronyms and aliases in a text segment.
-        (Placeholder implementation)
-
-        Args:
-            text_segment: The text segment to process.
-            entity_registry: The entity registry.
-
-        Returns:
-            The text segment with resolved acronyms and aliases.
-        """
-        if self.debug_mode:
-            print("Resolving acronyms and aliases (placeholder)...")
-        return text_segment
-
-    def resolve_entities_in_query(
-        self,
-        query: str,
-        document_metadata: Optional[List[Dict]] = None,
-        conversation_history: Optional[List[str]] = None,
-    ) -> Tuple[str, List[Entity]]:
-        """
-        Orchestrates the entity resolution process for a query.
-        (Placeholder implementation)
-
-        Args:
-            query: The input query string.
-            document_metadata: Optional list of document metadata.
-            conversation_history: Optional list of conversation history.
-
-        Returns:
-            A tuple containing the resolved query and a list of resolved entities.
-        """
-        if self.debug_mode:
-            print(f"Starting entity resolution for query: '{query}'")
-
-        doc_entities: List[Entity] = []
-        if document_metadata:
-            doc_entities = self.extract_entities_from_metadata(document_metadata)
-
-        current_context: List[str] = []
-        if conversation_history:
-            current_context.extend(conversation_history)
-        # Potentially add text from documents in document_metadata to context too
-
-        entity_registry = self.build_entity_registry(current_context, doc_entities)
-
-        # For now, just returning the original query and an empty list
-        # In the future, this method will call other resolution steps
-        # (e.g., NER on query, coreference, acronym resolution)
-        # and populate the list of resolved entities.
-        resolved_entities: List[Entity] = []
-
-        if self.debug_mode:
-            print("Entity resolution complete (placeholder).")
-        return query, resolved_entities
-
-
-"""
-This module defines the ReferenceResolver class for resolving
-pronouns and indirect references in text.
-"""
-
-from typing import List, Dict, Optional # Removed TYPE_CHECKING
-
-# Note: The 'Entity' TypedDict is defined in partials/entity_resolver.py
-# and is expected to be globally available in the final concatenated script
-# due to the specified concatenation order.
-# Type hints use forward references (string literals) like 'Entity'.
-
-class ReferenceResolver:
-    """
-    A class to resolve pronominal and indirect references in text,
-    linking them to entities in an entity registry.
-    """
-
-    def __init__(self, debug_mode: bool = False):
-        """
-        Initializes the ReferenceResolver.
-
-        Args:
-            debug_mode: If True, enables debug logging.
-        """
-        self.debug_mode = debug_mode
-
-    def resolve_pronouns(
-        self,
-        query: str,
-        conversation_history: List[str],
-        entity_registry: Dict[str, 'Entity'], # Use forward reference string if needed by linters
-        document_context: Optional[Dict] = None,
-    ) -> str:
-        """
-        Resolves pronouns in the query using conversation history and entity registry.
-        (Placeholder implementation)
-
-        Args:
-            query: The input query string.
-            conversation_history: A list of previous conversation turns.
-            entity_registry: The entity registry.
-            document_context: Optional context from documents.
-
-        Returns:
-            The query with resolved pronouns.
-        """
-        if self.debug_mode:
-            print(f"Resolving pronouns in query: '{query}' (placeholder)...")
-        # In a real implementation, this would involve NLP techniques
-        # to identify pronouns and link them to entities.
-        return query
-
-    def resolve_indirect_references(
-        self,
-        query: str,
-        entity_registry: Dict[str, 'Entity'], # Use forward reference string
-        document_context: Optional[Dict] = None,
-    ) -> str:
-        """
-        Resolves indirect references (e.g., "that company," "this issue") in the query.
-        (Placeholder implementation)
-
-        Args:
-            query: The input query string.
-            entity_registry: The entity registry.
-            document_context: Optional context from documents.
-
-        Returns:
-            The query with resolved indirect references.
-        """
-        if self.debug_mode:
-            print(f"Resolving indirect references in query: '{query}' (placeholder)...")
-        # This would involve identifying phrases that refer to entities
-        # indirectly and linking them to the entity registry.
-        return query
-
-    def resolve_references_in_query(
-        self,
-        query: str,
-        entity_registry: Dict[str, 'Entity'], # Use forward reference string
-        conversation_history: Optional[List[str]] = None,
-        document_context: Optional[Dict] = None,
-    ) -> str:
-        """
-        Orchestrates the reference resolution process for a query.
-        (Placeholder implementation)
-
-        Args:
-            query: The input query string.
-            entity_registry: The entity registry.
-            conversation_history: Optional list of previous conversation turns.
-            document_context: Optional context from documents.
-
-        Returns:
-            The query with all resolvable references addressed.
-        """
-        if self.debug_mode:
-            print(f"Starting reference resolution for query: '{query}'")
-
-        resolved_query = query
-
-        if conversation_history:
-            resolved_query = self.resolve_pronouns(
-                resolved_query,
-                conversation_history,
-                entity_registry,
-                document_context,
-            )
-
-        resolved_query = self.resolve_indirect_references(
-            resolved_query, entity_registry, document_context
-        )
-
-        if self.debug_mode:
-            print(f"Reference resolution complete. Resolved query: '{resolved_query}'")
-        return resolved_query
-
-
 # Partials File: partials/query_analyzer.py
 import re
-from typing import List, Dict, Any, Literal, TypedDict, Optional, Tuple # Ensure Tuple is imported
+from typing import List, Dict, Any, Literal, TypedDict, Optional, Tuple
 from enum import Enum
 
 # Attempt to import spaCy, fall back to basic entity extraction if not available
 try:
     import spacy
     NLP = spacy.load("en_core_web_sm")
-    if NLP and not NLP.has_pipe("sentencizer") and not NLP.has_pipe("parser"):
+    # If using older spaCy, sentencizer might need to be added explicitly if not part of default 'en_core_web_sm'
+    if NLP and not NLP.has_pipe("sentencizer") and not NLP.has_pipe("parser"): # Parser often includes sentence boundaries
         try:
             NLP.add_pipe("sentencizer")
             print("QueryAnalyzer: Added sentencizer to spaCy model.")
         except Exception as e:
             print(f"QueryAnalyzer: Warning - could not add sentencizer to spaCy model: {e}. Sentence-based pronoun ambiguity might be affected.")
+
 except ImportError:
     NLP = None
     print("Warning: spaCy not found. Falling back to basic entity extraction for QueryAnalyzer.")
-
-# EntityResolver, ReferenceResolver, and Entity are expected to be defined
-# in the global scope due to concatenation order specified in generation_config.json.
-# No direct imports or dummy classes needed here for those.
-
-# Note: The `Entity` TypedDict, if it was also part of the try-except ImportError block
-# for `entity_resolver`, would also be assumed to be globally available.
-# If `Entity` was defined outside that block or imported separately, it remains.
-# Based on previous steps, `Entity` was part of the dummy definitions, so its
-# definition here (if any outside a try-except) should also be removed if we expect
-# it from entity_resolver.py. Assuming `Entity` is also globally available.
 
 class QueryType(Enum):
     QUESTION = "question"
@@ -801,15 +514,11 @@ class ScopeIndicator(Enum):
     COMPREHENSIVE = "comprehensive"
     UNKNOWN = "unknown"
 
-# Entity TypedDict is expected to be globally available from entity_resolver.py
-
-# New TypedDict for ResolvedEntity
-class ResolvedEntity(TypedDict):
-    original_text: str
-    resolved_text: str
-    confidence: float
-    source: str  # e.g., 'coreference', 'acronym', 'pronoun', 'indirect_reference'
-    original_entity: Optional[Entity] # The entity that was resolved, if applicable
+class Entity(TypedDict):
+    text: str
+    label: str # e.g., PERSON, ORG, DATE, METRIC, CONCEPT
+    start_char: int
+    end_char: int
 
 class TemporalReference(TypedDict):
     text: str
@@ -828,11 +537,8 @@ class AmbiguityDetail(TypedDict):
 
 class QueryMetadata(TypedDict):
     original_query: str
-    resolved_query: str # Query after all resolutions
     query_type: QueryType
-    extracted_entities: List[Entity] # Renamed from 'entities'
-    initial_resolved_entities: List[Entity] # Entities from entity_resolver's first pass
-    resolved_references: List[ResolvedEntity] # New field for details on resolved items
+    entities: List[Entity]
     temporal_refs: List[TemporalReference]
     action_verbs: List[str]
     scope: ScopeIndicator
@@ -845,23 +551,16 @@ class QueryMetadata(TypedDict):
 
 
 class QueryAnalyzer:
-    def __init__(self, query: str, debug_mode: bool = False): # Removed document_metadata from __init__
+    def __init__(self, query: str, debug_mode: bool = False):
         self.original_query = query
         self.query_lower = query.lower()
         self.debug_mode = debug_mode
-        self.entities_cache: Optional[List[Entity]] = None
+        self.entities_cache: Optional[List[Entity]] = None # Cache for entities
 
         if NLP:
-            self.doc = NLP(query) # Process original query for linguistic features
+            self.doc = NLP(query)
         else:
             self.doc = None
-        
-        # Initialize resolvers
-        # These classes (EntityResolver, ReferenceResolver) are expected to be in the
-        # global scope when the final script is concatenated.
-        self.entity_resolver = EntityResolver(debug_mode=self.debug_mode) # type: ignore
-        self.reference_resolver = ReferenceResolver(debug_mode=self.debug_mode) # type: ignore
-        self._log_debug("EntityResolver and ReferenceResolver initialized directly.")
 
         # Predefined lists (some might be expanded for ambiguity detection)
         self.action_verbs_keywords = {
@@ -1198,14 +897,13 @@ class QueryAnalyzer:
         self._log_debug(f"Comparative ambiguity report: {report}")
         return report
 
-    def _detect_entity_ambiguity(self, query_metadata_entities: List[Entity]) -> List[AmbiguityDetail]:
+    def _detect_entity_ambiguity(self) -> List[AmbiguityDetail]:
         report: List[AmbiguityDetail] = []
-        # Use entities passed from the main analyze method (extracted_entities)
-        # entities = self.extract_entities() # No longer call this directly
+        entities = self.extract_entities()
 
         # Count occurrences of ORG, PRODUCT, etc.
-        org_entities = [e['text'] for e in query_metadata_entities if e['label'] == 'ORG']
-        product_entities = [e['text'] for e in query_metadata_entities if e['label'] == 'PRODUCT'] # Assuming PRODUCT label if spaCy provides it
+        org_entities = [e['text'] for e in entities if e['label'] == 'ORG']
+        product_entities = [e['text'] for e in entities if e['label'] == 'PRODUCT'] # Assuming PRODUCT label if spaCy provides it
 
         generic_references = {
             "the company": (org_entities, "ORG"),
@@ -1214,13 +912,13 @@ class QueryAnalyzer:
         }
 
         for generic_term, (entity_list, entity_type_label) in generic_references.items():
-            if generic_term in self.query_lower: # Check against original lowercased query
+            if generic_term in self.query_lower:
                 if len(entity_list) > 1:
                     report.append({
                         "type": "ENTITY", "text": generic_term,
                         "suggestion": f"'{generic_term}' is ambiguous. Multiple {entity_type_label}s detected: {', '.join(entity_list)}. Specify which one."
                     })
-                elif not entity_list and not any(e['label'] == entity_type_label for e in query_metadata_entities): # No specific entity of this type mentioned
+                elif not entity_list and not any(e['label'] == entity_type_label for e in entities): # No specific entity of this type mentioned
                      report.append({
                         "type": "ENTITY", "text": generic_term,
                         "suggestion": f"'{generic_term}' is used, but no specific {entity_type_label} was identified in the query. Please specify."
@@ -1232,156 +930,104 @@ class QueryAnalyzer:
     def _calculate_ambiguity_score(self, detailed_report: List[AmbiguityDetail]) -> float:
         if not detailed_report:
             return 0.0
+
+        # Simple scoring: each ambiguity type adds a fixed amount, with a cap.
+        # Could be weighted by type later.
+        # Max score 1.0
+        # Each detected ambiguity adds 0.25 to the score.
         score = len(detailed_report) * 0.25
+
         self._log_debug(f"Calculated ambiguity score: {min(score, 1.0)} from {len(detailed_report)} ambiguities.")
-        return min(score, 1.0)
+        return min(score, 1.0) # Cap at 1.0
 
-    def analyze(self, document_metadata: Optional[List[Dict]] = None, conversation_history: Optional[List[str]] = None) -> QueryMetadata:
-        self._log_debug(f"Starting analysis for query: '{self.original_query}'")
-        self.entities_cache = None # Clear cache
+    def analyze(self) -> QueryMetadata:
+        self._log_debug(f"Starting analysis for query: '{self.original_query}' (Iteration 2)")
 
-        # --- Entity and Reference Resolution (New Section) ---
-        self._log_debug("Step 1: Entity Resolution")
-        resolved_query_after_entities, initial_resolved_entities_list = self.entity_resolver.resolve_entities_in_query(
-            query=self.original_query, # Start with the original query
-            document_metadata=document_metadata,
-            conversation_history=conversation_history
-        )
-        self._log_debug(f"Query after entity resolution: '{resolved_query_after_entities}'")
-        self._log_debug(f"Initial resolved entities: {initial_resolved_entities_list}")
-
-        self._log_debug("Step 2: Reference Resolution")
-        # Build an entity registry for the reference resolver.
-        # This might be simple for now, or use a more sophisticated build_entity_registry if available.
-        # For now, using initial_resolved_entities_list and conversation_history as context.
-        context_for_registry: List[str] = []
-        if conversation_history:
-            context_for_registry.extend(conversation_history)
-        # Potentially add document text snippets to context_for_registry if available and relevant
-
-        entity_registry = self.entity_resolver.build_entity_registry(
-            context_for_registry, initial_resolved_entities_list
-        )
-        self._log_debug(f"Entity registry for reference resolution: {entity_registry}")
-
-        resolved_query_final = self.reference_resolver.resolve_references_in_query(
-            query=resolved_query_after_entities, # Use query potentially modified by entity resolution
-            entity_registry=entity_registry,
-            conversation_history=conversation_history,
-            document_context=document_metadata[0] if document_metadata and len(document_metadata) > 0 else None # Basic context
-        )
-        self._log_debug(f"Query after reference resolution: '{resolved_query_final}'")
-
-        # For now, subsequent analysis steps will use the *original* query's linguistic features (self.doc)
-        # The resolved_query_final is primarily for output and to inform other systems.
-        # --- End of Entity and Reference Resolution ---
+        # Clear entity cache for fresh analysis if called multiple times (though typically once per instance)
+        self.entities_cache = None
 
         query_type = self.extract_query_type()
-        # Use original query for entity extraction for ambiguity detection, as resolution might change things
-        extracted_entities = self.extract_entities() # These are from the original query
-        temporal_refs = self.extract_temporal_references() # From original query
-        action_verbs = self.extract_action_verbs() # From original query
-        scope = self.extract_scope_indicator() # From original query
-        general_ambiguity_markers = self.extract_ambiguity_markers() # From original query
-        detected_patterns = self.detect_patterns() # From original query
+        entities = self.extract_entities() # Call it once and cache for other ambiguity detectors
+        temporal_refs = self.extract_temporal_references()
+        action_verbs = self.extract_action_verbs()
+        scope = self.extract_scope_indicator()
+        general_ambiguity_markers = self.extract_ambiguity_markers() # Still useful for a quick glance
+        detected_patterns = self.detect_patterns()
 
-        # Detailed Ambiguity Detection (using entities from original query)
+        # Iteration 2: Detailed Ambiguity Detection
         detailed_ambiguity_report: List[AmbiguityDetail] = []
-        detailed_ambiguity_report.extend(self._detect_pronoun_ambiguity()) # This might benefit from resolved_query_final in future
+        detailed_ambiguity_report.extend(self._detect_pronoun_ambiguity())
         detailed_ambiguity_report.extend(self._detect_temporal_ambiguity())
         detailed_ambiguity_report.extend(self._detect_scope_ambiguity())
         detailed_ambiguity_report.extend(self._detect_comparative_ambiguity())
-        # Pass the extracted_entities from the original query to _detect_entity_ambiguity
-        detailed_ambiguity_report.extend(self._detect_entity_ambiguity(extracted_entities))
-
+        detailed_ambiguity_report.extend(self._detect_entity_ambiguity())
 
         ambiguity_score = self._calculate_ambiguity_score(detailed_ambiguity_report)
 
-        # Decomposability score
+        # Decomposability score (can be refined, using Iteration 1 logic for now)
         decomposability_score = 0.0
         if query_type == QueryType.COMPARISON or \
            any(p['type'] == 'MULTI_PART' for p in detected_patterns) or \
            any(p['type'] == 'NESTED_QUERY' for p in detected_patterns) or \
-           len(action_verbs) > 1:
+           len(action_verbs) > 1 :
             decomposability_score = 0.6
-        if ambiguity_score > 0.5:
+        if ambiguity_score > 0.5: # High ambiguity might make it harder to decompose reliably
             decomposability_score = max(0, decomposability_score - 0.2)
 
-        # Populate QueryMetadata
-        # Initialize resolved_references - this would be populated by resolvers in a full impl.
-        resolved_references_list: List[ResolvedEntity] = []
 
         metadata: QueryMetadata = {
             "original_query": self.original_query,
-            "resolved_query": resolved_query_final, # Store the final resolved query
             "query_type": query_type,
-            "extracted_entities": extracted_entities, # Renamed from 'entities'
-            "initial_resolved_entities": initial_resolved_entities_list, # Store entities from EntityResolver
-            "resolved_references": resolved_references_list, # Placeholder for now
+            "entities": entities,
             "temporal_refs": temporal_refs,
             "action_verbs": action_verbs,
             "scope": scope,
-            "ambiguity_markers": general_ambiguity_markers,
+            "ambiguity_markers": general_ambiguity_markers, # General list
             "detected_patterns": detected_patterns,
             "ambiguity_score": ambiguity_score,
             "decomposability_score": decomposability_score,
-            "detailed_ambiguity_report": detailed_ambiguity_report
+            "detailed_ambiguity_report": detailed_ambiguity_report # New field
         }
-        self._log_debug(f"Analysis complete. Metadata: {metadata}")
+        self._log_debug(f"Analysis complete (Iteration 2). Metadata: {metadata}")
         return metadata
 
 if __name__ == '__main__':
     # Example Usage (for testing purposes)
-    # Note: For these examples to run with resolvers, EntityResolver and ReferenceResolver
-    # would need their actual implementations or more sophisticated mocks.
-    # The dummy resolvers will just return the query as is.
-
-    # Example document metadata and conversation history
-    sample_doc_meta = [{"doc_id": "doc1", "title": "Company Report Q1", "text_snippet": "Alpha Corp announced good results."}]
-    sample_convo_history = ["What was Alpha Corp's revenue last quarter?", "It was $5 million."]
-
-
     queries_to_test_iter2 = [
-        "What is its status and how does it compare to the previous one?",
-        "Analyze performance data for Alpha Corp.",
-        "Is the new system better than the old one?",
-        "Tell me about the company's recent results. What were their main findings?",
+        "What is its status and how does it compare to the previous one?", # Pronoun, Comparative, Temporal
+        "Analyze performance data.", # Scope, Temporal (current implied)
+        "Is the new system better?", # Comparative
+        "Tell me about the company's recent results.", # Entity, Temporal, Scope
+        "List all projects for the client.", # Entity (if multiple clients or no client identified)
+        "Generate a summary of their findings.", # Pronoun
+        "Compare sales in 2023 to 2022 for product X and product Y.", # Low ambiguity
+        "What are the current risks?", # Temporal, Scope
+        "Find issues related to the new deployment.", # Scope
+        "How much did revenue increase for the division?" # Comparative, Entity (if multiple divisions)
     ]
 
-    for q_text in queries_to_test_iter2:
-        print(f"--- Analyzing Query: \"{q_text}\" ---")
-        # Pass query text to __init__
-        analyzer = QueryAnalyzer(query=q_text, debug_mode=True)
-        # Call analyze with optional context
-        meta = analyzer.analyze(document_metadata=sample_doc_meta, conversation_history=sample_convo_history)
-
-        print(f"Original Query: {meta['original_query']}")
-        print(f"Resolved Query: {meta['resolved_query']}")
+    for q in queries_to_test_iter2:
+        print(f"--- Analyzing Query (Iter 2): \"{q}\" ---")
+        analyzer = QueryAnalyzer(q, debug_mode=True)
+        meta = analyzer.analyze()
         print(f"Query Type: {meta['query_type'].value}")
-        print(f"Extracted Entities (from original): {meta['extracted_entities']}")
-        print(f"Initial Resolved Entities (from EntityResolver): {meta['initial_resolved_entities']}")
-        print(f"Resolved References (placeholder): {meta['resolved_references']}")
+        # print(f"Entities: {meta['entities']}")
         # print(f"Temporal Refs: {meta['temporal_refs']}")
         # print(f"Action Verbs: {meta['action_verbs']}")
         # print(f"Scope: {meta['scope'].value}")
+        # print(f"Ambiguity Markers (general): {meta['ambiguity_markers']}")
+        # print(f"Detected Patterns: {meta['detected_patterns']}")
         print(f"Ambiguity Score: {meta['ambiguity_score']:.2f}")
         print(f"Detailed Ambiguity Report: {meta['detailed_ambiguity_report']}")
         print(f"Decomposability Score: {meta['decomposability_score']:.2f}")
         print("---------------------------------------\n")
 
-    # Test without spaCy if NLP object exists
-    if NLP is not None:
-        _temp_nlp = NLP
-        NLP = None # type: ignore
-        print("\n--- Testing without spaCy (if it was enabled before) ---")
-        analyzer_no_spacy = QueryAnalyzer(query="What is its profit if the company is good?", debug_mode=True)
-        meta_no_spacy = analyzer_no_spacy.analyze()
-        print(f"Original Query: {meta_no_spacy['original_query']}")
-        print(f"Resolved Query: {meta_no_spacy['resolved_query']}")
-        print(f"Extracted Entities: {meta_no_spacy['extracted_entities']}")
-        print(f"Detailed Ambiguity Report: {meta_no_spacy['detailed_ambiguity_report']}")
-        NLP = _temp_nlp # type: ignore
-        print("---------------------------------------\n")
+    # Test with no spaCy again if needed
+    # _temp_nlp = NLP; NLP = None
+    # analyzer_no_spacy = QueryAnalyzer("What is its profit?", debug_mode=True)
+    # meta_no_spacy = analyzer_no_spacy.analyze()
+    # print(f"Ambiguity Report (no spaCy): {meta_no_spacy['detailed_ambiguity_report']}")
+    # NLP = _temp_nlp
 
 
 # Partials File: partials/query_expander.py
@@ -3095,60 +2741,38 @@ async def _execute_minions_protocol(
 
     user_query = processed_query # This is the query to be used by the rest of the protocol
 
-    # --- Query Analysis (Iteration 2, with Iteration 8 enhancements) ---
+    # --- Query Analysis (Iteration 1 became Iteration 2 with ambiguity) ---
     if valves.debug_mode:
-        debug_log.append("🧠 **Starting Query Analysis... (Iteration 2 + 8 Features)**")
+        debug_log.append("🧠 **Starting Query Analysis... (Iteration 2 Features)**") # Updated comment
 
+    # QueryAnalyzer should use the potentially expanded query
     query_analyzer = QueryAnalyzer(query=user_query, debug_mode=valves.debug_mode)
-    
-    # Retrieve the new valve for entity/reference resolution
-    enable_entity_reference_resolution = getattr(valves, "enable_entity_reference_resolution", True) # Default true if not set
-
-    if enable_entity_reference_resolution:
-        if valves.debug_mode:
-            debug_log.append("   Entity/Reference Resolution ENABLED.")
-        # document_metadata: self.document_chunks is not available as this is not a class method.
-        # `chunks` variable contains list of strings, QueryAnalyzer expects List[Dict].
-        # For now, passing None for document_metadata.
-        # conversation_history: `conversation_log` is available and is List[str].
-        query_metadata: QueryMetadata = query_analyzer.analyze(
-            document_metadata=None, # Passing None as `chunks` is List[str] not List[Dict]
-            conversation_history=conversation_log # `conversation_log` is List[str]
-        )
-    else:
-        if valves.debug_mode:
-            debug_log.append("   Entity/Reference Resolution DISABLED.")
-        query_metadata: QueryMetadata = query_analyzer.analyze() # Original call
+    query_metadata: QueryMetadata = query_analyzer.analyze()
 
     if valves.debug_mode:
+        # Log the original query if it was expanded, for comparison
         if user_query_original != user_query:
              debug_log.append(f"   Original Query (Pre-Expansion): {user_query_original}")
-        debug_log.append(f"   Analyzed Query (Post-Expansion, Pre-Resolution for old fields): {query_metadata['original_query']}")
+        debug_log.append(f"   Analyzed Query (Post-Expansion): {query_metadata['original_query']}") # This will be the processed_query
         debug_log.append(f"   Query Type: {query_metadata['query_type'].value}")
-        # Note: query_metadata['entities'] was renamed to query_metadata['extracted_entities']
-        debug_log.append(f"   Extracted Entities (from original query): {query_metadata['extracted_entities']}")
-        
-        if enable_entity_reference_resolution:
-            # Use .get() for new keys to avoid KeyError if they are not populated (e.g. if resolution is off or fails)
-            # self.logger.debug is not available, using debug_log.append
-            debug_log.append(f"   Resolved Query: {query_metadata.get('resolved_query')}")
-            debug_log.append(f"   Initial Resolved Entities: {query_metadata.get('initial_resolved_entities')}")
-            debug_log.append(f"   Resolved References (placeholder): {query_metadata.get('resolved_references')}")
-
+        debug_log.append(f"   Detected Entities: {query_metadata['entities']}")
         debug_log.append(f"   Temporal References: {query_metadata['temporal_refs']}")
         debug_log.append(f"   Action Verbs: {query_metadata['action_verbs']}")
         debug_log.append(f"   Scope: {query_metadata['scope'].value}")
         debug_log.append(f"   Ambiguity Markers: {query_metadata['ambiguity_markers']}")
         debug_log.append(f"   Detected Patterns: {query_metadata['detected_patterns']}")
-        debug_log.append(f"   Ambiguity Score: {query_metadata['ambiguity_score']:.2f}")
-        debug_log.append(f"   Detailed Ambiguity Report: {query_metadata['detailed_ambiguity_report']}")
-        debug_log.append(f"   Decomposability Score: {query_metadata['decomposability_score']:.2f}")
+        debug_log.append(f"   Ambiguity Score (Iter 2): {query_metadata['ambiguity_score']:.2f}")
+        debug_log.append(f"   Detailed Ambiguity Report (Iter 2): {query_metadata['detailed_ambiguity_report']}")
+        debug_log.append(f"   Decomposability Score (Iter 2): {query_metadata['decomposability_score']:.2f}")
 
+        # New warning for high ambiguity score
+        # Assuming a threshold can be added to valves, e.g., valves.high_ambiguity_threshold
+        # For now, hardcode 0.7 as per plan, but ideally this would be configurable.
         high_ambiguity_threshold = getattr(valves, 'high_ambiguity_threshold', 0.7)
         if query_metadata['ambiguity_score'] > high_ambiguity_threshold:
             debug_log.append(f"   ⚠️ WARNING: High ambiguity score ({query_metadata['ambiguity_score']:.2f}) detected. "
                              f"Query may require clarification for optimal processing. Threshold: {high_ambiguity_threshold}")
-        
+
         debug_log.append("🧠 **Finished Query Analysis.**")
     # --- End Query Analysis ---
 

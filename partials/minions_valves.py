@@ -192,12 +192,6 @@ class MinionsValves(BaseModel):
         description="Value added to sufficiency thresholds if first round novelty is high (e.g., -0.05 to relax sufficiency requirement)."
     )
 
-    # --- Entity and Reference Resolution Valve (Iteration 8) ---
-    enable_entity_reference_resolution: bool = Field(
-        default=True,
-        description="Enable the new entity and reference resolution step. If true, QueryAnalyzer will attempt to resolve ambiguous entities and references."
-    )
-
     class Config:
         extra = "ignore" # Ignore any extra fields passed to the model
         # an_example = MinionsValves().dict() # For schema generation
