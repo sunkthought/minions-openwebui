@@ -1,5 +1,5 @@
 # Partials File: partials/minion_models.py
-from typing import List, Optional, Dict, Set, Any
+from typing import List, Optional, Dict, Set, Any, Tuple
 from pydantic import BaseModel, Field
 import asyncio
 
@@ -108,3 +108,55 @@ class ConversationState(BaseModel):
                 summary += f"- {gap}\n"
                 
         return summary
+
+class QuestionDeduplicator:
+    """Handles detection and prevention of duplicate questions in conversations"""
+    def __init__(self, similarity_threshold: float = 0.8):
+        self.asked_questions: List[str] = []
+        self.question_embeddings: List[str] = []  # Simplified: store normalized forms
+        self.similarity_threshold = similarity_threshold
+        
+    def is_duplicate(self, question: str) -> Tuple[bool, Optional[str]]:
+        """Check if question is semantically similar to a previous question"""
+        # Normalize the question
+        normalized = self._normalize_question(question)
+        
+        # Check for semantic similarity (simplified approach)
+        for idx, prev_normalized in enumerate(self.question_embeddings):
+            if self._calculate_similarity(normalized, prev_normalized) > self.similarity_threshold:
+                return True, self.asked_questions[idx]
+                
+        return False, None
+        
+    def add_question(self, question: str):
+        """Add question to the deduplication store"""
+        self.asked_questions.append(question)
+        self.question_embeddings.append(self._normalize_question(question))
+        
+    def _normalize_question(self, question: str) -> str:
+        """Simple normalization - in production, use embeddings"""
+        # Remove common words, lowercase, extract key terms
+        stop_words = {"what", "is", "the", "are", "how", "does", "can", "you", "tell", "me", "about", 
+                      "please", "could", "would", "explain", "describe", "provide", "give", "any",
+                      "there", "which", "when", "where", "who", "why", "do", "have", "has", "been",
+                      "was", "were", "will", "be", "being", "a", "an", "and", "or", "but", "in",
+                      "on", "at", "to", "for", "of", "with", "by", "from", "as", "this", "that"}
+        
+        # Extract words and filter
+        words = question.lower().replace("?", "").replace(".", "").replace(",", "").split()
+        key_words = [w for w in words if w not in stop_words and len(w) > 2]
+        return " ".join(sorted(key_words))
+        
+    def _calculate_similarity(self, q1: str, q2: str) -> float:
+        """Calculate similarity between normalized questions using Jaccard similarity"""
+        words1 = set(q1.split())
+        words2 = set(q2.split())
+        if not words1 or not words2:
+            return 0.0
+        intersection = words1.intersection(words2)
+        union = words1.union(words2)
+        return len(intersection) / len(union) if union else 0.0
+        
+    def get_all_questions(self) -> List[str]:
+        """Return all previously asked questions"""
+        return self.asked_questions.copy()

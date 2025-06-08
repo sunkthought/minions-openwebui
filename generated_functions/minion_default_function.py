@@ -21,7 +21,7 @@ from pydantic import BaseModel, Field
 from fastapi import Request # type: ignore
 
 # Partials File: partials/minion_models.py
-from typing import List, Optional, Dict, Set, Any
+from typing import List, Optional, Dict, Set, Any, Tuple
 from pydantic import BaseModel, Field
 import asyncio
 
@@ -130,6 +130,58 @@ class ConversationState(BaseModel):
                 summary += f"- {gap}\n"
                 
         return summary
+
+class QuestionDeduplicator:
+    """Handles detection and prevention of duplicate questions in conversations"""
+    def __init__(self, similarity_threshold: float = 0.8):
+        self.asked_questions: List[str] = []
+        self.question_embeddings: List[str] = []  # Simplified: store normalized forms
+        self.similarity_threshold = similarity_threshold
+        
+    def is_duplicate(self, question: str) -> Tuple[bool, Optional[str]]:
+        """Check if question is semantically similar to a previous question"""
+        # Normalize the question
+        normalized = self._normalize_question(question)
+        
+        # Check for semantic similarity (simplified approach)
+        for idx, prev_normalized in enumerate(self.question_embeddings):
+            if self._calculate_similarity(normalized, prev_normalized) > self.similarity_threshold:
+                return True, self.asked_questions[idx]
+                
+        return False, None
+        
+    def add_question(self, question: str):
+        """Add question to the deduplication store"""
+        self.asked_questions.append(question)
+        self.question_embeddings.append(self._normalize_question(question))
+        
+    def _normalize_question(self, question: str) -> str:
+        """Simple normalization - in production, use embeddings"""
+        # Remove common words, lowercase, extract key terms
+        stop_words = {"what", "is", "the", "are", "how", "does", "can", "you", "tell", "me", "about", 
+                      "please", "could", "would", "explain", "describe", "provide", "give", "any",
+                      "there", "which", "when", "where", "who", "why", "do", "have", "has", "been",
+                      "was", "were", "will", "be", "being", "a", "an", "and", "or", "but", "in",
+                      "on", "at", "to", "for", "of", "with", "by", "from", "as", "this", "that"}
+        
+        # Extract words and filter
+        words = question.lower().replace("?", "").replace(".", "").replace(",", "").split()
+        key_words = [w for w in words if w not in stop_words and len(w) > 2]
+        return " ".join(sorted(key_words))
+        
+    def _calculate_similarity(self, q1: str, q2: str) -> float:
+        """Calculate similarity between normalized questions using Jaccard similarity"""
+        words1 = set(q1.split())
+        words2 = set(q2.split())
+        if not words1 or not words2:
+            return 0.0
+        intersection = words1.intersection(words2)
+        union = words1.union(words2)
+        return len(intersection) / len(union) if union else 0.0
+        
+    def get_all_questions(self) -> List[str]:
+        """Return all previously asked questions"""
+        return self.asked_questions.copy()
 
 
 # Partials File: partials/minion_valves.py
@@ -240,6 +292,18 @@ class MinionValves(BaseModel):
     track_conversation_state: bool = Field(
         default=True,
         description="Enable comprehensive conversation state tracking for better context awareness"
+    )
+    
+    # Question Deduplication (v0.3.6b)
+    enable_deduplication: bool = Field(
+        default=True,
+        description="Prevent duplicate questions by detecting semantic similarity"
+    )
+    deduplication_threshold: float = Field(
+        default=0.8,
+        description="Similarity threshold for question deduplication (0-1). Higher = stricter matching",
+        ge=0.0,
+        le=1.0
     )
 
     # The following class is part of the Pydantic configuration and is standard.
@@ -682,7 +746,7 @@ Based on this context, ask your first strategic question to the local assistant.
     
     return base_prompt
 
-def get_minion_conversation_claude_prompt_with_state(history: List[Tuple[str, str]], original_query: str, valves: Any, conversation_state: Optional[Any] = None) -> str:
+def get_minion_conversation_claude_prompt_with_state(history: List[Tuple[str, str]], original_query: str, valves: Any, conversation_state: Optional[Any] = None, previous_questions: Optional[List[str]] = None) -> str:
     """
     Enhanced version of conversation prompt that includes conversation state if available.
     """
@@ -704,6 +768,19 @@ INFORMATION GAPS: {len(conversation_state.information_gaps)}
         base_prompt = base_prompt.replace(
             "DECISION POINT:",
             state_section + "\nDECISION POINT:"
+        )
+    
+    # Add deduplication guidance if previous questions provided
+    if previous_questions and valves.enable_deduplication:
+        questions_section = "\nPREVIOUSLY ASKED QUESTIONS (DO NOT REPEAT):\n"
+        for i, q in enumerate(previous_questions, 1):
+            questions_section += f"{i}. {q}\n"
+        
+        questions_section += "\n⚠️ IMPORTANT: Avoid asking questions that are semantically similar to the above. Each new question should explore genuinely new information.\n"
+        
+        base_prompt = base_prompt.replace(
+            "Remember: Each question should build on what you've learned, not repeat previous inquiries.",
+            questions_section + "Remember: Each question should build on what you've learned, not repeat previous inquiries."
         )
     
     return base_prompt
@@ -871,7 +948,8 @@ async def _execute_minion_protocol(
     call_claude_func: Callable,
     call_ollama_func: Callable,
     LocalAssistantResponseModel: Any,
-    ConversationStateModel: Any = None
+    ConversationStateModel: Any = None,
+    QuestionDeduplicatorModel: Any = None
 ) -> str:
     """Execute the Minion protocol"""
     conversation_log = []
@@ -884,6 +962,13 @@ async def _execute_minion_protocol(
     conversation_state = None
     if valves.track_conversation_state and ConversationStateModel:
         conversation_state = ConversationStateModel()
+    
+    # Initialize question deduplicator if enabled
+    deduplicator = None
+    if valves.enable_deduplication and QuestionDeduplicatorModel:
+        deduplicator = QuestionDeduplicatorModel(
+            similarity_threshold=valves.deduplication_threshold
+        )
     
     # Initialize metrics tracking
     overall_start_time = asyncio.get_event_loop().time()
@@ -948,8 +1033,9 @@ Respond with "FINAL ANSWER READY." followed by your synthesized answer. Do NOT a
             else:
                 # Use state-aware prompt if state tracking is enabled
                 if conversation_state and valves.track_conversation_state:
+                    previous_questions = deduplicator.get_all_questions() if deduplicator else None
                     claude_prompt_for_this_round = get_minion_conversation_claude_prompt_with_state(
-                        conversation_history, query, valves, conversation_state
+                        conversation_history, query, valves, conversation_state, previous_questions
                     )
                 else:
                     claude_prompt_for_this_round = get_minion_conversation_claude_prompt(
@@ -1001,6 +1087,50 @@ Respond with "FINAL ANSWER READY." followed by your synthesized answer. Do NOT a
         # Skip local model call if this was the last round and the remote model provided final answer
         if round_num == valves.max_rounds - 1:
             continue
+
+        # Extract question from Claude's response for deduplication check
+        question_to_check = claude_response.strip()
+        
+        # Check for duplicate questions if deduplication is enabled
+        if deduplicator and valves.enable_deduplication:
+            is_dup, original_question = deduplicator.is_duplicate(question_to_check)
+            
+            if is_dup:
+                # Log the duplicate detection
+                if valves.show_conversation:
+                    conversation_log.append(f"⚠️ **Duplicate question detected! Similar to: '{original_question[:100]}...'**")
+                    conversation_log.append(f"**Requesting a different question...**\n")
+                
+                if valves.debug_mode:
+                    debug_log.append(f"  ⚠️ Duplicate question detected in round {round_num + 1}. (Debug Mode)")
+                
+                # Create a prompt asking for a different question
+                dedup_prompt = f"""The question you just asked is too similar to a previous question: "{original_question}"
+
+Please ask a DIFFERENT question that explores new aspects of the information needed to answer: "{query}"
+
+Focus on areas not yet covered in our conversation."""
+                
+                # Request a new question
+                try:
+                    new_claude_response = await call_claude_func(valves, dedup_prompt)
+                    claude_response = new_claude_response
+                    question_to_check = claude_response.strip()
+                    
+                    # Update conversation history with the new question
+                    conversation_history[-1] = ("assistant", claude_response)
+                    
+                    if valves.show_conversation:
+                        conversation_log.append(f"**🤖 Remote Model (New Question):**")
+                        conversation_log.append(f"{claude_response}\n")
+                except Exception as e:
+                    # If we can't get a new question, continue with the duplicate
+                    if valves.debug_mode:
+                        debug_log.append(f"  ❌ Failed to get alternative question: {e} (Debug Mode)")
+        
+        # Add the question to deduplicator after checks
+        if deduplicator:
+            deduplicator.add_question(question_to_check)
 
         local_prompt = get_minion_local_prompt(context, query, claude_response, valves)
         
@@ -1222,7 +1352,8 @@ async def minion_pipe(
                         call_claude_func=call_claude,
                         call_ollama_func=call_ollama,
                         LocalAssistantResponseModel=LocalAssistantResponse,
-                        ConversationStateModel=ConversationState
+                        ConversationStateModel=ConversationState,
+                        QuestionDeduplicatorModel=QuestionDeduplicator
                     )
                     chunk_results.append(chunk_header + chunk_result)
                 except Exception as e:
@@ -1253,7 +1384,8 @@ The document was automatically divided into {len(chunks)} chunks for processing.
                 call_claude_func=call_claude,  # Pass imported function
                 call_ollama_func=call_ollama,  # Pass imported function
                 LocalAssistantResponseModel=LocalAssistantResponse, # Pass imported class
-                ConversationStateModel=ConversationState
+                ConversationStateModel=ConversationState,
+                QuestionDeduplicatorModel=QuestionDeduplicator
             )
             return result
 
