@@ -66,13 +66,13 @@ def get_minion_conversation_claude_prompt(history: List[Tuple[str, str]], origin
 def get_minion_local_prompt(context: str, query: str, claude_request: str, valves: Any) -> str:
     """
     Returns the prompt for the local Ollama model in the Minion protocol.
-    Moved from _execute_minion_protocol in minion_protocol_logic.py.
+    Updated to support structured output with LocalAssistantResponse model.
     """
     # query is the original user query.
     # context is the document chunk.
     # claude_request (the parameter) is the specific question from the remote model to the local model.
 
-    return f"""You are an AI assistant. You have access to the following DOCUMENT:
+    base_prompt = f"""You are a helpful assistant with access to the following document:
 <document>
 {context}
 </document>
@@ -82,16 +82,25 @@ The remote model (another AI) is asking you a specific question about this docum
 {claude_request}
 </remote_model_question>
 
-Your task is to answer the remote model's question based *only* on the DOCUMENT provided.
+Instructions:
+1. Answer the specific question asked based ONLY on the document
+2. Cite relevant passages or sections when possible
+3. If multiple pieces of information are relevant, organize them as key points
+4. If information is not in the document, clearly state "This information is not found in the provided document"
+5. Indicate your confidence level (HIGH/MEDIUM/LOW) based on how directly the document addresses the question"""
 
-Your response MUST be a single JSON object. Do not include any text, explanations, or markdown formatting (like ```json ... ```) outside of this JSON object.
+    if valves.use_structured_output:
+        structured_output_instructions = """
 
-The JSON object must have the following keys:
-- "explanation": A concise statement of your reasoning or how you concluded your answer.
-- "citation": A direct snippet of the text from the DOCUMENT that supports your answer. If no supporting text is found in the DOCUMENT, this field must be null.
-- "answer": The extracted answer to the remote model's question. If the answer cannot be determined from the DOCUMENT, this field must be null.
+Respond ONLY with a JSON object in this exact format:
+{
+    "answer": "Your detailed answer here",
+    "confidence": "HIGH/MEDIUM/LOW",
+    "key_points": ["point 1", "point 2"] or null,
+    "citations": ["relevant quote 1", "relevant quote 2"] or null
+}
 
-IMPORTANT: If you cannot confidently determine the information from the DOCUMENT to answer the remote model's question, ALL THREE fields ("explanation", "citation", "answer") in the JSON object must be null.
-
-Provide only the JSON object in your response.
-"""
+Do not include any text, explanations, or markdown formatting (like ```json ... ```) outside of this JSON object."""
+        return base_prompt + structured_output_instructions
+    else:
+        return base_prompt + "\n\nProvide a clear, detailed answer to the question."

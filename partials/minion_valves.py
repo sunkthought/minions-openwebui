@@ -45,7 +45,7 @@ class MinionValves(BaseModel):
         description="num_predict for Ollama generation (max output tokens for local model)."
     )
     use_structured_output: bool = Field(
-        default=False, 
+        default=True, 
         description="Enable JSON structured output for local model responses (requires local model support)."
     )
     debug_mode: bool = Field(
