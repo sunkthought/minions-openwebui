@@ -21,7 +21,7 @@ from pydantic import BaseModel, Field
 from fastapi import Request # type: ignore
 
 # Partials File: partials/minion_models.py
-from typing import List, Optional
+from typing import List, Optional, Dict
 from pydantic import BaseModel, Field
 
 class LocalAssistantResponse(BaseModel):
@@ -52,6 +52,38 @@ class LocalAssistantResponse(BaseModel):
         #         "citations": ["The final report confirms project completion in Q4."]
         #     }
         # }
+
+class ConversationMetrics(BaseModel):
+    """
+    Metrics tracking for Minion protocol conversations.
+    Captures performance data for analysis and optimization.
+    """
+    rounds_used: int = Field(description="Number of Q&A rounds completed in the conversation")
+    questions_asked: int = Field(description="Total number of questions asked by the remote model")
+    avg_answer_confidence: float = Field(
+        description="Average confidence score across all local model responses (0.0-1.0)"
+    )
+    total_tokens_used: int = Field(
+        default=0,
+        description="Estimated total tokens used across all API calls"
+    )
+    conversation_duration_ms: float = Field(
+        description="Total conversation duration in milliseconds"
+    )
+    completion_detected: bool = Field(
+        description="Whether the conversation ended via completion detection vs max rounds"
+    )
+    unique_topics_explored: int = Field(
+        default=0,
+        description="Count of distinct topics/themes in questions (optional)"
+    )
+    confidence_distribution: Dict[str, int] = Field(
+        default_factory=dict,
+        description="Distribution of confidence levels (HIGH/MEDIUM/LOW counts)"
+    )
+    
+    class Config:
+        extra = "ignore"
 
 
 # Partials File: partials/minion_valves.py
@@ -712,10 +744,18 @@ async def _execute_minion_protocol(
     conversation_history = []
     actual_final_answer = "No final answer was explicitly provided by the remote model."
     claude_declared_final = False
+    
+    # Initialize metrics tracking
+    overall_start_time = asyncio.get_event_loop().time()
+    metrics = {
+        'confidence_scores': [],
+        'confidence_distribution': {'HIGH': 0, 'MEDIUM': 0, 'LOW': 0},
+        'rounds_completed': 0,
+        'completion_via_detection': False,
+        'estimated_tokens': 0
+    }
 
-    overall_start_time = 0
     if valves.debug_mode:
-        overall_start_time = asyncio.get_event_loop().time()
         debug_log.append(f"🔍 **Debug Info (Minion v0.3.6):**")
         debug_log.append(f"  - Query: {query[:100]}...")
         debug_log.append(f"  - Context length: {len(context)} chars")
@@ -799,6 +839,7 @@ Respond with "FINAL ANSWER READY." followed by your synthesized answer. Do NOT a
             # Remote model indicates it has sufficient information
             actual_final_answer = claude_response
             claude_declared_final = True
+            metrics['completion_via_detection'] = True
             if valves.show_conversation:
                 conversation_log.append(f"✅ **The remote model indicates it has sufficient information to answer.**\n")
             if valves.debug_mode:
@@ -828,6 +869,15 @@ Respond with "FINAL ANSWER READY." followed by your synthesized answer. Do NOT a
                 debug_mode=valves.debug_mode,
                 LocalAssistantResponseModel=LocalAssistantResponseModel
             )
+            
+            # Track metrics from local response
+            if 'numeric_confidence' in local_response_data:
+                metrics['confidence_scores'].append(local_response_data['numeric_confidence'])
+            
+            confidence_level = local_response_data.get('confidence', 'MEDIUM').upper()
+            if confidence_level in metrics['confidence_distribution']:
+                metrics['confidence_distribution'][confidence_level] += 1
+            
             if valves.debug_mode:
                 end_time_ollama = asyncio.get_event_loop().time()
                 time_taken_ollama = end_time_ollama - start_time_ollama
@@ -858,6 +908,9 @@ Respond with "FINAL ANSWER READY." followed by your synthesized answer. Do NOT a
                 conversation_log.append(f"{local_response_data.get('answer', 'Error displaying local response.')}")
             conversation_log.append("\n")
 
+        # Update round count
+        metrics['rounds_completed'] = round_num + 1
+        
         if valves.debug_mode:
             current_cumulative_time = asyncio.get_event_loop().time() - overall_start_time
             debug_log.append(f"**🏁 Completed Round {round_num + 1}. Cumulative time: {current_cumulative_time:.2f}s. (Debug Mode)**\n")
@@ -869,8 +922,15 @@ Respond with "FINAL ANSWER READY." followed by your synthesized answer. Do NOT a
         if valves.show_conversation:
             conversation_log.append(f"⚠️ Protocol ended without the remote model providing a final answer.\n")
 
+    # Calculate final metrics
+    total_execution_time = asyncio.get_event_loop().time() - overall_start_time
+    avg_confidence = sum(metrics['confidence_scores']) / len(metrics['confidence_scores']) if metrics['confidence_scores'] else 0.0
+    
+    # Estimate tokens (rough approximation)
+    for role, msg in conversation_history:
+        metrics['estimated_tokens'] += len(msg) // 4  # Rough token estimate
+    
     if valves.debug_mode:
-        total_execution_time = asyncio.get_event_loop().time() - overall_start_time
         debug_log.append(f"**⏱️ Total Minion protocol execution time: {total_execution_time:.2f}s. (Debug Mode)**")
 
     output_parts = []
@@ -898,6 +958,19 @@ Respond with "FINAL ANSWER READY." followed by your synthesized answer. Do NOT a
     output_parts.append(f"- **Traditional approach:** ~{stats['traditional_tokens']:,} tokens")
     output_parts.append(f"- **Minion approach:** ~{stats['minion_tokens']:,} tokens")
     output_parts.append(f"- **💰 Token Savings:** ~{stats['percentage_savings']:.1f}%")
+    
+    # Add conversation metrics
+    output_parts.append(f"\n## 📈 Conversation Metrics")
+    output_parts.append(f"- **Rounds used:** {metrics['rounds_completed']} of {valves.max_rounds}")
+    output_parts.append(f"- **Questions asked:** {metrics['rounds_completed']}")
+    output_parts.append(f"- **Average confidence:** {avg_confidence:.2f} ({['LOW', 'MEDIUM', 'HIGH'][int(avg_confidence * 2.99)]})")
+    output_parts.append(f"- **Confidence distribution:**")
+    for level, count in metrics['confidence_distribution'].items():
+        if count > 0:
+            output_parts.append(f"  - {level}: {count} response(s)")
+    output_parts.append(f"- **Completion method:** {'Early completion detected' if metrics['completion_via_detection'] else 'Reached max rounds or explicit completion'}")
+    output_parts.append(f"- **Total duration:** {total_execution_time*1000:.0f}ms")
+    output_parts.append(f"- **Estimated tokens:** ~{metrics['estimated_tokens']:,}")
     
     return "\n".join(output_parts)
 
