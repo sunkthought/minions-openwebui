@@ -93,7 +93,8 @@ Key valves to configure:
 *   `show_conversation`: Show full task decomposition and execution details (default: true).
 *   `timeout_local`: Timeout for each local model call in seconds (default: 30).
 *   `max_round_timeout_failure_threshold_percent`: Warning threshold for timeouts (default: 50).
-*   `use_structured_output`: Enable JSON structured output (default: false).
+*   `use_structured_output`: Enable JSON structured output (default: **true** as of v0.3.5).
+*   `structured_output_fallback_enabled`: Enable fallback parsing when structured output fails (default: true).
 
 ##### Performance Profile
 *   `performance_profile`: Overall performance profile: 'high_quality', 'balanced', 'fastest_results'. Affects base thresholds and max_rounds before other adaptive modifiers. (default: "balanced", options: ["high_quality", "balanced", "fastest_results"])
@@ -155,6 +156,32 @@ If you are running Open WebUI in a Docker container (which is common) and your O
 - Ask specific questions about the provided context
 - Use `show_conversation` valve to see the detailed collaboration process
 - Adjust timeout settings if you're working with particularly long documents
+
+### Structured Output Support (v0.3.5+)
+
+The MinionS protocol now includes robust structured output support for improved reliability when working with local models. This feature ensures consistent, parseable responses from local models, making the protocol more reliable and easier to debug.
+
+**Key Features:**
+- **Automatic Model Detection**: The system automatically detects if your local model supports JSON mode
+- **Smart Fallback**: If JSON parsing fails, the system attempts to extract information using regex patterns
+- **Clear Schema**: Local models receive explicit JSON schema with examples for consistent formatting
+
+**Supported Models:**
+The following models are known to support structured output:
+- Llama family: llama3.2, llama3.1, llama3, llama2
+- Mistral family: mistral, mixtral, mistral-nemo
+- Qwen family: qwen2, qwen2.5
+- Others: gemma2, phi3, command-r, codellama, and many more
+
+**Configuration:**
+- `use_structured_output`: Enable/disable structured output (default: true)
+- `structured_output_fallback_enabled`: Enable/disable fallback parsing (default: true)
+
+**Benefits:**
+- More reliable parsing of local model responses
+- Better confidence scoring (HIGH/MEDIUM/LOW mapped to numeric values)
+- Easier debugging with clear parse error messages
+- Improved success rates for task execution
 
 ## Choosing Your Minion: Minion vs. MinionS
 
@@ -283,6 +310,15 @@ Let's say you want a version of the Minion function that uses a slightly differe
 This modular approach provides a powerful way to adapt and evolve the Minion/MinionS functions to fit a wide variety of use cases and preferences.
 
 ## Version History
+
+### v0.3.5 - Robust Structured Output Support
+- **JSON Mode by Default**: Structured output is now enabled by default for improved reliability with compatible local models
+- **Model Capability Detection**: Automatically detects if local models support JSON mode (includes llama3.2, mistral, mixtral, qwen2, gemma2, and many others)
+- **Enhanced Prompt Engineering**: Clear JSON schema with comprehensive examples of correct and incorrect formats
+- **Robust Parsing**: Handles markdown-wrapped JSON, extracts JSON from responses with explanatory text, and includes regex fallback for malformed responses
+- **Configurable Fallback**: New `structured_output_fallback_enabled` valve allows control over fallback behavior
+- **Success Metrics**: Tracks structured output success rate for monitoring and debugging
+- **Better Confidence Scoring**: Consistent confidence values (HIGH/MEDIUM/LOW) mapped to numeric scores for better decision making
 
 ### v0.3.4 - Advanced Adaptive Round Management & Performance Insights
 - **Smart Information Sufficiency**: Implemented information sufficiency scoring that considers query component coverage and confidence of addressed components, moving beyond simple confidence metrics.
