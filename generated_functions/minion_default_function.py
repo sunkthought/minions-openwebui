@@ -126,8 +126,43 @@ class MinionValves(BaseModel):
 # Partials File: partials/common_api_calls.py
 import aiohttp
 import json
-from typing import Optional
+from typing import Optional, Dict, Set
 from pydantic import BaseModel
+
+# Known models that support JSON/structured output
+STRUCTURED_OUTPUT_CAPABLE_MODELS: Set[str] = {
+    "llama3.2", "llama3.1", "llama3", "llama2",
+    "mistral", "mixtral", "mistral-nemo",
+    "qwen2", "qwen2.5", 
+    "gemma2", "gemma",
+    "phi3", "phi",
+    "command-r", "command-r-plus",
+    "deepseek-coder", "deepseek-coder-v2",
+    "codellama",
+    "dolphin-llama3", "dolphin-mixtral",
+    "solar", "starling-lm",
+    "yi", "zephyr",
+    "neural-chat", "openchat"
+}
+
+def model_supports_structured_output(model_name: str) -> bool:
+    """Check if a model is known to support structured output"""
+    if not model_name:
+        return False
+    
+    # Normalize model name for comparison
+    model_lower = model_name.lower()
+    
+    # Check exact matches first
+    if model_lower in STRUCTURED_OUTPUT_CAPABLE_MODELS:
+        return True
+    
+    # Check partial matches (for versioned models like llama3.2:1b)
+    for known_model in STRUCTURED_OUTPUT_CAPABLE_MODELS:
+        if model_lower.startswith(known_model):
+            return True
+    
+    return False
 
 async def call_claude(
     valves: BaseModel,  # Or a more specific type if Valves is shareable
@@ -179,7 +214,16 @@ async def call_ollama(
         "options": {"temperature": 0.1, "num_predict": valves.ollama_num_predict},
     }
 
-    if use_json and hasattr(valves, 'use_structured_output') and valves.use_structured_output and schema:
+    # Check if we should use structured output
+    should_use_structured = (
+        use_json and 
+        hasattr(valves, 'use_structured_output') and 
+        valves.use_structured_output and 
+        schema and
+        model_supports_structured_output(valves.local_model)
+    )
+    
+    if should_use_structured:
         payload["format"] = "json"
         # Pydantic v1 used schema.schema_json(), v2 uses schema_json = model_json_schema(MyModel) then json.dumps(schema_json)
         # Assuming schema object has a .schema_json() method for simplicity here, may need adjustment
@@ -199,7 +243,12 @@ async def call_ollama(
 
         schema_prompt_addition = f"\n\nRespond ONLY with valid JSON matching this schema:\n{schema_for_prompt}"
         payload["prompt"] = prompt + schema_prompt_addition
-    elif "format" in payload:
+    elif use_json and hasattr(valves, 'use_structured_output') and valves.use_structured_output:
+        # Model doesn't support structured output but it was requested
+        if hasattr(valves, 'debug_mode') and valves.debug_mode:
+            print(f"DEBUG: Model '{valves.local_model}' does not support structured output. Using text-based parsing fallback.")
+    
+    if "format" in payload and not should_use_structured:
         del payload["format"]
 
     async with aiohttp.ClientSession() as session:

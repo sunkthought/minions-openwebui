@@ -158,8 +158,12 @@ class MinionsValves(BaseModel):
         default=1000, description="Maximum tokens (num_predict) for local Ollama model responses during task execution."
     )
     use_structured_output: bool = Field(
-        default=False, 
+        default=True, 
         description="Enable JSON structured output for local model responses (requires local model to support JSON mode and the TaskResult schema)."
+    )
+    structured_output_fallback_enabled: bool = Field(
+        default=True,
+        description="Enable fallback parsing when structured output fails. If False, parsing errors will be propagated."
     )
     extraction_instructions: str = Field(
         default="", title="Extraction Instructions", description="Specific instructions for the LLM on what to extract or how to process the information for each task."
@@ -294,8 +298,43 @@ class MinionsValves(BaseModel):
 # Partials File: partials/common_api_calls.py
 import aiohttp
 import json
-from typing import Optional
+from typing import Optional, Dict, Set
 from pydantic import BaseModel
+
+# Known models that support JSON/structured output
+STRUCTURED_OUTPUT_CAPABLE_MODELS: Set[str] = {
+    "llama3.2", "llama3.1", "llama3", "llama2",
+    "mistral", "mixtral", "mistral-nemo",
+    "qwen2", "qwen2.5", 
+    "gemma2", "gemma",
+    "phi3", "phi",
+    "command-r", "command-r-plus",
+    "deepseek-coder", "deepseek-coder-v2",
+    "codellama",
+    "dolphin-llama3", "dolphin-mixtral",
+    "solar", "starling-lm",
+    "yi", "zephyr",
+    "neural-chat", "openchat"
+}
+
+def model_supports_structured_output(model_name: str) -> bool:
+    """Check if a model is known to support structured output"""
+    if not model_name:
+        return False
+    
+    # Normalize model name for comparison
+    model_lower = model_name.lower()
+    
+    # Check exact matches first
+    if model_lower in STRUCTURED_OUTPUT_CAPABLE_MODELS:
+        return True
+    
+    # Check partial matches (for versioned models like llama3.2:1b)
+    for known_model in STRUCTURED_OUTPUT_CAPABLE_MODELS:
+        if model_lower.startswith(known_model):
+            return True
+    
+    return False
 
 async def call_claude(
     valves: BaseModel,  # Or a more specific type if Valves is shareable
@@ -347,7 +386,16 @@ async def call_ollama(
         "options": {"temperature": 0.1, "num_predict": valves.ollama_num_predict},
     }
 
-    if use_json and hasattr(valves, 'use_structured_output') and valves.use_structured_output and schema:
+    # Check if we should use structured output
+    should_use_structured = (
+        use_json and 
+        hasattr(valves, 'use_structured_output') and 
+        valves.use_structured_output and 
+        schema and
+        model_supports_structured_output(valves.local_model)
+    )
+    
+    if should_use_structured:
         payload["format"] = "json"
         # Pydantic v1 used schema.schema_json(), v2 uses schema_json = model_json_schema(MyModel) then json.dumps(schema_json)
         # Assuming schema object has a .schema_json() method for simplicity here, may need adjustment
@@ -367,7 +415,12 @@ async def call_ollama(
 
         schema_prompt_addition = f"\n\nRespond ONLY with valid JSON matching this schema:\n{schema_for_prompt}"
         payload["prompt"] = prompt + schema_prompt_addition
-    elif "format" in payload:
+    elif use_json and hasattr(valves, 'use_structured_output') and valves.use_structured_output:
+        # Model doesn't support structured output but it was requested
+        if hasattr(valves, 'debug_mode') and valves.debug_mode:
+            print(f"DEBUG: Model '{valves.local_model}' does not support structured output. Using text-based parsing fallback.")
+    
+    if "format" in payload and not should_use_structured:
         del payload["format"]
 
     async with aiohttp.ClientSession() as session:
@@ -546,19 +599,25 @@ Task: {task}'''
 
     if valves.use_structured_output:
         prompt_lines.append(f'''\n
-IMPORTANT: Provide your answer as a valid JSON object with the following structure:
+IMPORTANT: You must respond with ONLY a valid JSON object. Do not include any text before or after the JSON.
+
+Required JSON structure:
 {{
     "explanation": "Brief explanation of your findings for this task",
     "citation": "Direct quote from the text if applicable to this task, or null",
-    "answer": "Your complete answer to the task as a SINGLE STRING"
+    "answer": "Your complete answer to the task as a SINGLE STRING",
+    "confidence": "HIGH, MEDIUM, or LOW"
 }}''')
 
         structured_output_rules = [
-            "CRITICAL RULES FOR JSON:",
-            "1. The \"answer\" field MUST be a plain text string, NOT an object or array.",
-            "2. If you need to list multiple items in the \"answer\" field, format them as a single string with clear separators (e.g., \"Item 1: Description. Item 2: Description.\").",
-            "3. Do NOT create nested JSON structures within any field.",
-            "4. If you cannot confidently determine the information from the provided text to answer the task, ALL THREE fields (\"explanation\", \"citation\", \"answer\") in the JSON object must be null."
+            "\nCRITICAL RULES FOR JSON OUTPUT:",
+            "1. Output ONLY the JSON object - no markdown formatting, no explanatory text, no code blocks",
+            "2. The \"answer\" field MUST be a plain text string, NOT an object or array",
+            "3. If listing multiple items, format as a single string (e.g., \"Item 1: Description. Item 2: Description.\")",
+            "4. Use proper JSON escaping for quotes within strings (\\\" for quotes inside string values)",
+            "5. If information is not found, set \"answer\" to null and \"confidence\" to \"LOW\"",
+            "6. The \"confidence\" field must be exactly one of: \"HIGH\", \"MEDIUM\", or \"LOW\"",
+            "7. All string values must be properly quoted and escaped"
         ]
         prompt_lines.extend(structured_output_rules)
 
@@ -573,26 +632,64 @@ IMPORTANT: Provide your answer as a valid JSON object with the following structu
 
 
         prompt_lines.append(f'''
-EXAMPLE of CORRECT format:
+\nEXAMPLES OF CORRECT JSON OUTPUT:
+
+Example 1 - Information found:
 {{
-    "explanation": "Found information about X in the text for the task",
-    "citation": "The text states 'X is Y'...",
-    "answer": "X is Y according to the document."
+    "explanation": "Found budget information in the financial section",
+    "citation": "The total project budget is set at $2.5 million for fiscal year 2024",
+    "answer": "$2.5 million",
+    "confidence": "HIGH"
+}}
+
+Example 2 - Information NOT found:
+{{
+    "explanation": "Searched for revenue projections but this chunk only contains expense data",
+    "citation": null,
+    "answer": null,
+    "confidence": "LOW"
+}}
+
+Example 3 - Multiple items found:
+{{
+    "explanation": "Identified three risk factors mentioned in the document",
+    "citation": "Key risks include: market volatility, regulatory changes, and supply chain disruptions",
+    "answer": "1. Market volatility 2. Regulatory changes 3. Supply chain disruptions",
+    "confidence": "HIGH"
 }}''')
+        
         if hasattr(valves, 'expected_format') and valves.expected_format and valves.expected_format.lower() == "bullet points":
             prompt_lines.append(f'''
-EXAMPLE for "answer" field formatted as BULLET POINTS:
+\nExample with bullet points in answer field:
 {{
-    "explanation": "Found several points for the task.",
-    "citation": "Relevant quote...",
-    "answer": "- Point 1: Details about point 1.\\n- Point 2: Details about point 2."
+    "explanation": "Found multiple implementation steps",
+    "citation": "The implementation plan consists of three phases...",
+    "answer": "- Phase 1: Initial setup and configuration\\n- Phase 2: Testing and validation\\n- Phase 3: Full deployment",
+    "confidence": "MEDIUM"
 }}''')
 
         prompt_lines.append(f'''
-EXAMPLE of INCORRECT format (DO NOT DO THIS):
+\nEXAMPLES OF INCORRECT OUTPUT (DO NOT DO THIS):
+
+Wrong - Wrapped in markdown:
+```json
+{{"answer": "some value"}}
+```
+
+Wrong - Answer is not a string:
 {{
-    "answer": {{"key": "value"}}  // WRONG - "answer" field must be a string!
-}}''')
+    "answer": {{"key": "value"}},
+    "confidence": "HIGH"
+}}
+
+Wrong - Missing required fields:
+{{
+    "answer": "some value"
+}}
+
+Wrong - Text outside JSON:
+Here is my response:
+{{"answer": "some value"}}''')
 
     else: # Not using structured output
         prompt_lines.append("\n\nProvide a brief, specific answer based ONLY on the text provided above.")
@@ -734,20 +831,47 @@ from typing import List, Dict, Any, Callable # Removed Optional, Awaitable
 
 # Removed create_chunks function from here
 
-def parse_local_response(response: str, is_structured: bool, use_structured_output: bool, debug_mode: bool, TaskResultModel: Any) -> Dict:
+def parse_local_response(response: str, is_structured: bool, use_structured_output: bool, debug_mode: bool, TaskResultModel: Any, structured_output_fallback_enabled: bool = True) -> Dict:
     """Parse local model response, supporting both text and structured formats"""
     confidence_map = {'HIGH': 0.9, 'MEDIUM': 0.6, 'LOW': 0.3}
     default_numeric_confidence = 0.3 # Corresponds to LOW
 
     if is_structured and use_structured_output:
+        # Clean up common formatting issues
+        cleaned_response = response.strip()
+        
+        # Remove markdown code blocks if present
+        if cleaned_response.startswith("```json") and cleaned_response.endswith("```"):
+            cleaned_response = cleaned_response[7:-3].strip()
+        elif cleaned_response.startswith("```") and cleaned_response.endswith("```"):
+            cleaned_response = cleaned_response[3:-3].strip()
+        
+        # Try to extract JSON from response with explanatory text
+        if not cleaned_response.startswith("{"):
+            # Look for JSON object in the response
+            json_start = cleaned_response.find("{")
+            json_end = cleaned_response.rfind("}")
+            if json_start != -1 and json_end != -1 and json_end > json_start:
+                cleaned_response = cleaned_response[json_start:json_end+1]
+        
         try:
-            parsed_json = json.loads(response)
+            parsed_json = json.loads(cleaned_response)
+            
+            # Handle missing confidence field with default
+            if 'confidence' not in parsed_json:
+                parsed_json['confidence'] = 'LOW'
             
             # Safety net: if answer is a dict/list, stringify it
             if 'answer' in parsed_json and not isinstance(parsed_json['answer'], (str, type(None))):
                 if debug_mode:
                     print(f"DEBUG: Converting non-string answer to string: {type(parsed_json['answer'])}")
                 parsed_json['answer'] = json.dumps(parsed_json['answer']) if parsed_json['answer'] else None
+            
+            # Ensure required fields have defaults if missing
+            if 'explanation' not in parsed_json:
+                parsed_json['explanation'] = parsed_json.get('answer', '') or "No explanation provided"
+            if 'citation' not in parsed_json:
+                parsed_json['citation'] = None
             
             validated_model = TaskResultModel(**parsed_json)
             model_dict = validated_model.dict()
@@ -762,17 +886,70 @@ def parse_local_response(response: str, is_structured: bool, use_structured_outp
             else:
                 model_dict['_is_none_equivalent'] = False
             return model_dict
+            
+        except json.JSONDecodeError as e:
+            if debug_mode:
+                print(f"DEBUG: JSON decode error in MinionS: {e}. Cleaned response was: {cleaned_response[:500]}")
+            
+            if not structured_output_fallback_enabled:
+                # Re-raise the error if fallback is disabled
+                raise e
+            
+            # Try regex fallback to extract key information
+            import re
+            answer_match = re.search(r'"answer"\s*:\s*"([^"]*)"', response)
+            confidence_match = re.search(r'"confidence"\s*:\s*"(HIGH|MEDIUM|LOW)"', response, re.IGNORECASE)
+            
+            if answer_match:
+                answer = answer_match.group(1)
+                confidence = confidence_match.group(1).upper() if confidence_match else "LOW"
+                return {
+                    "answer": answer,
+                    "explanation": f"Extracted from malformed JSON: {answer}",
+                    "confidence": confidence,
+                    "numeric_confidence": confidence_map.get(confidence, default_numeric_confidence),
+                    "citation": None,
+                    "parse_error": f"JSON parse error (recovered): {str(e)}",
+                    "_is_none_equivalent": answer.strip().upper() == "NONE"
+                }
+            
+            # Complete fallback
+            is_none_equivalent_fallback = response.strip().upper() == "NONE"
+            return {
+                "answer": response, 
+                "explanation": response, 
+                "confidence": "LOW", 
+                "numeric_confidence": default_numeric_confidence, 
+                "parse_error": f"JSON parse error: {str(e)}", 
+                "_is_none_equivalent": is_none_equivalent_fallback
+            }
+            
         except Exception as e:
             if debug_mode:
                 print(f"DEBUG: Failed to parse structured output in MinionS: {e}. Response was: {response[:500]}")
             # Fallback for parsing failure
             is_none_equivalent_fallback = response.strip().upper() == "NONE"
-            return {"answer": response, "explanation": response, "confidence": "LOW", "numeric_confidence": default_numeric_confidence, "parse_error": str(e), "_is_none_equivalent": is_none_equivalent_fallback}
+            return {
+                "answer": response, 
+                "explanation": response, 
+                "confidence": "LOW", 
+                "numeric_confidence": default_numeric_confidence, 
+                "parse_error": str(e), 
+                "_is_none_equivalent": is_none_equivalent_fallback
+            }
     
     # Fallback for non-structured processing
     is_none_equivalent_text = response.strip().upper() == "NONE"
     # Confidence is MEDIUM by default in this path
-    return {"answer": response, "explanation": response, "confidence": "MEDIUM", "numeric_confidence": confidence_map['MEDIUM'], "citation": None, "parse_error": None, "_is_none_equivalent": is_none_equivalent_text}
+    return {
+        "answer": response, 
+        "explanation": response, 
+        "confidence": "MEDIUM", 
+        "numeric_confidence": confidence_map['MEDIUM'], 
+        "citation": None, 
+        "parse_error": None, 
+        "_is_none_equivalent": is_none_equivalent_text
+    }
 
 async def execute_tasks_on_chunks(
     tasks: List[str], 
@@ -797,6 +974,10 @@ async def execute_tasks_on_chunks(
     # Initialize Confidence Accumulators
     round_confidence_distribution = {"HIGH": 0, "MEDIUM": 0, "LOW": 0}
     aggregated_task_confidences = []
+    
+    # Structured output metrics
+    structured_output_attempts = 0
+    structured_output_successes = 0
 
     for task_idx, task in enumerate(tasks):
         tasks_executed_count += 1 # Track Tasks Executed
@@ -849,8 +1030,15 @@ async def execute_tasks_on_chunks(
                     is_structured=True,
                     use_structured_output=valves.use_structured_output,
                     debug_mode=valves.debug_mode,
-                    TaskResultModel=TaskResult # Pass TaskResult to parse_local_response
+                    TaskResultModel=TaskResult, # Pass TaskResult to parse_local_response
+                    structured_output_fallback_enabled=getattr(valves, 'structured_output_fallback_enabled', True)
                 )
+                
+                # Track structured output success
+                if valves.use_structured_output:
+                    structured_output_attempts += 1
+                    if not response_data.get('parse_error'):
+                        structured_output_successes += 1
 
                 # Collect Confidence per Chunk
                 numeric_confidence = response_data.get('numeric_confidence', 0.3) # Default to LOW numeric
@@ -985,6 +1173,11 @@ async def execute_tasks_on_chunks(
         # total_unique_findings_count will be handled later, defaulting in the model
     }
 
+    # Calculate structured output success rate if applicable
+    structured_output_success_rate = None
+    if structured_output_attempts > 0:
+        structured_output_success_rate = structured_output_successes / structured_output_attempts
+    
     return {
         "results": overall_task_results,
         "total_chunk_processing_attempts": total_attempts_this_call,
@@ -993,6 +1186,11 @@ async def execute_tasks_on_chunks(
         "confidence_metrics_data": { # New confidence data
             "task_confidences": aggregated_task_confidences,
             "round_confidence_distribution": round_confidence_distribution
+        },
+        "structured_output_metrics": {
+            "attempts": structured_output_attempts,
+            "successes": structured_output_successes,
+            "success_rate": structured_output_success_rate
         }
     }
 
