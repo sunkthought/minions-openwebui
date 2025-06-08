@@ -189,7 +189,7 @@ Based on this context, ask your first strategic question to the local assistant.
     
     return base_prompt
 
-def get_minion_conversation_claude_prompt_with_state(history: List[Tuple[str, str]], original_query: str, valves: Any, conversation_state: Optional[Any] = None) -> str:
+def get_minion_conversation_claude_prompt_with_state(history: List[Tuple[str, str]], original_query: str, valves: Any, conversation_state: Optional[Any] = None, previous_questions: Optional[List[str]] = None) -> str:
     """
     Enhanced version of conversation prompt that includes conversation state if available.
     """
@@ -211,6 +211,19 @@ INFORMATION GAPS: {len(conversation_state.information_gaps)}
         base_prompt = base_prompt.replace(
             "DECISION POINT:",
             state_section + "\nDECISION POINT:"
+        )
+    
+    # Add deduplication guidance if previous questions provided
+    if previous_questions and valves.enable_deduplication:
+        questions_section = "\nPREVIOUSLY ASKED QUESTIONS (DO NOT REPEAT):\n"
+        for i, q in enumerate(previous_questions, 1):
+            questions_section += f"{i}. {q}\n"
+        
+        questions_section += "\n⚠️ IMPORTANT: Avoid asking questions that are semantically similar to the above. Each new question should explore genuinely new information.\n"
+        
+        base_prompt = base_prompt.replace(
+            "Remember: Each question should build on what you've learned, not repeat previous inquiries.",
+            questions_section + "Remember: Each question should build on what you've learned, not repeat previous inquiries."
         )
     
     return base_prompt

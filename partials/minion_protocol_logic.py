@@ -161,7 +161,8 @@ async def _execute_minion_protocol(
     call_claude_func: Callable,
     call_ollama_func: Callable,
     LocalAssistantResponseModel: Any,
-    ConversationStateModel: Any = None
+    ConversationStateModel: Any = None,
+    QuestionDeduplicatorModel: Any = None
 ) -> str:
     """Execute the Minion protocol"""
     conversation_log = []
@@ -174,6 +175,13 @@ async def _execute_minion_protocol(
     conversation_state = None
     if valves.track_conversation_state and ConversationStateModel:
         conversation_state = ConversationStateModel()
+    
+    # Initialize question deduplicator if enabled
+    deduplicator = None
+    if valves.enable_deduplication and QuestionDeduplicatorModel:
+        deduplicator = QuestionDeduplicatorModel(
+            similarity_threshold=valves.deduplication_threshold
+        )
     
     # Initialize metrics tracking
     overall_start_time = asyncio.get_event_loop().time()
@@ -238,8 +246,9 @@ Respond with "FINAL ANSWER READY." followed by your synthesized answer. Do NOT a
             else:
                 # Use state-aware prompt if state tracking is enabled
                 if conversation_state and valves.track_conversation_state:
+                    previous_questions = deduplicator.get_all_questions() if deduplicator else None
                     claude_prompt_for_this_round = get_minion_conversation_claude_prompt_with_state(
-                        conversation_history, query, valves, conversation_state
+                        conversation_history, query, valves, conversation_state, previous_questions
                     )
                 else:
                     claude_prompt_for_this_round = get_minion_conversation_claude_prompt(
@@ -291,6 +300,50 @@ Respond with "FINAL ANSWER READY." followed by your synthesized answer. Do NOT a
         # Skip local model call if this was the last round and the remote model provided final answer
         if round_num == valves.max_rounds - 1:
             continue
+
+        # Extract question from Claude's response for deduplication check
+        question_to_check = claude_response.strip()
+        
+        # Check for duplicate questions if deduplication is enabled
+        if deduplicator and valves.enable_deduplication:
+            is_dup, original_question = deduplicator.is_duplicate(question_to_check)
+            
+            if is_dup:
+                # Log the duplicate detection
+                if valves.show_conversation:
+                    conversation_log.append(f"⚠️ **Duplicate question detected! Similar to: '{original_question[:100]}...'**")
+                    conversation_log.append(f"**Requesting a different question...**\n")
+                
+                if valves.debug_mode:
+                    debug_log.append(f"  ⚠️ Duplicate question detected in round {round_num + 1}. (Debug Mode)")
+                
+                # Create a prompt asking for a different question
+                dedup_prompt = f"""The question you just asked is too similar to a previous question: "{original_question}"
+
+Please ask a DIFFERENT question that explores new aspects of the information needed to answer: "{query}"
+
+Focus on areas not yet covered in our conversation."""
+                
+                # Request a new question
+                try:
+                    new_claude_response = await call_claude_func(valves, dedup_prompt)
+                    claude_response = new_claude_response
+                    question_to_check = claude_response.strip()
+                    
+                    # Update conversation history with the new question
+                    conversation_history[-1] = ("assistant", claude_response)
+                    
+                    if valves.show_conversation:
+                        conversation_log.append(f"**🤖 Remote Model (New Question):**")
+                        conversation_log.append(f"{claude_response}\n")
+                except Exception as e:
+                    # If we can't get a new question, continue with the duplicate
+                    if valves.debug_mode:
+                        debug_log.append(f"  ❌ Failed to get alternative question: {e} (Debug Mode)")
+        
+        # Add the question to deduplicator after checks
+        if deduplicator:
+            deduplicator.add_question(question_to_check)
 
         local_prompt = get_minion_local_prompt(context, query, claude_response, valves)
         

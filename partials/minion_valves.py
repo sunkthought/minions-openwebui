@@ -107,6 +107,18 @@ class MinionValves(BaseModel):
         default=True,
         description="Enable comprehensive conversation state tracking for better context awareness"
     )
+    
+    # Question Deduplication (v0.3.6b)
+    enable_deduplication: bool = Field(
+        default=True,
+        description="Prevent duplicate questions by detecting semantic similarity"
+    )
+    deduplication_threshold: float = Field(
+        default=0.8,
+        description="Similarity threshold for question deduplication (0-1). Higher = stricter matching",
+        ge=0.0,
+        le=1.0
+    )
 
     # The following class is part of the Pydantic configuration and is standard.
     # It ensures that extra fields passed to the model are ignored rather than causing an error.

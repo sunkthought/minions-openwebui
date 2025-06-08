@@ -5,7 +5,7 @@ from fastapi import Request
 
 from .common_api_calls import call_claude, call_ollama
 from .minion_protocol_logic import _execute_minion_protocol
-from .minion_models import LocalAssistantResponse, ConversationState # Import both models
+from .minion_models import LocalAssistantResponse, ConversationState, QuestionDeduplicator # Import all models
 from .common_context_utils import extract_context_from_messages, extract_context_from_files
 from .common_file_processing import create_chunks
 
@@ -74,7 +74,8 @@ async def minion_pipe(
                         call_claude_func=call_claude,
                         call_ollama_func=call_ollama,
                         LocalAssistantResponseModel=LocalAssistantResponse,
-                        ConversationStateModel=ConversationState
+                        ConversationStateModel=ConversationState,
+                        QuestionDeduplicatorModel=QuestionDeduplicator
                     )
                     chunk_results.append(chunk_header + chunk_result)
                 except Exception as e:
@@ -105,7 +106,8 @@ The document was automatically divided into {len(chunks)} chunks for processing.
                 call_claude_func=call_claude,  # Pass imported function
                 call_ollama_func=call_ollama,  # Pass imported function
                 LocalAssistantResponseModel=LocalAssistantResponse, # Pass imported class
-                ConversationStateModel=ConversationState
+                ConversationStateModel=ConversationState,
+                QuestionDeduplicatorModel=QuestionDeduplicator
             )
             return result
 
