@@ -352,59 +352,87 @@ from typing import List, Tuple, Any
 def get_minion_initial_claude_prompt(query: str, context_len: int, valves: Any) -> str:
     """
     Returns the initial prompt for Claude in the Minion protocol.
-    Moved from _execute_minion_protocol in minion_protocol_logic.py.
+    Enhanced with better question generation guidance.
     """
     # Escape any quotes in the query to prevent f-string issues
     escaped_query = query.replace('"', '\\"').replace("'", "\\'")
     
-    return f'''Your primary goal is to answer the user's question: "{escaped_query}"
+    return f'''You are a research coordinator working with a knowledgeable local assistant who has access to specific documents.
 
-To achieve this, you will collaborate with a local AI assistant. This local assistant has ALREADY READ and has FULL ACCESS to the relevant document ({context_len} characters long). The local assistant is a TRUSTED source that will provide you with factual information, summaries, and direct extractions FROM THE DOCUMENT in response to your questions.
+Your task: Gather information to answer the user's query by asking strategic questions.
 
-Your role is to:
-1.  Formulate specific, focused questions to the local assistant to gather the necessary information from the document. Ask only what you need to build up the answer to the user's original query.
-2.  Receive and understand the information provided by the local assistant.
-3.  Synthesize this information to answer the user's original query.
+USER'S QUERY: "{escaped_query}"
 
-IMPORTANT INSTRUCTIONS:
-- DO NOT ask the local assistant to provide the entire document or large raw excerpts.
-- DO NOT express that you cannot see the document. Assume the local assistant provides accurate information from it.
-- Your questions should be aimed at extracting pieces of information that you can then synthesize.
+The local assistant has FULL ACCESS to the relevant document ({context_len} characters long) and will provide factual information extracted from it.
 
-If, after receiving responses from the local assistant, you believe you have gathered enough information to comprehensively answer the user's original query ("{escaped_query}"), then respond ONLY with the exact phrase "FINAL ANSWER READY." followed by your detailed final answer.
-If you need more specific information from the document, ask the local assistant ONE more clear, targeted question. Do not use the phrase "FINAL ANSWER READY." yet.
+Guidelines for effective questions:
+1. Ask ONE specific, focused question at a time
+2. Build upon previous answers to go deeper
+3. Avoid broad questions like "What does the document say?" 
+4. Good: "What are the specific budget allocations for Q2?"
+   Poor: "Tell me about the budget"
+5. Track what you've learned to avoid redundancy
 
-Start by asking your first question to the local assistant to begin gathering information.
-'''
+When to conclude:
+- Start your response with "I now have sufficient information" when ready to provide the final answer
+- You have {valves.max_rounds} rounds maximum to gather information
+
+QUESTION STRATEGY TIPS:
+- For factual queries: Ask for specific data points, dates, numbers, or names
+- For analytical queries: Ask about relationships, comparisons, or patterns
+- For summary queries: Ask about key themes, main points, or conclusions
+- For procedural queries: Ask about steps, sequences, or requirements
+
+Remember: The assistant can only see the document, not your conversation history.
+
+If you have gathered enough information to answer "{escaped_query}", respond with "FINAL ANSWER READY." followed by your comprehensive answer.
+
+Otherwise, ask your first strategic question to the local assistant.'''
 
 def get_minion_conversation_claude_prompt(history: List[Tuple[str, str]], original_query: str, valves: Any) -> str:
     """
     Returns the prompt for Claude during subsequent conversation rounds in the Minion protocol.
-    Moved from _build_conversation_context in minion_protocol_logic.py.
+    Enhanced with better guidance for follow-up questions.
     """
     # Escape the original query
     escaped_query = original_query.replace('"', '\\"').replace("'", "\\'")
     
+    current_round = len(history) // 2 + 1
+    rounds_remaining = valves.max_rounds - current_round
+    
     context_parts = [
-        f'You are a supervisor LLM collaborating with a trusted local AI assistant to answer the user\'s ORIGINAL QUESTION: "{escaped_query}"',
-        "The local assistant has full access to the source document and has been providing factual information extracted from it.",
+        f'You are continuing to gather information to answer: "{escaped_query}"',
+        f"Round {current_round} of {valves.max_rounds}",
         "",
-        "CONVERSATION SO FAR (Your questions, Local Assistant's factual responses from the document):",
+        "INFORMATION GATHERED SO FAR:",
     ]
 
-    for role, message in history:
+    for i, (role, message) in enumerate(history):
         if role == "assistant":  # Claude's previous message
-            context_parts.append(f'You previously asked the local assistant: "{message}"')
+            context_parts.append(f'\nQ{i//2 + 1}: {message}')
         else:  # Local model's response
-            context_parts.append(f'The local assistant responded with information from the document: "{message}"')
+            # Extract key information if structured
+            if isinstance(message, str) and message.startswith('{'):
+                context_parts.append(f'A{i//2 + 1}: {message}')
+            else:
+                context_parts.append(f'A{i//2 + 1}: {message}')
 
     context_parts.extend(
         [
             "",
-            "REMINDER: The local assistant's responses are factual information extracted directly from the document.",
-            "Based on ALL information provided by the local assistant so far, can you now provide a complete and comprehensive answer to the user's ORIGINAL QUESTION?",
-            "If YES: Respond ONLY with the exact phrase 'FINAL ANSWER READY.' followed by your comprehensive final answer. Ensure your answer directly addresses the original query using the information gathered.",
-            "If NO: Ask ONE more specific, targeted question to the local assistant to obtain the remaining information you need from the document. Be precise. Do not ask for the document itself or express that you cannot see it.",
+            "DECISION POINT:",
+            "Evaluate if you have sufficient information to answer the original question comprehensively.",
+            "",
+            "✅ If YES: Start with 'FINAL ANSWER READY.' then provide your complete answer",
+            f"❓ If NO: Ask ONE more strategic question (you have {rounds_remaining} rounds left)",
+            "",
+            "TIPS FOR YOUR NEXT QUESTION:",
+            "- What specific gaps remain in your understanding?",
+            "- Can you drill deeper into any mentioned topics?",
+            "- Are there related aspects you haven't explored?",
+            "- Would examples or specific details strengthen your answer?",
+            "",
+            "Remember: Each question should build on what you've learned, not repeat previous inquiries.",
         ]
     )
     return "\n".join(context_parts)
