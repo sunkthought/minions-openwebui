@@ -473,22 +473,105 @@ def _is_final_answer(response: str) -> bool:
     """Check if response contains the specific final answer marker."""
     return "FINAL ANSWER READY." in response
 
-def _parse_local_response(response: str, is_structured: bool, use_structured_output: bool, debug_mode: bool, LocalAssistantResponseModel: Any) -> Dict: # Added LocalAssistantResponseModel
+def _parse_local_response(response: str, is_structured: bool, use_structured_output: bool, debug_mode: bool, LocalAssistantResponseModel: Any) -> Dict:
     """Parse local model response, supporting both text and structured formats."""
+    confidence_map = {'HIGH': 0.9, 'MEDIUM': 0.6, 'LOW': 0.3}
+    default_numeric_confidence = 0.3  # Corresponds to LOW
+    
     if is_structured and use_structured_output:
+        # Clean up common formatting issues
+        cleaned_response = response.strip()
+        
+        # Remove markdown code blocks if present
+        if cleaned_response.startswith("```json") and cleaned_response.endswith("```"):
+            cleaned_response = cleaned_response[7:-3].strip()
+        elif cleaned_response.startswith("```") and cleaned_response.endswith("```"):
+            cleaned_response = cleaned_response[3:-3].strip()
+        
+        # Try to extract JSON from response with explanatory text
+        if not cleaned_response.startswith("{"):
+            # Look for JSON object in the response
+            json_start = cleaned_response.find("{")
+            json_end = cleaned_response.rfind("}")
+            if json_start != -1 and json_end != -1 and json_end > json_start:
+                cleaned_response = cleaned_response[json_start:json_end+1]
+        
         try:
-            parsed_json = json.loads(response)
-            validated_model = LocalAssistantResponseModel(**parsed_json) # Use LocalAssistantResponseModel
+            parsed_json = json.loads(cleaned_response)
+            
+            # Handle missing confidence field with default
+            if 'confidence' not in parsed_json:
+                parsed_json['confidence'] = 'LOW'
+            
+            # Ensure required fields have defaults if missing
+            if 'answer' not in parsed_json:
+                parsed_json['answer'] = None
+            if 'key_points' not in parsed_json:
+                parsed_json['key_points'] = None
+            if 'citations' not in parsed_json:
+                parsed_json['citations'] = None
+            
+            validated_model = LocalAssistantResponseModel(**parsed_json)
             model_dict = validated_model.dict()
             model_dict['parse_error'] = None
+            
+            # Add numeric confidence for consistency
+            text_confidence = model_dict.get('confidence', 'LOW').upper()
+            model_dict['numeric_confidence'] = confidence_map.get(text_confidence, default_numeric_confidence)
+            
             return model_dict
+            
+        except json.JSONDecodeError as e:
+            if debug_mode:
+                print(f"DEBUG: JSON decode error in Minion: {e}. Cleaned response was: {cleaned_response[:500]}")
+            
+            # Try regex fallback to extract key information
+            import re
+            answer_match = re.search(r'"answer"\s*:\s*"([^"]*)"', response)
+            confidence_match = re.search(r'"confidence"\s*:\s*"(HIGH|MEDIUM|LOW)"', response, re.IGNORECASE)
+            
+            if answer_match:
+                answer = answer_match.group(1)
+                confidence = confidence_match.group(1).upper() if confidence_match else "LOW"
+                return {
+                    "answer": answer,
+                    "confidence": confidence,
+                    "numeric_confidence": confidence_map.get(confidence, default_numeric_confidence),
+                    "key_points": None,
+                    "citations": None,
+                    "parse_error": f"JSON parse error (recovered): {str(e)}"
+                }
+            
+            # Complete fallback
+            return {
+                "answer": response, 
+                "confidence": "LOW", 
+                "numeric_confidence": default_numeric_confidence,
+                "key_points": None,
+                "citations": None,
+                "parse_error": str(e)
+            }
         except Exception as e:
             if debug_mode:
                 print(f"DEBUG: Failed to parse structured output in Minion: {e}. Response was: {response[:500]}")
-            return {"answer": response, "confidence": "LOW", "key_points": None, "citations": None, "parse_error": str(e)}
+            return {
+                "answer": response, 
+                "confidence": "LOW", 
+                "numeric_confidence": default_numeric_confidence,
+                "key_points": None, 
+                "citations": None, 
+                "parse_error": str(e)
+            }
     
     # Fallback for non-structured processing
-    return {"answer": response, "confidence": "MEDIUM", "key_points": None, "citations": None, "parse_error": None}
+    return {
+        "answer": response, 
+        "confidence": "MEDIUM", 
+        "numeric_confidence": confidence_map.get("MEDIUM", 0.6),
+        "key_points": None, 
+        "citations": None, 
+        "parse_error": None
+    }
 
 async def _execute_minion_protocol(
     valves: Any,

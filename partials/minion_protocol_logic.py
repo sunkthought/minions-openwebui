@@ -33,22 +33,125 @@ def _is_final_answer(response: str) -> bool:
     """Check if response contains the specific final answer marker."""
     return "FINAL ANSWER READY." in response
 
-def _parse_local_response(response: str, is_structured: bool, use_structured_output: bool, debug_mode: bool, LocalAssistantResponseModel: Any) -> Dict: # Added LocalAssistantResponseModel
+def detect_completion(response: str) -> bool:
+    """Check if remote model indicates it has sufficient information"""
+    completion_phrases = [
+        "i now have sufficient information",
+        "i can now answer",
+        "based on the information gathered",
+        "i have enough information",
+        "with this information, i can provide",
+        "i can now provide a comprehensive answer",
+        "based on what the local assistant has told me"
+    ]
+    response_lower = response.lower()
+    
+    # Check for explicit final answer marker first
+    if "FINAL ANSWER READY." in response:
+        return True
+    
+    # Check for completion phrases
+    return any(phrase in response_lower for phrase in completion_phrases)
+
+def _parse_local_response(response: str, is_structured: bool, use_structured_output: bool, debug_mode: bool, LocalAssistantResponseModel: Any) -> Dict:
     """Parse local model response, supporting both text and structured formats."""
+    confidence_map = {'HIGH': 0.9, 'MEDIUM': 0.6, 'LOW': 0.3}
+    default_numeric_confidence = 0.3  # Corresponds to LOW
+    
     if is_structured and use_structured_output:
+        # Clean up common formatting issues
+        cleaned_response = response.strip()
+        
+        # Remove markdown code blocks if present
+        if cleaned_response.startswith("```json") and cleaned_response.endswith("```"):
+            cleaned_response = cleaned_response[7:-3].strip()
+        elif cleaned_response.startswith("```") and cleaned_response.endswith("```"):
+            cleaned_response = cleaned_response[3:-3].strip()
+        
+        # Try to extract JSON from response with explanatory text
+        if not cleaned_response.startswith("{"):
+            # Look for JSON object in the response
+            json_start = cleaned_response.find("{")
+            json_end = cleaned_response.rfind("}")
+            if json_start != -1 and json_end != -1 and json_end > json_start:
+                cleaned_response = cleaned_response[json_start:json_end+1]
+        
         try:
-            parsed_json = json.loads(response)
-            validated_model = LocalAssistantResponseModel(**parsed_json) # Use LocalAssistantResponseModel
+            parsed_json = json.loads(cleaned_response)
+            
+            # Handle missing confidence field with default
+            if 'confidence' not in parsed_json:
+                parsed_json['confidence'] = 'LOW'
+            
+            # Ensure required fields have defaults if missing
+            if 'answer' not in parsed_json:
+                parsed_json['answer'] = None
+            if 'key_points' not in parsed_json:
+                parsed_json['key_points'] = None
+            if 'citations' not in parsed_json:
+                parsed_json['citations'] = None
+            
+            validated_model = LocalAssistantResponseModel(**parsed_json)
             model_dict = validated_model.dict()
             model_dict['parse_error'] = None
+            
+            # Add numeric confidence for consistency
+            text_confidence = model_dict.get('confidence', 'LOW').upper()
+            model_dict['numeric_confidence'] = confidence_map.get(text_confidence, default_numeric_confidence)
+            
             return model_dict
+            
+        except json.JSONDecodeError as e:
+            if debug_mode:
+                print(f"DEBUG: JSON decode error in Minion: {e}. Cleaned response was: {cleaned_response[:500]}")
+            
+            # Try regex fallback to extract key information
+            import re
+            answer_match = re.search(r'"answer"\s*:\s*"([^"]*)"', response)
+            confidence_match = re.search(r'"confidence"\s*:\s*"(HIGH|MEDIUM|LOW)"', response, re.IGNORECASE)
+            
+            if answer_match:
+                answer = answer_match.group(1)
+                confidence = confidence_match.group(1).upper() if confidence_match else "LOW"
+                return {
+                    "answer": answer,
+                    "confidence": confidence,
+                    "numeric_confidence": confidence_map.get(confidence, default_numeric_confidence),
+                    "key_points": None,
+                    "citations": None,
+                    "parse_error": f"JSON parse error (recovered): {str(e)}"
+                }
+            
+            # Complete fallback
+            return {
+                "answer": response, 
+                "confidence": "LOW", 
+                "numeric_confidence": default_numeric_confidence,
+                "key_points": None,
+                "citations": None,
+                "parse_error": str(e)
+            }
         except Exception as e:
             if debug_mode:
                 print(f"DEBUG: Failed to parse structured output in Minion: {e}. Response was: {response[:500]}")
-            return {"answer": response, "confidence": "LOW", "key_points": None, "citations": None, "parse_error": str(e)}
+            return {
+                "answer": response, 
+                "confidence": "LOW", 
+                "numeric_confidence": default_numeric_confidence,
+                "key_points": None, 
+                "citations": None, 
+                "parse_error": str(e)
+            }
     
     # Fallback for non-structured processing
-    return {"answer": response, "confidence": "MEDIUM", "key_points": None, "citations": None, "parse_error": None}
+    return {
+        "answer": response, 
+        "confidence": "MEDIUM", 
+        "numeric_confidence": confidence_map.get("MEDIUM", 0.6),
+        "key_points": None, 
+        "citations": None, 
+        "parse_error": None
+    }
 
 async def _execute_minion_protocol(
     valves: Any,
@@ -64,11 +167,21 @@ async def _execute_minion_protocol(
     conversation_history = []
     actual_final_answer = "No final answer was explicitly provided by the remote model."
     claude_declared_final = False
+    
+    # Initialize metrics tracking
+    overall_start_time = asyncio.get_event_loop().time()
+    metrics = {
+        'confidence_scores': [],
+        'confidence_distribution': {'HIGH': 0, 'MEDIUM': 0, 'LOW': 0},
+        'rounds_completed': 0,
+        'completion_via_detection': False,
+        'estimated_tokens': 0,
+        'chunk_size_used': valves.chunk_size,
+        'context_size': len(context)
+    }
 
-    overall_start_time = 0
     if valves.debug_mode:
-        overall_start_time = asyncio.get_event_loop().time()
-        debug_log.append(f"🔍 **Debug Info (Minion v0.2.0):**")
+        debug_log.append(f"🔍 **Debug Info (Minion v0.3.6):**")
         debug_log.append(f"  - Query: {query[:100]}...")
         debug_log.append(f"  - Context length: {len(context)} chars")
         debug_log.append(f"  - Max rounds: {valves.max_rounds}")
@@ -138,6 +251,7 @@ Respond with "FINAL ANSWER READY." followed by your synthesized answer. Do NOT a
             conversation_log.append(f"**🤖 Remote Model ({valves.remote_model}):**")
             conversation_log.append(f"{claude_response}\n")
 
+        # Check for explicit final answer or completion indicators
         if _is_final_answer(claude_response):
             actual_final_answer = claude_response.split("FINAL ANSWER READY.", 1)[1].strip()
             claude_declared_final = True
@@ -145,6 +259,16 @@ Respond with "FINAL ANSWER READY." followed by your synthesized answer. Do NOT a
                 conversation_log.append(f"✅ **The remote model indicates FINAL ANSWER READY.**\n")
             if valves.debug_mode:
                 debug_log.append(f"  🏁 The remote model declared FINAL ANSWER READY in round {round_num + 1}. (Debug Mode)")
+            break
+        elif valves.enable_completion_detection and detect_completion(claude_response) and round_num > 0:
+            # Remote model indicates it has sufficient information
+            actual_final_answer = claude_response
+            claude_declared_final = True
+            metrics['completion_via_detection'] = True
+            if valves.show_conversation:
+                conversation_log.append(f"✅ **The remote model indicates it has sufficient information to answer.**\n")
+            if valves.debug_mode:
+                debug_log.append(f"  🏁 Completion detected: Remote model has sufficient information in round {round_num + 1}. (Debug Mode)")
             break
 
         # Skip local model call if this was the last round and the remote model provided final answer
@@ -170,6 +294,15 @@ Respond with "FINAL ANSWER READY." followed by your synthesized answer. Do NOT a
                 debug_mode=valves.debug_mode,
                 LocalAssistantResponseModel=LocalAssistantResponseModel
             )
+            
+            # Track metrics from local response
+            if 'numeric_confidence' in local_response_data:
+                metrics['confidence_scores'].append(local_response_data['numeric_confidence'])
+            
+            confidence_level = local_response_data.get('confidence', 'MEDIUM').upper()
+            if confidence_level in metrics['confidence_distribution']:
+                metrics['confidence_distribution'][confidence_level] += 1
+            
             if valves.debug_mode:
                 end_time_ollama = asyncio.get_event_loop().time()
                 time_taken_ollama = end_time_ollama - start_time_ollama
@@ -200,6 +333,9 @@ Respond with "FINAL ANSWER READY." followed by your synthesized answer. Do NOT a
                 conversation_log.append(f"{local_response_data.get('answer', 'Error displaying local response.')}")
             conversation_log.append("\n")
 
+        # Update round count
+        metrics['rounds_completed'] = round_num + 1
+        
         if valves.debug_mode:
             current_cumulative_time = asyncio.get_event_loop().time() - overall_start_time
             debug_log.append(f"**🏁 Completed Round {round_num + 1}. Cumulative time: {current_cumulative_time:.2f}s. (Debug Mode)**\n")
@@ -211,8 +347,15 @@ Respond with "FINAL ANSWER READY." followed by your synthesized answer. Do NOT a
         if valves.show_conversation:
             conversation_log.append(f"⚠️ Protocol ended without the remote model providing a final answer.\n")
 
+    # Calculate final metrics
+    total_execution_time = asyncio.get_event_loop().time() - overall_start_time
+    avg_confidence = sum(metrics['confidence_scores']) / len(metrics['confidence_scores']) if metrics['confidence_scores'] else 0.0
+    
+    # Estimate tokens (rough approximation)
+    for role, msg in conversation_history:
+        metrics['estimated_tokens'] += len(msg) // 4  # Rough token estimate
+    
     if valves.debug_mode:
-        total_execution_time = asyncio.get_event_loop().time() - overall_start_time
         debug_log.append(f"**⏱️ Total Minion protocol execution time: {total_execution_time:.2f}s. (Debug Mode)**")
 
     output_parts = []
@@ -240,5 +383,19 @@ Respond with "FINAL ANSWER READY." followed by your synthesized answer. Do NOT a
     output_parts.append(f"- **Traditional approach:** ~{stats['traditional_tokens']:,} tokens")
     output_parts.append(f"- **Minion approach:** ~{stats['minion_tokens']:,} tokens")
     output_parts.append(f"- **💰 Token Savings:** ~{stats['percentage_savings']:.1f}%")
+    
+    # Add conversation metrics
+    output_parts.append(f"\n## 📈 Conversation Metrics")
+    output_parts.append(f"- **Rounds used:** {metrics['rounds_completed']} of {valves.max_rounds}")
+    output_parts.append(f"- **Questions asked:** {metrics['rounds_completed']}")
+    output_parts.append(f"- **Average confidence:** {avg_confidence:.2f} ({['LOW', 'MEDIUM', 'HIGH'][int(avg_confidence * 2.99)]})")
+    output_parts.append(f"- **Confidence distribution:**")
+    for level, count in metrics['confidence_distribution'].items():
+        if count > 0:
+            output_parts.append(f"  - {level}: {count} response(s)")
+    output_parts.append(f"- **Completion method:** {'Early completion detected' if metrics['completion_via_detection'] else 'Reached max rounds or explicit completion'}")
+    output_parts.append(f"- **Total duration:** {total_execution_time*1000:.0f}ms")
+    output_parts.append(f"- **Estimated tokens:** ~{metrics['estimated_tokens']:,}")
+    output_parts.append(f"- **Chunk processing:** {metrics['context_size']:,} chars (max chunk size: {metrics['chunk_size_used']:,})")
     
     return "\n".join(output_parts)

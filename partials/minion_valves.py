@@ -44,6 +44,14 @@ class MinionValves(BaseModel):
         default=1000, 
         description="num_predict for Ollama generation (max output tokens for local model)."
     )
+    chunk_size: int = Field(
+        default=5000, 
+        description="Maximum chunk size in characters for context fed to local models during conversation."
+    )
+    max_chunks: int = Field(
+        default=2, 
+        description="Maximum number of document chunks to process. Helps manage processing load for large documents."
+    )
     
     # Custom local model parameters
     local_model_context_length: int = Field(
@@ -61,9 +69,25 @@ class MinionValves(BaseModel):
         description="Top-k sampling for local model. Limits vocabulary to top k tokens. Set to 0 to disable.",
         ge=0
     )
+    chunk_size: int = Field(
+        default=5000, 
+        description="Maximum chunk size in characters for context fed to local models during conversation."
+    )
+    max_chunks: int = Field(
+        default=2, 
+        description="Maximum number of document chunks to process. Helps manage processing load for large documents."
+    )
     use_structured_output: bool = Field(
-        default=False, 
+        default=True, 
         description="Enable JSON structured output for local model responses (requires local model support)."
+    )
+    enable_completion_detection: bool = Field(
+        default=True,
+        description="Enable detection of when the remote model has gathered sufficient information without explicit 'FINAL ANSWER READY' marker."
+    )
+    enable_completion_detection: bool = Field(
+        default=True,
+        description="Enable detection of when the remote model has gathered sufficient information without explicit 'FINAL ANSWER READY' marker."
     )
     debug_mode: bool = Field(
         default=False, description="Show additional technical details and verbose logs."

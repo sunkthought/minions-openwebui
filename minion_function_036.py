@@ -6,7 +6,6 @@ original_author: Copyright (c) 2025 Sabri Eyuboglu, Avanika Narayan, Dan Biderma
 original_author_url: https://github.com/HazyResearch/
 funding_url: https://github.com/HazyResearch/minions
 version: 0.3.6
-version: 0.3.6
 description: Basic Minion protocol - conversational collaboration between local and cloud models
 required_open_webui_version: 0.5.0
 license: MIT License
@@ -22,7 +21,6 @@ from pydantic import BaseModel, Field
 from fastapi import Request # type: ignore
 
 # Partials File: partials/minion_models.py
-from typing import List, Optional, Dict
 from typing import List, Optional, Dict
 from pydantic import BaseModel, Field
 
@@ -54,46 +52,6 @@ class LocalAssistantResponse(BaseModel):
         #         "citations": ["The final report confirms project completion in Q4."]
         #     }
         # }
-
-class ConversationMetrics(BaseModel):
-    """
-    Metrics tracking for Minion protocol conversations.
-    Captures performance data for analysis and optimization.
-    """
-    rounds_used: int = Field(description="Number of Q&A rounds completed in the conversation")
-    questions_asked: int = Field(description="Total number of questions asked by the remote model")
-    avg_answer_confidence: float = Field(
-        description="Average confidence score across all local model responses (0.0-1.0)"
-    )
-    total_tokens_used: int = Field(
-        default=0,
-        description="Estimated total tokens used across all API calls"
-    )
-    conversation_duration_ms: float = Field(
-        description="Total conversation duration in milliseconds"
-    )
-    completion_detected: bool = Field(
-        description="Whether the conversation ended via completion detection vs max rounds"
-    )
-    unique_topics_explored: int = Field(
-        default=0,
-        description="Count of distinct topics/themes in questions (optional)"
-    )
-    confidence_distribution: Dict[str, int] = Field(
-        default_factory=dict,
-        description="Distribution of confidence levels (HIGH/MEDIUM/LOW counts)"
-    )
-    chunks_processed: int = Field(
-        default=1,
-        description="Number of document chunks processed in this conversation"
-    )
-    chunk_size_used: int = Field(
-        default=0,
-        description="The chunk size setting used for this conversation"
-    )
-    
-    class Config:
-        extra = "ignore"
 
 class ConversationMetrics(BaseModel):
     """
@@ -182,31 +140,6 @@ class MinionValves(BaseModel):
         default=1000, 
         description="num_predict for Ollama generation (max output tokens for local model)."
     )
-    
-    # Custom local model parameters
-    local_model_context_length: int = Field(
-        default=4096,
-        description="Context window size for the local model. Set this based on your local model's capabilities."
-    )
-    local_model_temperature: float = Field(
-        default=0.7,
-        description="Temperature for local model generation (0.0-2.0). Lower values make output more focused and deterministic.",
-        ge=0.0,
-        le=2.0
-    )
-    local_model_top_k: int = Field(
-        default=40,
-        description="Top-k sampling for local model. Limits vocabulary to top k tokens. Set to 0 to disable.",
-        ge=0
-    )
-    chunk_size: int = Field(
-        default=5000, 
-        description="Maximum chunk size in characters for context fed to local models during conversation."
-    )
-    max_chunks: int = Field(
-        default=2, 
-        description="Maximum number of document chunks to process. Helps manage processing load for large documents."
-    )
     chunk_size: int = Field(
         default=5000, 
         description="Maximum chunk size in characters for context fed to local models during conversation."
@@ -218,10 +151,6 @@ class MinionValves(BaseModel):
     use_structured_output: bool = Field(
         default=True, 
         description="Enable JSON structured output for local model responses (requires local model support)."
-    )
-    enable_completion_detection: bool = Field(
-        default=True,
-        description="Enable detection of when the remote model has gathered sufficient information without explicit 'FINAL ANSWER READY' marker."
     )
     enable_completion_detection: bool = Field(
         default=True,
@@ -330,22 +259,11 @@ async def call_ollama(
     schema: Optional[BaseModel] = None
 ) -> str:
     """Call Ollama API"""
-    options = {
-        "temperature": getattr(valves, 'local_model_temperature', 0.7),
-        "num_predict": valves.ollama_num_predict,
-        "num_ctx": getattr(valves, 'local_model_context_length', 4096),
-    }
-    
-    # Add top_k only if it's greater than 0
-    top_k = getattr(valves, 'local_model_top_k', 40)
-    if top_k > 0:
-        options["top_k"] = top_k
-    
     payload = {
         "model": valves.local_model,
         "prompt": prompt,
         "stream": False,
-        "options": options,
+        "options": {"temperature": 0.1, "num_predict": valves.ollama_num_predict},
     }
 
     # Check if we should use structured output
@@ -489,21 +407,6 @@ def create_chunks(context: str, chunk_size: int, max_chunks: int) -> List[str]:
     return chunks[:max_chunks] if max_chunks > 0 else chunks
 
 
-# Partials File: partials/common_file_processing.py
-from typing import List
-
-def create_chunks(context: str, chunk_size: int, max_chunks: int) -> List[str]:
-    """Create chunks from context"""
-    if not context:
-        return []
-    actual_chunk_size = max(1, min(chunk_size, len(context)))
-    chunks = [
-        context[i : i + actual_chunk_size]
-        for i in range(0, len(context), actual_chunk_size)
-    ]
-    return chunks[:max_chunks] if max_chunks > 0 else chunks
-
-
 # Partials File: partials/minion_prompts.py
 from typing import List, Tuple, Any
 
@@ -512,7 +415,6 @@ from typing import List, Tuple, Any
 def get_minion_initial_claude_prompt(query: str, context_len: int, valves: Any) -> str:
     """
     Returns the initial prompt for Claude in the Minion protocol.
-    Enhanced with better question generation guidance.
     Enhanced with better question generation guidance.
     """
     # Escape any quotes in the query to prevent f-string issues
@@ -523,37 +425,7 @@ def get_minion_initial_claude_prompt(query: str, context_len: int, valves: Any) 
 Your task: Gather information to answer the user's query by asking strategic questions.
 
 USER'S QUERY: "{escaped_query}"
-    return f'''You are a research coordinator working with a knowledgeable local assistant who has access to specific documents.
 
-Your task: Gather information to answer the user's query by asking strategic questions.
-
-USER'S QUERY: "{escaped_query}"
-
-The local assistant has FULL ACCESS to the relevant document ({context_len} characters long) and will provide factual information extracted from it.
-
-Guidelines for effective questions:
-1. Ask ONE specific, focused question at a time
-2. Build upon previous answers to go deeper
-3. Avoid broad questions like "What does the document say?" 
-4. Good: "What are the specific budget allocations for Q2?"
-   Poor: "Tell me about the budget"
-5. Track what you've learned to avoid redundancy
-
-When to conclude:
-- Start your response with "I now have sufficient information" when ready to provide the final answer
-- You have {valves.max_rounds} rounds maximum to gather information
-
-QUESTION STRATEGY TIPS:
-- For factual queries: Ask for specific data points, dates, numbers, or names
-- For analytical queries: Ask about relationships, comparisons, or patterns
-- For summary queries: Ask about key themes, main points, or conclusions
-- For procedural queries: Ask about steps, sequences, or requirements
-
-Remember: The assistant can only see the document, not your conversation history.
-
-If you have gathered enough information to answer "{escaped_query}", respond with "FINAL ANSWER READY." followed by your comprehensive answer.
-
-Otherwise, ask your first strategic question to the local assistant.'''
 The local assistant has FULL ACCESS to the relevant document ({context_len} characters long) and will provide factual information extracted from it.
 
 Guidelines for effective questions:
@@ -584,7 +456,6 @@ def get_minion_conversation_claude_prompt(history: List[Tuple[str, str]], origin
     """
     Returns the prompt for Claude during subsequent conversation rounds in the Minion protocol.
     Enhanced with better guidance for follow-up questions.
-    Enhanced with better guidance for follow-up questions.
     """
     # Escape the original query
     escaped_query = original_query.replace('"', '\\"').replace("'", "\\'")
@@ -592,30 +463,17 @@ def get_minion_conversation_claude_prompt(history: List[Tuple[str, str]], origin
     current_round = len(history) // 2 + 1
     rounds_remaining = valves.max_rounds - current_round
     
-    current_round = len(history) // 2 + 1
-    rounds_remaining = valves.max_rounds - current_round
-    
     context_parts = [
-        f'You are continuing to gather information to answer: "{escaped_query}"',
-        f"Round {current_round} of {valves.max_rounds}",
         f'You are continuing to gather information to answer: "{escaped_query}"',
         f"Round {current_round} of {valves.max_rounds}",
         "",
         "INFORMATION GATHERED SO FAR:",
-        "INFORMATION GATHERED SO FAR:",
     ]
 
     for i, (role, message) in enumerate(history):
-    for i, (role, message) in enumerate(history):
         if role == "assistant":  # Claude's previous message
             context_parts.append(f'\nQ{i//2 + 1}: {message}')
-            context_parts.append(f'\nQ{i//2 + 1}: {message}')
         else:  # Local model's response
-            # Extract key information if structured
-            if isinstance(message, str) and message.startswith('{'):
-                context_parts.append(f'A{i//2 + 1}: {message}')
-            else:
-                context_parts.append(f'A{i//2 + 1}: {message}')
             # Extract key information if structured
             if isinstance(message, str) and message.startswith('{'):
                 context_parts.append(f'A{i//2 + 1}: {message}')
@@ -638,19 +496,6 @@ def get_minion_conversation_claude_prompt(history: List[Tuple[str, str]], origin
             "- Would examples or specific details strengthen your answer?",
             "",
             "Remember: Each question should build on what you've learned, not repeat previous inquiries.",
-            "DECISION POINT:",
-            "Evaluate if you have sufficient information to answer the original question comprehensively.",
-            "",
-            "✅ If YES: Start with 'FINAL ANSWER READY.' then provide your complete answer",
-            f"❓ If NO: Ask ONE more strategic question (you have {rounds_remaining} rounds left)",
-            "",
-            "TIPS FOR YOUR NEXT QUESTION:",
-            "- What specific gaps remain in your understanding?",
-            "- Can you drill deeper into any mentioned topics?",
-            "- Are there related aspects you haven't explored?",
-            "- Would examples or specific details strengthen your answer?",
-            "",
-            "Remember: Each question should build on what you've learned, not repeat previous inquiries.",
         ]
     )
     return "\n".join(context_parts)
@@ -659,13 +504,10 @@ def get_minion_local_prompt(context: str, query: str, claude_request: str, valve
     """
     Returns the prompt for the local Ollama model in the Minion protocol.
     Enhanced with better guidance for structured, useful responses.
-    Enhanced with better guidance for structured, useful responses.
     """
     # query is the original user query.
     # context is the document chunk.
     # claude_request (the parameter) is the specific question from the remote model to the local model.
-
-    base_prompt = f"""You are a document analysis assistant with exclusive access to the following document:
 
     base_prompt = f"""You are a document analysis assistant with exclusive access to the following document:
 
@@ -677,68 +519,7 @@ A research coordinator needs specific information from this document to answer: 
 
 Their current question is:
 <question>
-A research coordinator needs specific information from this document to answer: "{query}"
-
-Their current question is:
-<question>
 {claude_request}
-</question>
-
-RESPONSE GUIDELINES:
-
-1. ACCURACY: Base your answer ONLY on information found in the document above
-   
-2. CITATIONS: When possible, include direct quotes or specific references:
-   - Good: "According to section 3.2, 'the budget increased by 15%'"
-   - Good: "The document states on page 4 that..."
-   - Poor: "The document mentions something about budgets"
-
-3. ORGANIZATION: For complex answers, structure your response:
-   - Use bullet points or numbered lists for multiple items
-   - Separate distinct pieces of information clearly
-   - Highlight key findings at the beginning
-
-4. CONFIDENCE LEVELS:
-   - HIGH: Information directly answers the question with explicit statements
-   - MEDIUM: Information partially addresses the question or requires some inference
-   - LOW: Information is tangentially related or requires significant interpretation
-
-5. HANDLING MISSING INFORMATION:
-   - If not found: "This specific information is not available in the document"
-   - If partially found: "The document provides partial information: [explain what's available]"
-   - Suggest related info: "While X is not mentioned, the document does discuss Y which may be relevant"
-
-Remember: The coordinator cannot see the document and relies entirely on your accurate extraction."""
-
-    if valves.use_structured_output:
-        structured_output_instructions = """
-
-RESPONSE FORMAT:
-Respond ONLY with a JSON object in this exact format:
-{
-    "answer": "Your detailed answer addressing the specific question",
-    "confidence": "HIGH/MEDIUM/LOW",
-    "key_points": ["Main finding 1", "Main finding 2", "..."] or null,
-    "citations": ["Exact quote from document", "Another relevant quote", "..."] or null
-}
-
-JSON Guidelines:
-- answer: Comprehensive response to the question (required)
-- confidence: Your assessment based on criteria above (required)
-- key_points: List main findings if multiple important points exist (optional)
-- citations: Direct quotes that support your answer (optional but recommended)
-
-IMPORTANT: Output ONLY the JSON object. No additional text, no markdown formatting."""
-        return base_prompt + structured_output_instructions
-    else:
-        non_structured_instructions = """
-
-Format your response clearly with:
-- Main answer first
-- Supporting details or quotes
-- Confidence level (HIGH/MEDIUM/LOW) at the end
-- Note if any information is not found in the document"""
-        return base_prompt + non_structured_instructions
 </question>
 
 RESPONSE GUIDELINES:
@@ -853,68 +634,11 @@ def detect_completion(response: str) -> bool:
     return any(phrase in response_lower for phrase in completion_phrases)
 
 def _parse_local_response(response: str, is_structured: bool, use_structured_output: bool, debug_mode: bool, LocalAssistantResponseModel: Any) -> Dict:
-def detect_completion(response: str) -> bool:
-    """Check if remote model indicates it has sufficient information"""
-    completion_phrases = [
-        "i now have sufficient information",
-        "i can now answer",
-        "based on the information gathered",
-        "i have enough information",
-        "with this information, i can provide",
-        "i can now provide a comprehensive answer",
-        "based on what the local assistant has told me"
-    ]
-    response_lower = response.lower()
-    
-    # Check for explicit final answer marker first
-    if "FINAL ANSWER READY." in response:
-        return True
-    
-    # Check for completion phrases
-    return any(phrase in response_lower for phrase in completion_phrases)
-
-def _parse_local_response(response: str, is_structured: bool, use_structured_output: bool, debug_mode: bool, LocalAssistantResponseModel: Any) -> Dict:
     """Parse local model response, supporting both text and structured formats."""
     confidence_map = {'HIGH': 0.9, 'MEDIUM': 0.6, 'LOW': 0.3}
     default_numeric_confidence = 0.3  # Corresponds to LOW
     
-    confidence_map = {'HIGH': 0.9, 'MEDIUM': 0.6, 'LOW': 0.3}
-    default_numeric_confidence = 0.3  # Corresponds to LOW
-    
     if is_structured and use_structured_output:
-        # Clean up common formatting issues
-        cleaned_response = response.strip()
-        
-        # Remove markdown code blocks if present
-        if cleaned_response.startswith("```json") and cleaned_response.endswith("```"):
-            cleaned_response = cleaned_response[7:-3].strip()
-        elif cleaned_response.startswith("```") and cleaned_response.endswith("```"):
-            cleaned_response = cleaned_response[3:-3].strip()
-        
-        # Try to extract JSON from response with explanatory text
-        if not cleaned_response.startswith("{"):
-            # Look for JSON object in the response
-            json_start = cleaned_response.find("{")
-            json_end = cleaned_response.rfind("}")
-            if json_start != -1 and json_end != -1 and json_end > json_start:
-                cleaned_response = cleaned_response[json_start:json_end+1]
-        
-        try:
-            parsed_json = json.loads(cleaned_response)
-            
-            # Handle missing confidence field with default
-            if 'confidence' not in parsed_json:
-                parsed_json['confidence'] = 'LOW'
-            
-            # Ensure required fields have defaults if missing
-            if 'answer' not in parsed_json:
-                parsed_json['answer'] = None
-            if 'key_points' not in parsed_json:
-                parsed_json['key_points'] = None
-            if 'citations' not in parsed_json:
-                parsed_json['citations'] = None
-            
-            validated_model = LocalAssistantResponseModel(**parsed_json)
         # Clean up common formatting issues
         cleaned_response = response.strip()
         
@@ -955,43 +679,7 @@ def _parse_local_response(response: str, is_structured: bool, use_structured_out
             text_confidence = model_dict.get('confidence', 'LOW').upper()
             model_dict['numeric_confidence'] = confidence_map.get(text_confidence, default_numeric_confidence)
             
-            
-            # Add numeric confidence for consistency
-            text_confidence = model_dict.get('confidence', 'LOW').upper()
-            model_dict['numeric_confidence'] = confidence_map.get(text_confidence, default_numeric_confidence)
-            
             return model_dict
-            
-        except json.JSONDecodeError as e:
-            if debug_mode:
-                print(f"DEBUG: JSON decode error in Minion: {e}. Cleaned response was: {cleaned_response[:500]}")
-            
-            # Try regex fallback to extract key information
-            import re
-            answer_match = re.search(r'"answer"\s*:\s*"([^"]*)"', response)
-            confidence_match = re.search(r'"confidence"\s*:\s*"(HIGH|MEDIUM|LOW)"', response, re.IGNORECASE)
-            
-            if answer_match:
-                answer = answer_match.group(1)
-                confidence = confidence_match.group(1).upper() if confidence_match else "LOW"
-                return {
-                    "answer": answer,
-                    "confidence": confidence,
-                    "numeric_confidence": confidence_map.get(confidence, default_numeric_confidence),
-                    "key_points": None,
-                    "citations": None,
-                    "parse_error": f"JSON parse error (recovered): {str(e)}"
-                }
-            
-            # Complete fallback
-            return {
-                "answer": response, 
-                "confidence": "LOW", 
-                "numeric_confidence": default_numeric_confidence,
-                "key_points": None,
-                "citations": None,
-                "parse_error": str(e)
-            }
             
         except json.JSONDecodeError as e:
             if debug_mode:
@@ -1034,24 +722,8 @@ def _parse_local_response(response: str, is_structured: bool, use_structured_out
                 "citations": None, 
                 "parse_error": str(e)
             }
-            return {
-                "answer": response, 
-                "confidence": "LOW", 
-                "numeric_confidence": default_numeric_confidence,
-                "key_points": None, 
-                "citations": None, 
-                "parse_error": str(e)
-            }
     
     # Fallback for non-structured processing
-    return {
-        "answer": response, 
-        "confidence": "MEDIUM", 
-        "numeric_confidence": confidence_map.get("MEDIUM", 0.6),
-        "key_points": None, 
-        "citations": None, 
-        "parse_error": None
-    }
     return {
         "answer": response, 
         "confidence": "MEDIUM", 
@@ -1075,21 +747,6 @@ async def _execute_minion_protocol(
     conversation_history = []
     actual_final_answer = "No final answer was explicitly provided by the remote model."
     claude_declared_final = False
-    
-    # Initialize metrics tracking
-    overall_start_time = asyncio.get_event_loop().time()
-    metrics = {
-        'confidence_scores': [],
-        'confidence_distribution': {'HIGH': 0, 'MEDIUM': 0, 'LOW': 0},
-        'rounds_completed': 0,
-        'completion_via_detection': False,
-        'estimated_tokens': 0,
-        'chunk_size_used': valves.chunk_size,
-        'context_size': len(context)
-    }
-
-    if valves.debug_mode:
-        debug_log.append(f"🔍 **Debug Info (Minion v0.3.6):**")
     
     # Initialize metrics tracking
     overall_start_time = asyncio.get_event_loop().time()
@@ -1193,16 +850,6 @@ Respond with "FINAL ANSWER READY." followed by your synthesized answer. Do NOT a
             if valves.debug_mode:
                 debug_log.append(f"  🏁 Completion detected: Remote model has sufficient information in round {round_num + 1}. (Debug Mode)")
             break
-        elif valves.enable_completion_detection and detect_completion(claude_response) and round_num > 0:
-            # Remote model indicates it has sufficient information
-            actual_final_answer = claude_response
-            claude_declared_final = True
-            metrics['completion_via_detection'] = True
-            if valves.show_conversation:
-                conversation_log.append(f"✅ **The remote model indicates it has sufficient information to answer.**\n")
-            if valves.debug_mode:
-                debug_log.append(f"  🏁 Completion detected: Remote model has sufficient information in round {round_num + 1}. (Debug Mode)")
-            break
 
         # Skip local model call if this was the last round and the remote model provided final answer
         if round_num == valves.max_rounds - 1:
@@ -1227,15 +874,6 @@ Respond with "FINAL ANSWER READY." followed by your synthesized answer. Do NOT a
                 debug_mode=valves.debug_mode,
                 LocalAssistantResponseModel=LocalAssistantResponseModel
             )
-            
-            # Track metrics from local response
-            if 'numeric_confidence' in local_response_data:
-                metrics['confidence_scores'].append(local_response_data['numeric_confidence'])
-            
-            confidence_level = local_response_data.get('confidence', 'MEDIUM').upper()
-            if confidence_level in metrics['confidence_distribution']:
-                metrics['confidence_distribution'][confidence_level] += 1
-            
             
             # Track metrics from local response
             if 'numeric_confidence' in local_response_data:
@@ -1278,10 +916,6 @@ Respond with "FINAL ANSWER READY." followed by your synthesized answer. Do NOT a
         # Update round count
         metrics['rounds_completed'] = round_num + 1
         
-
-        # Update round count
-        metrics['rounds_completed'] = round_num + 1
-        
         if valves.debug_mode:
             current_cumulative_time = asyncio.get_event_loop().time() - overall_start_time
             debug_log.append(f"**🏁 Completed Round {round_num + 1}. Cumulative time: {current_cumulative_time:.2f}s. (Debug Mode)**\n")
@@ -1293,15 +927,6 @@ Respond with "FINAL ANSWER READY." followed by your synthesized answer. Do NOT a
         if valves.show_conversation:
             conversation_log.append(f"⚠️ Protocol ended without the remote model providing a final answer.\n")
 
-    # Calculate final metrics
-    total_execution_time = asyncio.get_event_loop().time() - overall_start_time
-    avg_confidence = sum(metrics['confidence_scores']) / len(metrics['confidence_scores']) if metrics['confidence_scores'] else 0.0
-    
-    # Estimate tokens (rough approximation)
-    for role, msg in conversation_history:
-        metrics['estimated_tokens'] += len(msg) // 4  # Rough token estimate
-    
-    if valves.debug_mode:
     # Calculate final metrics
     total_execution_time = asyncio.get_event_loop().time() - overall_start_time
     avg_confidence = sum(metrics['confidence_scores']) / len(metrics['confidence_scores']) if metrics['confidence_scores'] else 0.0
@@ -1338,20 +963,6 @@ Respond with "FINAL ANSWER READY." followed by your synthesized answer. Do NOT a
     output_parts.append(f"- **Traditional approach:** ~{stats['traditional_tokens']:,} tokens")
     output_parts.append(f"- **Minion approach:** ~{stats['minion_tokens']:,} tokens")
     output_parts.append(f"- **💰 Token Savings:** ~{stats['percentage_savings']:.1f}%")
-    
-    # Add conversation metrics
-    output_parts.append(f"\n## 📈 Conversation Metrics")
-    output_parts.append(f"- **Rounds used:** {metrics['rounds_completed']} of {valves.max_rounds}")
-    output_parts.append(f"- **Questions asked:** {metrics['rounds_completed']}")
-    output_parts.append(f"- **Average confidence:** {avg_confidence:.2f} ({['LOW', 'MEDIUM', 'HIGH'][int(avg_confidence * 2.99)]})")
-    output_parts.append(f"- **Confidence distribution:**")
-    for level, count in metrics['confidence_distribution'].items():
-        if count > 0:
-            output_parts.append(f"  - {level}: {count} response(s)")
-    output_parts.append(f"- **Completion method:** {'Early completion detected' if metrics['completion_via_detection'] else 'Reached max rounds or explicit completion'}")
-    output_parts.append(f"- **Total duration:** {total_execution_time*1000:.0f}ms")
-    output_parts.append(f"- **Estimated tokens:** ~{metrics['estimated_tokens']:,}")
-    output_parts.append(f"- **Chunk processing:** {metrics['context_size']:,} chars (max chunk size: {metrics['chunk_size_used']:,})")
     
     # Add conversation metrics
     output_parts.append(f"\n## 📈 Conversation Metrics")
@@ -1472,57 +1083,6 @@ The document was automatically divided into {len(chunks)} chunks for processing.
                 LocalAssistantResponseModel=LocalAssistantResponse # Pass imported class
             )
             return result
-        # Handle chunking for large documents
-        chunks = create_chunks(context, pipe_self.valves.chunk_size, pipe_self.valves.max_chunks)
-        if not chunks and context:
-            return "❌ **Error:** Context provided, but failed to create any processable chunks. Check chunk_size setting."
-        
-        if len(chunks) > 1:
-            # Multiple chunks - need to process each chunk and combine results
-            chunk_results = []
-            for i, chunk in enumerate(chunks):
-                chunk_header = f"## 📄 Chunk {i+1} of {len(chunks)}\n"
-                
-                try:
-                    chunk_result = await _execute_minion_protocol(
-                        valves=pipe_self.valves, 
-                        query=user_query, 
-                        context=chunk, 
-                        call_claude_func=call_claude,
-                        call_ollama_func=call_ollama,
-                        LocalAssistantResponseModel=LocalAssistantResponse
-                    )
-                    chunk_results.append(chunk_header + chunk_result)
-                except Exception as e:
-                    chunk_results.append(f"{chunk_header}❌ **Error processing chunk {i+1}:** {str(e)}")
-            
-            # Combine all chunk results
-            combined_result = "\n\n---\n\n".join(chunk_results)
-            
-            # Add summary header
-            summary_header = f"""# 🔗 Multi-Chunk Analysis Results
-            
-**Document processed in {len(chunks)} chunks** (max {pipe_self.valves.chunk_size:,} characters each)
-
-{combined_result}
-
----
-
-## 📋 Summary
-The document was automatically divided into {len(chunks)} chunks for processing. Each chunk was analyzed independently using the Minion protocol. Review the individual chunk results above for comprehensive coverage of the document."""
-            
-            return summary_header
-        else:
-            # Single chunk or no chunking needed
-            result: str = await _execute_minion_protocol(
-                valves=pipe_self.valves, 
-                query=user_query, 
-                context=chunks[0] if chunks else context, 
-                call_claude_func=call_claude,  # Pass imported function
-                call_ollama_func=call_ollama,  # Pass imported function
-                LocalAssistantResponseModel=LocalAssistantResponse # Pass imported class
-            )
-            return result
 
     except Exception as e:
         import traceback # Keep import here as it's conditional
@@ -1536,7 +1096,6 @@ class Pipe:
 
     def __init__(self):
         self.valves = self.Valves()
-        self.name = "Minion v0.3.6 (Conversational)"
         self.name = "Minion v0.3.6 (Conversational)"
 
     def pipes(self):

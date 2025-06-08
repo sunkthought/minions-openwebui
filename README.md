@@ -83,7 +83,10 @@ Key valves to configure:
 *   `timeout_local`: Timeout for local model calls in seconds (default: 60).
 *   `timeout_claude`: Timeout for Claude API calls in seconds (default: 60).
 *   `max_tokens_claude`: Maximum tokens for Claude's responses (default: 4000).
-*   `use_structured_output`: Enable JSON structured output for local model responses (default: false).
+*   `use_structured_output`: Enable JSON structured output for local model responses (default: **true** as of v0.3.6).
+*   `enable_completion_detection`: Enable detection of when the remote model has gathered sufficient information (default: true).
+*   `chunk_size`: Maximum chunk size in characters for context fed to local models (default: 5000).
+*   `max_chunks`: Maximum number of document chunks to process (default: 2).
 
 #### Protocol Settings (MinionS)
 *   `max_rounds`: Maximum task decomposition rounds (default: 2).
@@ -159,7 +162,7 @@ If you are running Open WebUI in a Docker container (which is common) and your O
 
 ### Structured Output Support (v0.3.5+)
 
-The MinionS protocol now includes robust structured output support for improved reliability when working with local models. This feature ensures consistent, parseable responses from local models, making the protocol more reliable and easier to debug.
+Both Minion and MinionS protocols now include robust structured output support for improved reliability when working with local models. As of v0.3.6, structured output is enabled by default for both protocols, ensuring consistent, parseable responses from local models and making the protocols more reliable and easier to debug.
 
 **Key Features:**
 - **Automatic Model Detection**: The system automatically detects if your local model supports JSON mode
@@ -182,6 +185,24 @@ The following models are known to support structured output:
 - Better confidence scoring (HIGH/MEDIUM/LOW mapped to numeric values)
 - Easier debugging with clear parse error messages
 - Improved success rates for task execution
+
+### Conversation Analytics (v0.3.6+)
+
+The Minion protocol now provides comprehensive conversation metrics to help you understand and optimize the collaborative process:
+
+**Metrics Tracked:**
+- Round usage efficiency (actual vs maximum allowed)
+- Average confidence levels across all responses
+- Confidence distribution breakdown (HIGH/MEDIUM/LOW counts)
+- Completion method detection (early detection vs full rounds)
+- Total conversation duration and token estimates
+- Document chunking information
+
+**Benefits:**
+- Identify optimal settings for your use cases
+- Monitor conversation efficiency and quality
+- Debug issues with confidence levels or completion detection
+- Understand the impact of different chunk sizes on processing
 
 ## Choosing Your Minion: Minion vs. MinionS
 
@@ -225,10 +246,11 @@ Both Minion and MinionS are designed for collaborative AI, but they employ diffe
 |------------------|--------------------------------------------|----------------------------------------------------|
 | **Primary Method** | Iterative Conversational Q&A             | Code-Based Task Decomposition, Chunk Execution, Synthesis |
 | **Complexity**   | Simpler, direct interaction flow           | More complex, multi-step orchestration             |
-| **Context Handling**| Local model sees full context per query  | Local models see chunks of context per sub-task    |
+| **Context Handling**| Full context or automatic chunking (v0.3.6+) | Local models see chunks of context per sub-task    |
 | **Best For**     | Focused Q&A, iterative refinement         | Broad analysis, multifaceted queries, large docs   |
 | **Task Generation** | Natural language questions              | Python code generating dynamic tasks (v0.3.0+)     |
 | **Efficiency**   | Good for specific queries                  | Better for comprehensive analysis                  |
+| **Document Chunking** | Automatic chunking for large docs (v0.3.6+) | Built-in chunking and parallel processing         |
 
 By understanding these differences, you can choose the protocol that best fits the complexity and nature of your task when using these functions in Open WebUI.
 
@@ -310,6 +332,18 @@ Let's say you want a version of the Minion function that uses a slightly differe
 This modular approach provides a powerful way to adapt and evolve the Minion/MinionS functions to fit a wide variety of use cases and preferences.
 
 ## Version History
+
+### v0.3.6 - Enhanced Minion Protocol
+- **Structured Output by Default**: Minion protocol now enables structured output by default for improved reliability and consistency
+- **Intelligent Completion Detection**: Added detection of when the remote model has sufficient information using natural language cues like "I now have sufficient information" or "I can now answer"
+- **Enhanced Question Generation**: Improved remote model prompting with strategic question guidelines, examples of good vs poor questions, and context-aware tips
+- **Better Local Model Prompting**: Enhanced local assistant prompts with clearer role definition, citation guidance, and confidence level criteria
+- **Comprehensive Conversation Metrics**: New metrics tracking including round usage, confidence distribution, completion method, duration, and token estimates
+- **Document Chunking Support**: Mirrored MinionS chunking capabilities for handling large documents efficiently
+  - Automatic document splitting for large files
+  - Individual chunk processing with combined results
+  - Configurable chunk size and maximum chunks
+  - Clear multi-chunk result presentation
 
 ### v0.3.5 - Robust Structured Output Support
 - **JSON Mode by Default**: Structured output is now enabled by default for improved reliability with compatible local models

@@ -6,59 +6,87 @@ from typing import List, Tuple, Any
 def get_minion_initial_claude_prompt(query: str, context_len: int, valves: Any) -> str:
     """
     Returns the initial prompt for Claude in the Minion protocol.
-    Moved from _execute_minion_protocol in minion_protocol_logic.py.
+    Enhanced with better question generation guidance.
     """
     # Escape any quotes in the query to prevent f-string issues
     escaped_query = query.replace('"', '\\"').replace("'", "\\'")
     
-    return f'''Your primary goal is to answer the user's question: "{escaped_query}"
+    return f'''You are a research coordinator working with a knowledgeable local assistant who has access to specific documents.
 
-To achieve this, you will collaborate with a local AI assistant. This local assistant has ALREADY READ and has FULL ACCESS to the relevant document ({context_len} characters long). The local assistant is a TRUSTED source that will provide you with factual information, summaries, and direct extractions FROM THE DOCUMENT in response to your questions.
+Your task: Gather information to answer the user's query by asking strategic questions.
 
-Your role is to:
-1.  Formulate specific, focused questions to the local assistant to gather the necessary information from the document. Ask only what you need to build up the answer to the user's original query.
-2.  Receive and understand the information provided by the local assistant.
-3.  Synthesize this information to answer the user's original query.
+USER'S QUERY: "{escaped_query}"
 
-IMPORTANT INSTRUCTIONS:
-- DO NOT ask the local assistant to provide the entire document or large raw excerpts.
-- DO NOT express that you cannot see the document. Assume the local assistant provides accurate information from it.
-- Your questions should be aimed at extracting pieces of information that you can then synthesize.
+The local assistant has FULL ACCESS to the relevant document ({context_len} characters long) and will provide factual information extracted from it.
 
-If, after receiving responses from the local assistant, you believe you have gathered enough information to comprehensively answer the user's original query ("{escaped_query}"), then respond ONLY with the exact phrase "FINAL ANSWER READY." followed by your detailed final answer.
-If you need more specific information from the document, ask the local assistant ONE more clear, targeted question. Do not use the phrase "FINAL ANSWER READY." yet.
+Guidelines for effective questions:
+1. Ask ONE specific, focused question at a time
+2. Build upon previous answers to go deeper
+3. Avoid broad questions like "What does the document say?" 
+4. Good: "What are the specific budget allocations for Q2?"
+   Poor: "Tell me about the budget"
+5. Track what you've learned to avoid redundancy
 
-Start by asking your first question to the local assistant to begin gathering information.
-'''
+When to conclude:
+- Start your response with "I now have sufficient information" when ready to provide the final answer
+- You have {valves.max_rounds} rounds maximum to gather information
+
+QUESTION STRATEGY TIPS:
+- For factual queries: Ask for specific data points, dates, numbers, or names
+- For analytical queries: Ask about relationships, comparisons, or patterns
+- For summary queries: Ask about key themes, main points, or conclusions
+- For procedural queries: Ask about steps, sequences, or requirements
+
+Remember: The assistant can only see the document, not your conversation history.
+
+If you have gathered enough information to answer "{escaped_query}", respond with "FINAL ANSWER READY." followed by your comprehensive answer.
+
+Otherwise, ask your first strategic question to the local assistant.'''
 
 def get_minion_conversation_claude_prompt(history: List[Tuple[str, str]], original_query: str, valves: Any) -> str:
     """
     Returns the prompt for Claude during subsequent conversation rounds in the Minion protocol.
-    Moved from _build_conversation_context in minion_protocol_logic.py.
+    Enhanced with better guidance for follow-up questions.
     """
     # Escape the original query
     escaped_query = original_query.replace('"', '\\"').replace("'", "\\'")
     
+    current_round = len(history) // 2 + 1
+    rounds_remaining = valves.max_rounds - current_round
+    
     context_parts = [
-        f'You are a supervisor LLM collaborating with a trusted local AI assistant to answer the user\'s ORIGINAL QUESTION: "{escaped_query}"',
-        "The local assistant has full access to the source document and has been providing factual information extracted from it.",
+        f'You are continuing to gather information to answer: "{escaped_query}"',
+        f"Round {current_round} of {valves.max_rounds}",
         "",
-        "CONVERSATION SO FAR (Your questions, Local Assistant's factual responses from the document):",
+        "INFORMATION GATHERED SO FAR:",
     ]
 
-    for role, message in history:
+    for i, (role, message) in enumerate(history):
         if role == "assistant":  # Claude's previous message
-            context_parts.append(f'You previously asked the local assistant: "{message}"')
+            context_parts.append(f'\nQ{i//2 + 1}: {message}')
         else:  # Local model's response
-            context_parts.append(f'The local assistant responded with information from the document: "{message}"')
+            # Extract key information if structured
+            if isinstance(message, str) and message.startswith('{'):
+                context_parts.append(f'A{i//2 + 1}: {message}')
+            else:
+                context_parts.append(f'A{i//2 + 1}: {message}')
 
     context_parts.extend(
         [
             "",
-            "REMINDER: The local assistant's responses are factual information extracted directly from the document.",
-            "Based on ALL information provided by the local assistant so far, can you now provide a complete and comprehensive answer to the user's ORIGINAL QUESTION?",
-            "If YES: Respond ONLY with the exact phrase 'FINAL ANSWER READY.' followed by your comprehensive final answer. Ensure your answer directly addresses the original query using the information gathered.",
-            "If NO: Ask ONE more specific, targeted question to the local assistant to obtain the remaining information you need from the document. Be precise. Do not ask for the document itself or express that you cannot see it.",
+            "DECISION POINT:",
+            "Evaluate if you have sufficient information to answer the original question comprehensively.",
+            "",
+            "✅ If YES: Start with 'FINAL ANSWER READY.' then provide your complete answer",
+            f"❓ If NO: Ask ONE more strategic question (you have {rounds_remaining} rounds left)",
+            "",
+            "TIPS FOR YOUR NEXT QUESTION:",
+            "- What specific gaps remain in your understanding?",
+            "- Can you drill deeper into any mentioned topics?",
+            "- Are there related aspects you haven't explored?",
+            "- Would examples or specific details strengthen your answer?",
+            "",
+            "Remember: Each question should build on what you've learned, not repeat previous inquiries.",
         ]
     )
     return "\n".join(context_parts)
@@ -66,32 +94,77 @@ def get_minion_conversation_claude_prompt(history: List[Tuple[str, str]], origin
 def get_minion_local_prompt(context: str, query: str, claude_request: str, valves: Any) -> str:
     """
     Returns the prompt for the local Ollama model in the Minion protocol.
-    Moved from _execute_minion_protocol in minion_protocol_logic.py.
+    Enhanced with better guidance for structured, useful responses.
     """
     # query is the original user query.
     # context is the document chunk.
     # claude_request (the parameter) is the specific question from the remote model to the local model.
 
-    return f"""You are an AI assistant. You have access to the following DOCUMENT:
+    base_prompt = f"""You are a document analysis assistant with exclusive access to the following document:
+
 <document>
 {context}
 </document>
 
-The remote model (another AI) is asking you a specific question about this document. The remote model's question is:
-<remote_model_question>
+A research coordinator needs specific information from this document to answer: "{query}"
+
+Their current question is:
+<question>
 {claude_request}
-</remote_model_question>
+</question>
 
-Your task is to answer the remote model's question based *only* on the DOCUMENT provided.
+RESPONSE GUIDELINES:
 
-Your response MUST be a single JSON object. Do not include any text, explanations, or markdown formatting (like ```json ... ```) outside of this JSON object.
+1. ACCURACY: Base your answer ONLY on information found in the document above
+   
+2. CITATIONS: When possible, include direct quotes or specific references:
+   - Good: "According to section 3.2, 'the budget increased by 15%'"
+   - Good: "The document states on page 4 that..."
+   - Poor: "The document mentions something about budgets"
 
-The JSON object must have the following keys:
-- "explanation": A concise statement of your reasoning or how you concluded your answer.
-- "citation": A direct snippet of the text from the DOCUMENT that supports your answer. If no supporting text is found in the DOCUMENT, this field must be null.
-- "answer": The extracted answer to the remote model's question. If the answer cannot be determined from the DOCUMENT, this field must be null.
+3. ORGANIZATION: For complex answers, structure your response:
+   - Use bullet points or numbered lists for multiple items
+   - Separate distinct pieces of information clearly
+   - Highlight key findings at the beginning
 
-IMPORTANT: If you cannot confidently determine the information from the DOCUMENT to answer the remote model's question, ALL THREE fields ("explanation", "citation", "answer") in the JSON object must be null.
+4. CONFIDENCE LEVELS:
+   - HIGH: Information directly answers the question with explicit statements
+   - MEDIUM: Information partially addresses the question or requires some inference
+   - LOW: Information is tangentially related or requires significant interpretation
 
-Provide only the JSON object in your response.
-"""
+5. HANDLING MISSING INFORMATION:
+   - If not found: "This specific information is not available in the document"
+   - If partially found: "The document provides partial information: [explain what's available]"
+   - Suggest related info: "While X is not mentioned, the document does discuss Y which may be relevant"
+
+Remember: The coordinator cannot see the document and relies entirely on your accurate extraction."""
+
+    if valves.use_structured_output:
+        structured_output_instructions = """
+
+RESPONSE FORMAT:
+Respond ONLY with a JSON object in this exact format:
+{
+    "answer": "Your detailed answer addressing the specific question",
+    "confidence": "HIGH/MEDIUM/LOW",
+    "key_points": ["Main finding 1", "Main finding 2", "..."] or null,
+    "citations": ["Exact quote from document", "Another relevant quote", "..."] or null
+}
+
+JSON Guidelines:
+- answer: Comprehensive response to the question (required)
+- confidence: Your assessment based on criteria above (required)
+- key_points: List main findings if multiple important points exist (optional)
+- citations: Direct quotes that support your answer (optional but recommended)
+
+IMPORTANT: Output ONLY the JSON object. No additional text, no markdown formatting."""
+        return base_prompt + structured_output_instructions
+    else:
+        non_structured_instructions = """
+
+Format your response clearly with:
+- Main answer first
+- Supporting details or quotes
+- Confidence level (HIGH/MEDIUM/LOW) at the end
+- Note if any information is not found in the document"""
+        return base_prompt + non_structured_instructions
