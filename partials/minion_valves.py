@@ -62,7 +62,7 @@ class MinionValves(BaseModel):
         ge=0
     )
     use_structured_output: bool = Field(
-        default=False, 
+        default=True, 
         description="Enable JSON structured output for local model responses (requires local model support)."
     )
     debug_mode: bool = Field(
