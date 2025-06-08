@@ -59,6 +59,14 @@ class ConversationMetrics(BaseModel):
         default_factory=dict,
         description="Distribution of confidence levels (HIGH/MEDIUM/LOW counts)"
     )
+    chunks_processed: int = Field(
+        default=1,
+        description="Number of document chunks processed in this conversation"
+    )
+    chunk_size_used: int = Field(
+        default=0,
+        description="The chunk size setting used for this conversation"
+    )
     
     class Config:
         extra = "ignore"

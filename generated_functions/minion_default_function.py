@@ -81,6 +81,14 @@ class ConversationMetrics(BaseModel):
         default_factory=dict,
         description="Distribution of confidence levels (HIGH/MEDIUM/LOW counts)"
     )
+    chunks_processed: int = Field(
+        default=1,
+        description="Number of document chunks processed in this conversation"
+    )
+    chunk_size_used: int = Field(
+        default=0,
+        description="The chunk size setting used for this conversation"
+    )
     
     class Config:
         extra = "ignore"
@@ -131,6 +139,14 @@ class MinionValves(BaseModel):
     ollama_num_predict: int = Field(
         default=1000, 
         description="num_predict for Ollama generation (max output tokens for local model)."
+    )
+    chunk_size: int = Field(
+        default=5000, 
+        description="Maximum chunk size in characters for context fed to local models during conversation."
+    )
+    max_chunks: int = Field(
+        default=2, 
+        description="Maximum number of document chunks to process. Helps manage processing load for large documents."
     )
     use_structured_output: bool = Field(
         default=True, 
@@ -375,6 +391,21 @@ async def extract_context_from_files(valves, files: List[Dict[str, Any]]) -> str
         if hasattr(valves, 'debug_mode') and valves.debug_mode:
             return f"[File extraction error: {str(e)}]"
         return ""
+
+# Partials File: partials/common_file_processing.py
+from typing import List
+
+def create_chunks(context: str, chunk_size: int, max_chunks: int) -> List[str]:
+    """Create chunks from context"""
+    if not context:
+        return []
+    actual_chunk_size = max(1, min(chunk_size, len(context)))
+    chunks = [
+        context[i : i + actual_chunk_size]
+        for i in range(0, len(context), actual_chunk_size)
+    ]
+    return chunks[:max_chunks] if max_chunks > 0 else chunks
+
 
 # Partials File: partials/minion_prompts.py
 from typing import List, Tuple, Any
@@ -724,7 +755,9 @@ async def _execute_minion_protocol(
         'confidence_distribution': {'HIGH': 0, 'MEDIUM': 0, 'LOW': 0},
         'rounds_completed': 0,
         'completion_via_detection': False,
-        'estimated_tokens': 0
+        'estimated_tokens': 0,
+        'chunk_size_used': valves.chunk_size,
+        'context_size': len(context)
     }
 
     if valves.debug_mode:
@@ -943,6 +976,7 @@ Respond with "FINAL ANSWER READY." followed by your synthesized answer. Do NOT a
     output_parts.append(f"- **Completion method:** {'Early completion detected' if metrics['completion_via_detection'] else 'Reached max rounds or explicit completion'}")
     output_parts.append(f"- **Total duration:** {total_execution_time*1000:.0f}ms")
     output_parts.append(f"- **Estimated tokens:** ~{metrics['estimated_tokens']:,}")
+    output_parts.append(f"- **Chunk processing:** {metrics['context_size']:,} chars (max chunk size: {metrics['chunk_size_used']:,})")
     
     return "\n".join(output_parts)
 
@@ -998,17 +1032,57 @@ async def minion_pipe(
                 + direct_response
             )
 
-        # Execute the Minion protocol, passing the imported call_claude, call_ollama, and LocalAssistantResponse
-        # The _execute_minion_protocol itself expects these as arguments.
-        result: str = await _execute_minion_protocol(
-            valves=pipe_self.valves, 
-            query=user_query, 
-            context=context, 
-            call_claude_func=call_claude,  # Pass imported function
-            call_ollama_func=call_ollama,  # Pass imported function
-            LocalAssistantResponseModel=LocalAssistantResponse # Pass imported class
-        )
-        return result
+        # Handle chunking for large documents
+        chunks = create_chunks(context, pipe_self.valves.chunk_size, pipe_self.valves.max_chunks)
+        if not chunks and context:
+            return "❌ **Error:** Context provided, but failed to create any processable chunks. Check chunk_size setting."
+        
+        if len(chunks) > 1:
+            # Multiple chunks - need to process each chunk and combine results
+            chunk_results = []
+            for i, chunk in enumerate(chunks):
+                chunk_header = f"## 📄 Chunk {i+1} of {len(chunks)}\n"
+                
+                try:
+                    chunk_result = await _execute_minion_protocol(
+                        valves=pipe_self.valves, 
+                        query=user_query, 
+                        context=chunk, 
+                        call_claude_func=call_claude,
+                        call_ollama_func=call_ollama,
+                        LocalAssistantResponseModel=LocalAssistantResponse
+                    )
+                    chunk_results.append(chunk_header + chunk_result)
+                except Exception as e:
+                    chunk_results.append(f"{chunk_header}❌ **Error processing chunk {i+1}:** {str(e)}")
+            
+            # Combine all chunk results
+            combined_result = "\n\n---\n\n".join(chunk_results)
+            
+            # Add summary header
+            summary_header = f"""# 🔗 Multi-Chunk Analysis Results
+            
+**Document processed in {len(chunks)} chunks** (max {pipe_self.valves.chunk_size:,} characters each)
+
+{combined_result}
+
+---
+
+## 📋 Summary
+The document was automatically divided into {len(chunks)} chunks for processing. Each chunk was analyzed independently using the Minion protocol. Review the individual chunk results above for comprehensive coverage of the document."""
+            
+            return summary_header
+        else:
+            # Single chunk or no chunking needed
+            result: str = await _execute_minion_protocol(
+                valves=pipe_self.valves, 
+                query=user_query, 
+                context=chunks[0] if chunks else context, 
+                call_claude_func=call_claude,  # Pass imported function
+                call_ollama_func=call_ollama,  # Pass imported function
+                LocalAssistantResponseModel=LocalAssistantResponse # Pass imported class
+            )
+            return result
 
     except Exception as e:
         import traceback # Keep import here as it's conditional

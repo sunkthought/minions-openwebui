@@ -175,7 +175,9 @@ async def _execute_minion_protocol(
         'confidence_distribution': {'HIGH': 0, 'MEDIUM': 0, 'LOW': 0},
         'rounds_completed': 0,
         'completion_via_detection': False,
-        'estimated_tokens': 0
+        'estimated_tokens': 0,
+        'chunk_size_used': valves.chunk_size,
+        'context_size': len(context)
     }
 
     if valves.debug_mode:
@@ -394,5 +396,6 @@ Respond with "FINAL ANSWER READY." followed by your synthesized answer. Do NOT a
     output_parts.append(f"- **Completion method:** {'Early completion detected' if metrics['completion_via_detection'] else 'Reached max rounds or explicit completion'}")
     output_parts.append(f"- **Total duration:** {total_execution_time*1000:.0f}ms")
     output_parts.append(f"- **Estimated tokens:** ~{metrics['estimated_tokens']:,}")
+    output_parts.append(f"- **Chunk processing:** {metrics['context_size']:,} chars (max chunk size: {metrics['chunk_size_used']:,})")
     
     return "\n".join(output_parts)

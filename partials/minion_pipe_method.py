@@ -7,6 +7,7 @@ from .common_api_calls import call_claude, call_ollama
 from .minion_protocol_logic import _execute_minion_protocol
 from .minion_models import LocalAssistantResponse # Assuming this is the correct model name
 from .common_context_utils import extract_context_from_messages, extract_context_from_files
+from .common_file_processing import create_chunks
 
 async def _call_claude_directly(valves: Any, query: str, call_claude_func: Callable) -> str: # Renamed for clarity
     """Fallback to direct Claude call when no context is available"""
@@ -54,17 +55,57 @@ async def minion_pipe(
                 + direct_response
             )
 
-        # Execute the Minion protocol, passing the imported call_claude, call_ollama, and LocalAssistantResponse
-        # The _execute_minion_protocol itself expects these as arguments.
-        result: str = await _execute_minion_protocol(
-            valves=pipe_self.valves, 
-            query=user_query, 
-            context=context, 
-            call_claude_func=call_claude,  # Pass imported function
-            call_ollama_func=call_ollama,  # Pass imported function
-            LocalAssistantResponseModel=LocalAssistantResponse # Pass imported class
-        )
-        return result
+        # Handle chunking for large documents
+        chunks = create_chunks(context, pipe_self.valves.chunk_size, pipe_self.valves.max_chunks)
+        if not chunks and context:
+            return "❌ **Error:** Context provided, but failed to create any processable chunks. Check chunk_size setting."
+        
+        if len(chunks) > 1:
+            # Multiple chunks - need to process each chunk and combine results
+            chunk_results = []
+            for i, chunk in enumerate(chunks):
+                chunk_header = f"## 📄 Chunk {i+1} of {len(chunks)}\n"
+                
+                try:
+                    chunk_result = await _execute_minion_protocol(
+                        valves=pipe_self.valves, 
+                        query=user_query, 
+                        context=chunk, 
+                        call_claude_func=call_claude,
+                        call_ollama_func=call_ollama,
+                        LocalAssistantResponseModel=LocalAssistantResponse
+                    )
+                    chunk_results.append(chunk_header + chunk_result)
+                except Exception as e:
+                    chunk_results.append(f"{chunk_header}❌ **Error processing chunk {i+1}:** {str(e)}")
+            
+            # Combine all chunk results
+            combined_result = "\n\n---\n\n".join(chunk_results)
+            
+            # Add summary header
+            summary_header = f"""# 🔗 Multi-Chunk Analysis Results
+            
+**Document processed in {len(chunks)} chunks** (max {pipe_self.valves.chunk_size:,} characters each)
+
+{combined_result}
+
+---
+
+## 📋 Summary
+The document was automatically divided into {len(chunks)} chunks for processing. Each chunk was analyzed independently using the Minion protocol. Review the individual chunk results above for comprehensive coverage of the document."""
+            
+            return summary_header
+        else:
+            # Single chunk or no chunking needed
+            result: str = await _execute_minion_protocol(
+                valves=pipe_self.valves, 
+                query=user_query, 
+                context=chunks[0] if chunks else context, 
+                call_claude_func=call_claude,  # Pass imported function
+                call_ollama_func=call_ollama,  # Pass imported function
+                LocalAssistantResponseModel=LocalAssistantResponse # Pass imported class
+            )
+            return result
 
     except Exception as e:
         import traceback # Keep import here as it's conditional
