@@ -82,11 +82,22 @@ async def call_ollama(
     schema: Optional[BaseModel] = None
 ) -> str:
     """Call Ollama API"""
+    options = {
+        "temperature": getattr(valves, 'local_model_temperature', 0.7),
+        "num_predict": valves.ollama_num_predict,
+        "num_ctx": getattr(valves, 'local_model_context_length', 4096),
+    }
+    
+    # Add top_k only if it's greater than 0
+    top_k = getattr(valves, 'local_model_top_k', 40)
+    if top_k > 0:
+        options["top_k"] = top_k
+    
     payload = {
         "model": valves.local_model,
         "prompt": prompt,
         "stream": False,
-        "options": {"temperature": 0.1, "num_predict": valves.ollama_num_predict},
+        "options": options,
     }
 
     # Check if we should use structured output

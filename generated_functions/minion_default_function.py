@@ -100,6 +100,23 @@ class MinionValves(BaseModel):
         default=1000, 
         description="num_predict for Ollama generation (max output tokens for local model)."
     )
+    
+    # Custom local model parameters
+    local_model_context_length: int = Field(
+        default=4096,
+        description="Context window size for the local model. Set this based on your local model's capabilities."
+    )
+    local_model_temperature: float = Field(
+        default=0.7,
+        description="Temperature for local model generation (0.0-2.0). Lower values make output more focused and deterministic.",
+        ge=0.0,
+        le=2.0
+    )
+    local_model_top_k: int = Field(
+        default=40,
+        description="Top-k sampling for local model. Limits vocabulary to top k tokens. Set to 0 to disable.",
+        ge=0
+    )
     use_structured_output: bool = Field(
         default=False, 
         description="Enable JSON structured output for local model responses (requires local model support)."
@@ -207,11 +224,22 @@ async def call_ollama(
     schema: Optional[BaseModel] = None
 ) -> str:
     """Call Ollama API"""
+    options = {
+        "temperature": getattr(valves, 'local_model_temperature', 0.7),
+        "num_predict": valves.ollama_num_predict,
+        "num_ctx": getattr(valves, 'local_model_context_length', 4096),
+    }
+    
+    # Add top_k only if it's greater than 0
+    top_k = getattr(valves, 'local_model_top_k', 40)
+    if top_k > 0:
+        options["top_k"] = top_k
+    
     payload = {
         "model": valves.local_model,
         "prompt": prompt,
         "stream": False,
-        "options": {"temperature": 0.1, "num_predict": valves.ollama_num_predict},
+        "options": options,
     }
 
     # Check if we should use structured output
