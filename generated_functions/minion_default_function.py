@@ -1273,6 +1273,8 @@ Focus on areas not yet covered in our conversation."""
         try:
             if valves.debug_mode: 
                 start_time_ollama = asyncio.get_event_loop().time()
+                debug_log.append(f"  🔄 Calling local model {valves.local_model} at {valves.ollama_base_url} (timeout: {valves.timeout_local}s) (Debug Mode)")
+            
             local_response_str = await call_ollama_func(
                 valves,
                 local_prompt,
@@ -1300,11 +1302,30 @@ Focus on areas not yet covered in our conversation."""
                 time_taken_ollama = end_time_ollama - start_time_ollama
                 debug_log.append(f"  ⏱️ Local LLM call in round {round_num + 1} took {time_taken_ollama:.2f}s. (Debug Mode)")
         except Exception as e:
-            error_message = f"❌ Error calling Local LLM in round {round_num + 1}: {e}"
+            # Enhanced error reporting
+            error_type = type(e).__name__
+            error_msg = str(e) if str(e) else "Unknown error (empty exception message)"
+            
+            if valves.debug_mode and hasattr(e, '__traceback__'):
+                import traceback
+                error_details = traceback.format_exc()
+                debug_log.append(f"  ❌ Local LLM call failed with full traceback: {error_details} (Debug Mode)")
+            
+            if "timeout" in error_msg.lower() or error_type == "TimeoutError":
+                error_message = f"❌ Error calling Local LLM in round {round_num + 1}: Timeout after {valves.timeout_local}s - Local model may be overloaded or unavailable"
+            elif "connection" in error_msg.lower() or "connect" in error_msg.lower():
+                error_message = f"❌ Error calling Local LLM in round {round_num + 1}: Connection failed - Check if Ollama is running at {valves.ollama_base_url}"
+            elif error_msg == "Unknown error (empty exception message)":
+                error_message = f"❌ Error calling Local LLM in round {round_num + 1}: {error_type} with empty message - likely timeout or connection issue"
+            else:
+                error_message = f"❌ Error calling Local LLM in round {round_num + 1}: {error_type}: {error_msg}"
+            
             conversation_log.append(error_message)
             if valves.debug_mode: 
                 debug_log.append(f"  {error_message} (Debug Mode)")
-            actual_final_answer = "Minion protocol failed due to Local LLM API error."
+                debug_log.append(f"  🔧 Troubleshooting: Check Ollama status, model availability ({valves.local_model}), and network connectivity (Debug Mode)")
+            
+            actual_final_answer = f"Minion protocol failed due to Local LLM API error: {error_type}"
             break
 
         response_for_claude = local_response_data.get("answer", "Error: Could not extract answer from local LLM.")
