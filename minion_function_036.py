@@ -440,44 +440,80 @@ def get_minion_conversation_claude_prompt(history: List[Tuple[str, str]], origin
 def get_minion_local_prompt(context: str, query: str, claude_request: str, valves: Any) -> str:
     """
     Returns the prompt for the local Ollama model in the Minion protocol.
-    Updated to support structured output with LocalAssistantResponse model.
+    Enhanced with better guidance for structured, useful responses.
     """
     # query is the original user query.
     # context is the document chunk.
     # claude_request (the parameter) is the specific question from the remote model to the local model.
 
-    base_prompt = f"""You are a helpful assistant with access to the following document:
+    base_prompt = f"""You are a document analysis assistant with exclusive access to the following document:
+
 <document>
 {context}
 </document>
 
-The remote model (another AI) is asking you a specific question about this document. The remote model's question is:
-<remote_model_question>
-{claude_request}
-</remote_model_question>
+A research coordinator needs specific information from this document to answer: "{query}"
 
-Instructions:
-1. Answer the specific question asked based ONLY on the document
-2. Cite relevant passages or sections when possible
-3. If multiple pieces of information are relevant, organize them as key points
-4. If information is not in the document, clearly state "This information is not found in the provided document"
-5. Indicate your confidence level (HIGH/MEDIUM/LOW) based on how directly the document addresses the question"""
+Their current question is:
+<question>
+{claude_request}
+</question>
+
+RESPONSE GUIDELINES:
+
+1. ACCURACY: Base your answer ONLY on information found in the document above
+   
+2. CITATIONS: When possible, include direct quotes or specific references:
+   - Good: "According to section 3.2, 'the budget increased by 15%'"
+   - Good: "The document states on page 4 that..."
+   - Poor: "The document mentions something about budgets"
+
+3. ORGANIZATION: For complex answers, structure your response:
+   - Use bullet points or numbered lists for multiple items
+   - Separate distinct pieces of information clearly
+   - Highlight key findings at the beginning
+
+4. CONFIDENCE LEVELS:
+   - HIGH: Information directly answers the question with explicit statements
+   - MEDIUM: Information partially addresses the question or requires some inference
+   - LOW: Information is tangentially related or requires significant interpretation
+
+5. HANDLING MISSING INFORMATION:
+   - If not found: "This specific information is not available in the document"
+   - If partially found: "The document provides partial information: [explain what's available]"
+   - Suggest related info: "While X is not mentioned, the document does discuss Y which may be relevant"
+
+Remember: The coordinator cannot see the document and relies entirely on your accurate extraction."""
 
     if valves.use_structured_output:
         structured_output_instructions = """
 
+RESPONSE FORMAT:
 Respond ONLY with a JSON object in this exact format:
 {
-    "answer": "Your detailed answer here",
+    "answer": "Your detailed answer addressing the specific question",
     "confidence": "HIGH/MEDIUM/LOW",
-    "key_points": ["point 1", "point 2"] or null,
-    "citations": ["relevant quote 1", "relevant quote 2"] or null
+    "key_points": ["Main finding 1", "Main finding 2", "..."] or null,
+    "citations": ["Exact quote from document", "Another relevant quote", "..."] or null
 }
 
-Do not include any text, explanations, or markdown formatting (like ```json ... ```) outside of this JSON object."""
+JSON Guidelines:
+- answer: Comprehensive response to the question (required)
+- confidence: Your assessment based on criteria above (required)
+- key_points: List main findings if multiple important points exist (optional)
+- citations: Direct quotes that support your answer (optional but recommended)
+
+IMPORTANT: Output ONLY the JSON object. No additional text, no markdown formatting."""
         return base_prompt + structured_output_instructions
     else:
-        return base_prompt + "\n\nProvide a clear, detailed answer to the question."
+        non_structured_instructions = """
+
+Format your response clearly with:
+- Main answer first
+- Supporting details or quotes
+- Confidence level (HIGH/MEDIUM/LOW) at the end
+- Note if any information is not found in the document"""
+        return base_prompt + non_structured_instructions
 
 # Partials File: partials/minion_protocol_logic.py
 import asyncio
