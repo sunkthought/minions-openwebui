@@ -1,6 +1,7 @@
 # Partials File: partials/minion_models.py
 from typing import List, Optional, Dict, Set, Any, Tuple
 from pydantic import BaseModel, Field
+from enum import Enum
 import asyncio
 
 class LocalAssistantResponse(BaseModel):
@@ -80,6 +81,7 @@ class ConversationState(BaseModel):
     information_gaps: List[str] = Field(default_factory=list)
     current_phase: str = Field(default="exploration")
     knowledge_graph: Dict[str, List[str]] = Field(default_factory=dict)  # topic -> related facts
+    phase_transitions: List[Dict[str, str]] = Field(default_factory=list)  # Track phase transitions
     
     def add_qa_pair(self, question: str, answer: str, confidence: str, key_points: List[str] = None):
         """Add a Q&A pair and update derived state"""
@@ -160,3 +162,73 @@ class QuestionDeduplicator:
     def get_all_questions(self) -> List[str]:
         """Return all previously asked questions"""
         return self.asked_questions.copy()
+
+class ConversationPhase(str, Enum):
+    """Phases of a structured conversation"""
+    EXPLORATION = "exploration"
+    DEEP_DIVE = "deep_dive"
+    GAP_FILLING = "gap_filling"
+    SYNTHESIS = "synthesis"
+
+class ConversationFlowController:
+    """Controls the flow of conversation through different phases"""
+    def __init__(self):
+        self.current_phase = ConversationPhase.EXPLORATION
+        self.phase_question_count = {phase: 0 for phase in ConversationPhase}
+        self.phase_transitions = {
+            ConversationPhase.EXPLORATION: ConversationPhase.DEEP_DIVE,
+            ConversationPhase.DEEP_DIVE: ConversationPhase.GAP_FILLING,
+            ConversationPhase.GAP_FILLING: ConversationPhase.SYNTHESIS,
+            ConversationPhase.SYNTHESIS: ConversationPhase.SYNTHESIS
+        }
+        
+    def should_transition(self, state: ConversationState) -> bool:
+        """Determine if conversation should move to next phase"""
+        current_count = self.phase_question_count[self.current_phase]
+        
+        if self.current_phase == ConversationPhase.EXPLORATION:
+            # Move on after 2-3 broad questions or when main topics identified
+            return current_count >= 2 and len(state.topics_covered) >= 3
+            
+        elif self.current_phase == ConversationPhase.DEEP_DIVE:
+            # Move on after exploring key topics in detail
+            return current_count >= 3 or len(state.key_findings) >= 5
+            
+        elif self.current_phase == ConversationPhase.GAP_FILLING:
+            # Move to synthesis when gaps are addressed
+            return current_count >= 2 or len(state.information_gaps) == 0
+            
+        return False
+        
+    def get_phase_guidance(self) -> str:
+        """Get prompting guidance for current phase"""
+        guidance = {
+            ConversationPhase.EXPLORATION: 
+                "You are in the EXPLORATION phase. Ask broad questions to understand the document's main topics and structure.",
+            ConversationPhase.DEEP_DIVE:
+                "You are in the DEEP DIVE phase. Focus on specific topics that are most relevant to the user's query.",
+            ConversationPhase.GAP_FILLING:
+                "You are in the GAP FILLING phase. Address specific information gaps identified in previous rounds.",
+            ConversationPhase.SYNTHESIS:
+                "You are in the SYNTHESIS phase. You should now have enough information. Prepare your final answer."
+        }
+        return guidance.get(self.current_phase, "")
+        
+    def transition_to_next_phase(self):
+        """Move to the next conversation phase"""
+        self.current_phase = self.phase_transitions[self.current_phase]
+        self.phase_question_count[self.current_phase] = 0
+        
+    def increment_question_count(self):
+        """Increment the question count for the current phase"""
+        self.phase_question_count[self.current_phase] += 1
+        
+    def get_phase_status(self) -> Dict[str, Any]:
+        """Get current phase status for debugging"""
+        return {
+            "current_phase": self.current_phase.value,
+            "questions_in_phase": self.phase_question_count[self.current_phase],
+            "total_questions_by_phase": {
+                phase.value: count for phase, count in self.phase_question_count.items()
+            }
+        }

@@ -162,7 +162,8 @@ async def _execute_minion_protocol(
     call_ollama_func: Callable,
     LocalAssistantResponseModel: Any,
     ConversationStateModel: Any = None,
-    QuestionDeduplicatorModel: Any = None
+    QuestionDeduplicatorModel: Any = None,
+    ConversationFlowControllerModel: Any = None
 ) -> str:
     """Execute the Minion protocol"""
     conversation_log = []
@@ -182,6 +183,11 @@ async def _execute_minion_protocol(
         deduplicator = QuestionDeduplicatorModel(
             similarity_threshold=valves.deduplication_threshold
         )
+    
+    # Initialize flow controller if enabled
+    flow_controller = None
+    if valves.enable_flow_control and ConversationFlowControllerModel:
+        flow_controller = ConversationFlowControllerModel()
     
     # Initialize metrics tracking
     overall_start_time = asyncio.get_event_loop().time()
@@ -212,11 +218,21 @@ async def _execute_minion_protocol(
         if valves.show_conversation:
             conversation_log.append(f"### 🔄 Round {round_num + 1}")
 
+        # Get phase guidance if flow control is enabled
+        phase_guidance = None
+        if flow_controller and valves.enable_flow_control:
+            phase_guidance = flow_controller.get_phase_guidance()
+            if valves.debug_mode:
+                phase_status = flow_controller.get_phase_status()
+                debug_log.append(f"  📍 Phase: {phase_status['current_phase']} (Question {phase_status['questions_in_phase'] + 1} in phase)")
+        
         claude_prompt_for_this_round = ""
         if round_num == 0:
             # Use state-aware prompt if state tracking is enabled
             if conversation_state and valves.track_conversation_state:
-                claude_prompt_for_this_round = get_minion_initial_claude_prompt_with_state(query, len(context), valves, conversation_state)
+                claude_prompt_for_this_round = get_minion_initial_claude_prompt_with_state(
+                    query, len(context), valves, conversation_state, phase_guidance
+                )
             else:
                 claude_prompt_for_this_round = get_minion_initial_claude_prompt(query, len(context), valves)
         else:
@@ -248,7 +264,7 @@ Respond with "FINAL ANSWER READY." followed by your synthesized answer. Do NOT a
                 if conversation_state and valves.track_conversation_state:
                     previous_questions = deduplicator.get_all_questions() if deduplicator else None
                     claude_prompt_for_this_round = get_minion_conversation_claude_prompt_with_state(
-                        conversation_history, query, valves, conversation_state, previous_questions
+                        conversation_history, query, valves, conversation_state, previous_questions, phase_guidance
                     )
                 else:
                     claude_prompt_for_this_round = get_minion_conversation_claude_prompt(
@@ -415,6 +431,36 @@ Focus on areas not yet covered in our conversation."""
             if local_response_data.get('confidence') == 'HIGH' and local_response_data.get('key_points'):
                 for idx, point in enumerate(local_response_data['key_points'][:2]):
                     conversation_state.key_findings[f"round_{round_num+1}_finding_{idx+1}"] = point
+        
+        # Update flow controller if enabled
+        if flow_controller and valves.enable_flow_control:
+            # Increment question count for current phase
+            flow_controller.increment_question_count()
+            
+            # Check if we should transition to next phase
+            if conversation_state and flow_controller.should_transition(conversation_state):
+                old_phase = flow_controller.current_phase.value
+                flow_controller.transition_to_next_phase()
+                new_phase = flow_controller.current_phase.value
+                
+                # Update conversation state phase
+                conversation_state.current_phase = new_phase
+                conversation_state.phase_transitions.append({
+                    "round": round_num + 1,
+                    "from": old_phase,
+                    "to": new_phase
+                })
+                
+                if valves.show_conversation:
+                    conversation_log.append(f"📊 **Phase Transition: {old_phase} → {new_phase}**\n")
+                
+                if valves.debug_mode:
+                    debug_log.append(f"  📊 Phase transition: {old_phase} → {new_phase} (Round {round_num + 1})")
+            
+            # Check if we're in synthesis phase and should force completion
+            if flow_controller.current_phase.value == "synthesis" and round_num > 2:
+                if valves.debug_mode:
+                    debug_log.append(f"  🎯 Synthesis phase reached - encouraging final answer")
         
         if valves.show_conversation:
             conversation_log.append(f"**💻 Local Model ({valves.local_model}):**")

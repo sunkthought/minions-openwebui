@@ -23,6 +23,7 @@ from fastapi import Request # type: ignore
 # Partials File: partials/minion_models.py
 from typing import List, Optional, Dict, Set, Any, Tuple
 from pydantic import BaseModel, Field
+from enum import Enum
 import asyncio
 
 class LocalAssistantResponse(BaseModel):
@@ -102,6 +103,7 @@ class ConversationState(BaseModel):
     information_gaps: List[str] = Field(default_factory=list)
     current_phase: str = Field(default="exploration")
     knowledge_graph: Dict[str, List[str]] = Field(default_factory=dict)  # topic -> related facts
+    phase_transitions: List[Dict[str, str]] = Field(default_factory=list)  # Track phase transitions
     
     def add_qa_pair(self, question: str, answer: str, confidence: str, key_points: List[str] = None):
         """Add a Q&A pair and update derived state"""
@@ -183,8 +185,79 @@ class QuestionDeduplicator:
         """Return all previously asked questions"""
         return self.asked_questions.copy()
 
+class ConversationPhase(str, Enum):
+    """Phases of a structured conversation"""
+    EXPLORATION = "exploration"
+    DEEP_DIVE = "deep_dive"
+    GAP_FILLING = "gap_filling"
+    SYNTHESIS = "synthesis"
+
+class ConversationFlowController:
+    """Controls the flow of conversation through different phases"""
+    def __init__(self):
+        self.current_phase = ConversationPhase.EXPLORATION
+        self.phase_question_count = {phase: 0 for phase in ConversationPhase}
+        self.phase_transitions = {
+            ConversationPhase.EXPLORATION: ConversationPhase.DEEP_DIVE,
+            ConversationPhase.DEEP_DIVE: ConversationPhase.GAP_FILLING,
+            ConversationPhase.GAP_FILLING: ConversationPhase.SYNTHESIS,
+            ConversationPhase.SYNTHESIS: ConversationPhase.SYNTHESIS
+        }
+        
+    def should_transition(self, state: ConversationState) -> bool:
+        """Determine if conversation should move to next phase"""
+        current_count = self.phase_question_count[self.current_phase]
+        
+        if self.current_phase == ConversationPhase.EXPLORATION:
+            # Move on after 2-3 broad questions or when main topics identified
+            return current_count >= 2 and len(state.topics_covered) >= 3
+            
+        elif self.current_phase == ConversationPhase.DEEP_DIVE:
+            # Move on after exploring key topics in detail
+            return current_count >= 3 or len(state.key_findings) >= 5
+            
+        elif self.current_phase == ConversationPhase.GAP_FILLING:
+            # Move to synthesis when gaps are addressed
+            return current_count >= 2 or len(state.information_gaps) == 0
+            
+        return False
+        
+    def get_phase_guidance(self) -> str:
+        """Get prompting guidance for current phase"""
+        guidance = {
+            ConversationPhase.EXPLORATION: 
+                "You are in the EXPLORATION phase. Ask broad questions to understand the document's main topics and structure.",
+            ConversationPhase.DEEP_DIVE:
+                "You are in the DEEP DIVE phase. Focus on specific topics that are most relevant to the user's query.",
+            ConversationPhase.GAP_FILLING:
+                "You are in the GAP FILLING phase. Address specific information gaps identified in previous rounds.",
+            ConversationPhase.SYNTHESIS:
+                "You are in the SYNTHESIS phase. You should now have enough information. Prepare your final answer."
+        }
+        return guidance.get(self.current_phase, "")
+        
+    def transition_to_next_phase(self):
+        """Move to the next conversation phase"""
+        self.current_phase = self.phase_transitions[self.current_phase]
+        self.phase_question_count[self.current_phase] = 0
+        
+    def increment_question_count(self):
+        """Increment the question count for the current phase"""
+        self.phase_question_count[self.current_phase] += 1
+        
+    def get_phase_status(self) -> Dict[str, Any]:
+        """Get current phase status for debugging"""
+        return {
+            "current_phase": self.current_phase.value,
+            "questions_in_phase": self.phase_question_count[self.current_phase],
+            "total_questions_by_phase": {
+                phase.value: count for phase, count in self.phase_question_count.items()
+            }
+        }
+
 
 # Partials File: partials/minion_valves.py
+from typing import Dict
 from pydantic import BaseModel, Field
 
 class MinionValves(BaseModel):
@@ -304,6 +377,16 @@ class MinionValves(BaseModel):
         description="Similarity threshold for question deduplication (0-1). Higher = stricter matching",
         ge=0.0,
         le=1.0
+    )
+    
+    # Conversation Flow Control (v0.3.6b)
+    enable_flow_control: bool = Field(
+        default=True,
+        description="Enable phased conversation flow (exploration → deep dive → gap filling → synthesis)"
+    )
+    questions_per_phase: Dict[str, int] = Field(
+        default={"exploration": 3, "deep_dive": 4, "gap_filling": 2, "synthesis": 1},
+        description="Maximum questions per conversation phase"
     )
 
     # The following class is part of the Pydantic configuration and is standard.
@@ -726,7 +809,7 @@ Format your response clearly with:
 - Note if any information is not found in the document"""
         return base_prompt + non_structured_instructions
 
-def get_minion_initial_claude_prompt_with_state(query: str, context_len: int, valves: Any, conversation_state: Optional[Any] = None) -> str:
+def get_minion_initial_claude_prompt_with_state(query: str, context_len: int, valves: Any, conversation_state: Optional[Any] = None, phase_guidance: Optional[str] = None) -> str:
     """
     Enhanced version of initial prompt that includes conversation state if available.
     """
@@ -744,9 +827,19 @@ CONVERSATION STATE CONTEXT:
 Based on this context, ask your first strategic question to the local assistant."""
             )
     
+    # Add phase guidance if provided
+    if phase_guidance and valves.enable_flow_control:
+        base_prompt = base_prompt.replace(
+            "Guidelines for effective questions:",
+            f"""CURRENT PHASE:
+{phase_guidance}
+
+Guidelines for effective questions:"""
+        )
+    
     return base_prompt
 
-def get_minion_conversation_claude_prompt_with_state(history: List[Tuple[str, str]], original_query: str, valves: Any, conversation_state: Optional[Any] = None, previous_questions: Optional[List[str]] = None) -> str:
+def get_minion_conversation_claude_prompt_with_state(history: List[Tuple[str, str]], original_query: str, valves: Any, conversation_state: Optional[Any] = None, previous_questions: Optional[List[str]] = None, phase_guidance: Optional[str] = None) -> str:
     """
     Enhanced version of conversation prompt that includes conversation state if available.
     """
@@ -781,6 +874,16 @@ INFORMATION GAPS: {len(conversation_state.information_gaps)}
         base_prompt = base_prompt.replace(
             "Remember: Each question should build on what you've learned, not repeat previous inquiries.",
             questions_section + "Remember: Each question should build on what you've learned, not repeat previous inquiries."
+        )
+    
+    # Add phase guidance if provided
+    if phase_guidance and valves.enable_flow_control:
+        base_prompt = base_prompt.replace(
+            "DECISION POINT:",
+            f"""CURRENT CONVERSATION PHASE:
+{phase_guidance}
+
+DECISION POINT:"""
         )
     
     return base_prompt
@@ -949,7 +1052,8 @@ async def _execute_minion_protocol(
     call_ollama_func: Callable,
     LocalAssistantResponseModel: Any,
     ConversationStateModel: Any = None,
-    QuestionDeduplicatorModel: Any = None
+    QuestionDeduplicatorModel: Any = None,
+    ConversationFlowControllerModel: Any = None
 ) -> str:
     """Execute the Minion protocol"""
     conversation_log = []
@@ -969,6 +1073,11 @@ async def _execute_minion_protocol(
         deduplicator = QuestionDeduplicatorModel(
             similarity_threshold=valves.deduplication_threshold
         )
+    
+    # Initialize flow controller if enabled
+    flow_controller = None
+    if valves.enable_flow_control and ConversationFlowControllerModel:
+        flow_controller = ConversationFlowControllerModel()
     
     # Initialize metrics tracking
     overall_start_time = asyncio.get_event_loop().time()
@@ -999,11 +1108,21 @@ async def _execute_minion_protocol(
         if valves.show_conversation:
             conversation_log.append(f"### 🔄 Round {round_num + 1}")
 
+        # Get phase guidance if flow control is enabled
+        phase_guidance = None
+        if flow_controller and valves.enable_flow_control:
+            phase_guidance = flow_controller.get_phase_guidance()
+            if valves.debug_mode:
+                phase_status = flow_controller.get_phase_status()
+                debug_log.append(f"  📍 Phase: {phase_status['current_phase']} (Question {phase_status['questions_in_phase'] + 1} in phase)")
+        
         claude_prompt_for_this_round = ""
         if round_num == 0:
             # Use state-aware prompt if state tracking is enabled
             if conversation_state and valves.track_conversation_state:
-                claude_prompt_for_this_round = get_minion_initial_claude_prompt_with_state(query, len(context), valves, conversation_state)
+                claude_prompt_for_this_round = get_minion_initial_claude_prompt_with_state(
+                    query, len(context), valves, conversation_state, phase_guidance
+                )
             else:
                 claude_prompt_for_this_round = get_minion_initial_claude_prompt(query, len(context), valves)
         else:
@@ -1035,7 +1154,7 @@ Respond with "FINAL ANSWER READY." followed by your synthesized answer. Do NOT a
                 if conversation_state and valves.track_conversation_state:
                     previous_questions = deduplicator.get_all_questions() if deduplicator else None
                     claude_prompt_for_this_round = get_minion_conversation_claude_prompt_with_state(
-                        conversation_history, query, valves, conversation_state, previous_questions
+                        conversation_history, query, valves, conversation_state, previous_questions, phase_guidance
                     )
                 else:
                     claude_prompt_for_this_round = get_minion_conversation_claude_prompt(
@@ -1203,6 +1322,36 @@ Focus on areas not yet covered in our conversation."""
                 for idx, point in enumerate(local_response_data['key_points'][:2]):
                     conversation_state.key_findings[f"round_{round_num+1}_finding_{idx+1}"] = point
         
+        # Update flow controller if enabled
+        if flow_controller and valves.enable_flow_control:
+            # Increment question count for current phase
+            flow_controller.increment_question_count()
+            
+            # Check if we should transition to next phase
+            if conversation_state and flow_controller.should_transition(conversation_state):
+                old_phase = flow_controller.current_phase.value
+                flow_controller.transition_to_next_phase()
+                new_phase = flow_controller.current_phase.value
+                
+                # Update conversation state phase
+                conversation_state.current_phase = new_phase
+                conversation_state.phase_transitions.append({
+                    "round": round_num + 1,
+                    "from": old_phase,
+                    "to": new_phase
+                })
+                
+                if valves.show_conversation:
+                    conversation_log.append(f"📊 **Phase Transition: {old_phase} → {new_phase}**\n")
+                
+                if valves.debug_mode:
+                    debug_log.append(f"  📊 Phase transition: {old_phase} → {new_phase} (Round {round_num + 1})")
+            
+            # Check if we're in synthesis phase and should force completion
+            if flow_controller.current_phase.value == "synthesis" and round_num > 2:
+                if valves.debug_mode:
+                    debug_log.append(f"  🎯 Synthesis phase reached - encouraging final answer")
+        
         if valves.show_conversation:
             conversation_log.append(f"**💻 Local Model ({valves.local_model}):**")
             if valves.use_structured_output and local_response_data.get("parse_error") is None:
@@ -1353,7 +1502,8 @@ async def minion_pipe(
                         call_ollama_func=call_ollama,
                         LocalAssistantResponseModel=LocalAssistantResponse,
                         ConversationStateModel=ConversationState,
-                        QuestionDeduplicatorModel=QuestionDeduplicator
+                        QuestionDeduplicatorModel=QuestionDeduplicator,
+                        ConversationFlowControllerModel=ConversationFlowController
                     )
                     chunk_results.append(chunk_header + chunk_result)
                 except Exception as e:
@@ -1385,7 +1535,8 @@ The document was automatically divided into {len(chunks)} chunks for processing.
                 call_ollama_func=call_ollama,  # Pass imported function
                 LocalAssistantResponseModel=LocalAssistantResponse, # Pass imported class
                 ConversationStateModel=ConversationState,
-                QuestionDeduplicatorModel=QuestionDeduplicator
+                QuestionDeduplicatorModel=QuestionDeduplicator,
+                ConversationFlowControllerModel=ConversationFlowController
             )
             return result
 

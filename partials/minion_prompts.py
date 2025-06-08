@@ -169,7 +169,7 @@ Format your response clearly with:
 - Note if any information is not found in the document"""
         return base_prompt + non_structured_instructions
 
-def get_minion_initial_claude_prompt_with_state(query: str, context_len: int, valves: Any, conversation_state: Optional[Any] = None) -> str:
+def get_minion_initial_claude_prompt_with_state(query: str, context_len: int, valves: Any, conversation_state: Optional[Any] = None, phase_guidance: Optional[str] = None) -> str:
     """
     Enhanced version of initial prompt that includes conversation state if available.
     """
@@ -187,9 +187,19 @@ CONVERSATION STATE CONTEXT:
 Based on this context, ask your first strategic question to the local assistant."""
             )
     
+    # Add phase guidance if provided
+    if phase_guidance and valves.enable_flow_control:
+        base_prompt = base_prompt.replace(
+            "Guidelines for effective questions:",
+            f"""CURRENT PHASE:
+{phase_guidance}
+
+Guidelines for effective questions:"""
+        )
+    
     return base_prompt
 
-def get_minion_conversation_claude_prompt_with_state(history: List[Tuple[str, str]], original_query: str, valves: Any, conversation_state: Optional[Any] = None, previous_questions: Optional[List[str]] = None) -> str:
+def get_minion_conversation_claude_prompt_with_state(history: List[Tuple[str, str]], original_query: str, valves: Any, conversation_state: Optional[Any] = None, previous_questions: Optional[List[str]] = None, phase_guidance: Optional[str] = None) -> str:
     """
     Enhanced version of conversation prompt that includes conversation state if available.
     """
@@ -224,6 +234,16 @@ INFORMATION GAPS: {len(conversation_state.information_gaps)}
         base_prompt = base_prompt.replace(
             "Remember: Each question should build on what you've learned, not repeat previous inquiries.",
             questions_section + "Remember: Each question should build on what you've learned, not repeat previous inquiries."
+        )
+    
+    # Add phase guidance if provided
+    if phase_guidance and valves.enable_flow_control:
+        base_prompt = base_prompt.replace(
+            "DECISION POINT:",
+            f"""CURRENT CONVERSATION PHASE:
+{phase_guidance}
+
+DECISION POINT:"""
         )
     
     return base_prompt

@@ -1,4 +1,5 @@
 # Partials File: partials/minion_valves.py
+from typing import Dict
 from pydantic import BaseModel, Field
 
 class MinionValves(BaseModel):
@@ -118,6 +119,16 @@ class MinionValves(BaseModel):
         description="Similarity threshold for question deduplication (0-1). Higher = stricter matching",
         ge=0.0,
         le=1.0
+    )
+    
+    # Conversation Flow Control (v0.3.6b)
+    enable_flow_control: bool = Field(
+        default=True,
+        description="Enable phased conversation flow (exploration → deep dive → gap filling → synthesis)"
+    )
+    questions_per_phase: Dict[str, int] = Field(
+        default={"exploration": 3, "deep_dive": 4, "gap_filling": 2, "synthesis": 1},
+        description="Maximum questions per conversation phase"
     )
 
     # The following class is part of the Pydantic configuration and is standard.
