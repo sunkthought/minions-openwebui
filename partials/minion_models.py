@@ -235,3 +235,83 @@ class ConversationFlowController:
                 phase.value: count for phase, count in self.phase_question_count.items()
             }
         }
+
+class AnswerValidator:
+    """Validates answer quality and generates clarification requests"""
+    
+    @staticmethod
+    def validate_answer(answer: str, confidence: str, question: str) -> Dict[str, Any]:
+        """Validate answer quality and completeness"""
+        issues = []
+        
+        # Check for non-answers
+        non_answer_phrases = [
+            "i don't know",
+            "not sure",
+            "unclear",
+            "cannot determine",
+            "no information",
+            "not available",
+            "not found",
+            "not mentioned",
+            "not specified"
+        ]
+        
+        answer_lower = answer.lower()
+        
+        # Check if answer is too vague for low confidence
+        if len(answer.split()) < 10 and confidence == "LOW":
+            issues.append("Answer seems too brief for a low-confidence response")
+            
+        # Check for non-answers without clear indication
+        non_answer_found = any(phrase in answer_lower for phrase in non_answer_phrases)
+        if non_answer_found and "not found" not in answer_lower and "not available" not in answer_lower:
+            issues.append("Answer indicates uncertainty without clearly stating if information is missing")
+            
+        # Check if answer addresses the question keywords
+        question_keywords = set(question.lower().split()) - {
+            "what", "how", "when", "where", "who", "why", "is", "are", "the", "does", "can", "could", "would", "should"
+        }
+        answer_keywords = set(answer_lower.split())
+        
+        if question_keywords:
+            keyword_overlap = len(question_keywords.intersection(answer_keywords)) / len(question_keywords)
+            if keyword_overlap < 0.2:
+                issues.append("Answer may not directly address the question asked")
+        
+        # Check for extremely short answers to complex questions
+        if len(question.split()) > 10 and len(answer.split()) < 5:
+            issues.append("Answer seems too brief for a complex question")
+            
+        return {
+            "is_valid": len(issues) == 0,
+            "issues": issues,
+            "needs_clarification": len(issues) > 0 and confidence != "HIGH",
+            "severity": "high" if len(issues) >= 2 else "low" if len(issues) == 1 else "none"
+        }
+        
+    @staticmethod
+    def generate_clarification_request(validation_result: Dict[str, Any], original_question: str, answer: str) -> str:
+        """Generate a clarification request based on validation issues"""
+        if not validation_result["issues"]:
+            return ""
+            
+        clarification = "I need clarification on your previous answer. "
+        
+        for issue in validation_result["issues"]:
+            if "too brief" in issue:
+                clarification += "Could you provide more detail or explanation? "
+            elif "uncertainty" in issue:
+                clarification += "Is this information not available in the document, or is it unclear? Please be explicit about what information is missing. "
+            elif "not directly address" in issue:
+                clarification += f"Let me rephrase the question: {original_question} "
+            elif "complex question" in issue:
+                clarification += "This seems like a complex topic that might need a more comprehensive answer. "
+                
+        # Add specific guidance based on the answer content
+        if len(answer.split()) < 5:
+            clarification += "If the information isn't in the document, please say so explicitly. If it is available, please provide the specific details."
+        else:
+            clarification += "Please provide more specific information from the document to fully address my question."
+                
+        return clarification.strip()

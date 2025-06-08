@@ -163,7 +163,8 @@ async def _execute_minion_protocol(
     LocalAssistantResponseModel: Any,
     ConversationStateModel: Any = None,
     QuestionDeduplicatorModel: Any = None,
-    ConversationFlowControllerModel: Any = None
+    ConversationFlowControllerModel: Any = None,
+    AnswerValidatorModel: Any = None
 ) -> str:
     """Execute the Minion protocol"""
     conversation_log = []
@@ -188,6 +189,14 @@ async def _execute_minion_protocol(
     flow_controller = None
     if valves.enable_flow_control and ConversationFlowControllerModel:
         flow_controller = ConversationFlowControllerModel()
+    
+    # Initialize answer validator if enabled
+    validator = None
+    if valves.enable_answer_validation and AnswerValidatorModel:
+        validator = AnswerValidatorModel()
+    
+    # Track clarification attempts per question
+    clarification_attempts = {}
     
     # Initialize metrics tracking
     overall_start_time = asyncio.get_event_loop().time()
@@ -427,6 +436,83 @@ Focus on areas not yet covered in our conversation."""
             response_for_claude += f" (Local LLM response parse error: {local_response_data['parse_error']})"
         elif not local_response_data.get("answer") and not local_response_data.get("parse_error"):
             response_for_claude = "Local LLM provided no answer."
+
+        # Validate answer quality if validation is enabled
+        original_response = response_for_claude
+        validation_passed = True
+        
+        if validator and valves.enable_answer_validation:
+            question_for_validation = claude_response.strip()
+            answer_confidence = local_response_data.get('confidence', 'MEDIUM')
+            
+            # Check if we've already tried clarification for this question
+            question_key = f"round_{round_num}_{hash(question_for_validation)}"
+            attempts = clarification_attempts.get(question_key, 0)
+            
+            if attempts < valves.max_clarification_attempts:
+                validation_result = validator.validate_answer(
+                    response_for_claude, 
+                    answer_confidence, 
+                    question_for_validation
+                )
+                
+                if validation_result["needs_clarification"]:
+                    validation_passed = False
+                    clarification_attempts[question_key] = attempts + 1
+                    
+                    if valves.show_conversation:
+                        conversation_log.append(f"🔍 **Answer validation detected issues:** {', '.join(validation_result['issues'])}")
+                        conversation_log.append(f"**Requesting clarification (attempt {attempts + 1}/{valves.max_clarification_attempts})...**\n")
+                    
+                    if valves.debug_mode:
+                        debug_log.append(f"  🔍 Answer validation failed: {validation_result['issues']} (Debug Mode)")
+                    
+                    # Generate clarification request
+                    clarification_request = validator.generate_clarification_request(
+                        validation_result, 
+                        question_for_validation,
+                        response_for_claude
+                    )
+                    
+                    # Get clarified response
+                    try:
+                        clarified_prompt = get_minion_local_prompt(context, query, clarification_request, valves)
+                        
+                        if valves.debug_mode:
+                            debug_log.append(f"  🔄 Requesting clarification for round {round_num + 1} (Debug Mode)")
+                        
+                        clarified_response = await call_ollama_func(
+                            valves,
+                            clarified_prompt,
+                            use_json=True,
+                            schema=LocalAssistantResponseModel
+                        )
+                        
+                        clarified_data = _parse_local_response(
+                            clarified_response,
+                            is_structured=True,
+                            use_structured_output=valves.use_structured_output,
+                            debug_mode=valves.debug_mode,
+                            LocalAssistantResponseModel=LocalAssistantResponseModel
+                        )
+                        
+                        # Use clarified response
+                        response_for_claude = clarified_data.get("answer", response_for_claude)
+                        local_response_data = clarified_data  # Update for metrics
+                        
+                        if valves.show_conversation:
+                            conversation_log.append(f"**💻 Local Model (Clarified):**")
+                            if valves.use_structured_output and clarified_data.get("parse_error") is None:
+                                conversation_log.append(f"```json\n{json.dumps(clarified_data, indent=2)}\n```")
+                            else:
+                                conversation_log.append(f"{response_for_claude}")
+                            conversation_log.append("\n")
+                            
+                    except Exception as e:
+                        if valves.debug_mode:
+                            debug_log.append(f"  ❌ Clarification request failed: {e} (Debug Mode)")
+                        # Continue with original response
+                        response_for_claude = original_response
 
         conversation_history.append(("user", response_for_claude))
         

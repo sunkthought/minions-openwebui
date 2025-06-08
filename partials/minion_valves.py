@@ -143,6 +143,18 @@ class MinionValves(BaseModel):
         ge=1,
         le=10
     )
+    
+    # Answer Validation (v0.3.6b)
+    enable_answer_validation: bool = Field(
+        default=True,
+        description="Enable answer quality validation and clarification requests"
+    )
+    max_clarification_attempts: int = Field(
+        default=1,
+        description="Maximum clarification requests per question",
+        ge=0,
+        le=3
+    )
 
     # The following class is part of the Pydantic configuration and is standard.
     # It ensures that extra fields passed to the model are ignored rather than causing an error.

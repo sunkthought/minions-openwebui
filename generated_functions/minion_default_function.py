@@ -258,6 +258,86 @@ class ConversationFlowController:
             }
         }
 
+class AnswerValidator:
+    """Validates answer quality and generates clarification requests"""
+    
+    @staticmethod
+    def validate_answer(answer: str, confidence: str, question: str) -> Dict[str, Any]:
+        """Validate answer quality and completeness"""
+        issues = []
+        
+        # Check for non-answers
+        non_answer_phrases = [
+            "i don't know",
+            "not sure",
+            "unclear",
+            "cannot determine",
+            "no information",
+            "not available",
+            "not found",
+            "not mentioned",
+            "not specified"
+        ]
+        
+        answer_lower = answer.lower()
+        
+        # Check if answer is too vague for low confidence
+        if len(answer.split()) < 10 and confidence == "LOW":
+            issues.append("Answer seems too brief for a low-confidence response")
+            
+        # Check for non-answers without clear indication
+        non_answer_found = any(phrase in answer_lower for phrase in non_answer_phrases)
+        if non_answer_found and "not found" not in answer_lower and "not available" not in answer_lower:
+            issues.append("Answer indicates uncertainty without clearly stating if information is missing")
+            
+        # Check if answer addresses the question keywords
+        question_keywords = set(question.lower().split()) - {
+            "what", "how", "when", "where", "who", "why", "is", "are", "the", "does", "can", "could", "would", "should"
+        }
+        answer_keywords = set(answer_lower.split())
+        
+        if question_keywords:
+            keyword_overlap = len(question_keywords.intersection(answer_keywords)) / len(question_keywords)
+            if keyword_overlap < 0.2:
+                issues.append("Answer may not directly address the question asked")
+        
+        # Check for extremely short answers to complex questions
+        if len(question.split()) > 10 and len(answer.split()) < 5:
+            issues.append("Answer seems too brief for a complex question")
+            
+        return {
+            "is_valid": len(issues) == 0,
+            "issues": issues,
+            "needs_clarification": len(issues) > 0 and confidence != "HIGH",
+            "severity": "high" if len(issues) >= 2 else "low" if len(issues) == 1 else "none"
+        }
+        
+    @staticmethod
+    def generate_clarification_request(validation_result: Dict[str, Any], original_question: str, answer: str) -> str:
+        """Generate a clarification request based on validation issues"""
+        if not validation_result["issues"]:
+            return ""
+            
+        clarification = "I need clarification on your previous answer. "
+        
+        for issue in validation_result["issues"]:
+            if "too brief" in issue:
+                clarification += "Could you provide more detail or explanation? "
+            elif "uncertainty" in issue:
+                clarification += "Is this information not available in the document, or is it unclear? Please be explicit about what information is missing. "
+            elif "not directly address" in issue:
+                clarification += f"Let me rephrase the question: {original_question} "
+            elif "complex question" in issue:
+                clarification += "This seems like a complex topic that might need a more comprehensive answer. "
+                
+        # Add specific guidance based on the answer content
+        if len(answer.split()) < 5:
+            clarification += "If the information isn't in the document, please say so explicitly. If it is available, please provide the specific details."
+        else:
+            clarification += "Please provide more specific information from the document to fully address my question."
+                
+        return clarification.strip()
+
 
 # Partials File: partials/minion_valves.py
 from pydantic import BaseModel, Field
@@ -403,6 +483,18 @@ class MinionValves(BaseModel):
         description="Maximum questions in gap filling phase (missing information)",
         ge=1,
         le=10
+    )
+    
+    # Answer Validation (v0.3.6b)
+    enable_answer_validation: bool = Field(
+        default=True,
+        description="Enable answer quality validation and clarification requests"
+    )
+    max_clarification_attempts: int = Field(
+        default=1,
+        description="Maximum clarification requests per question",
+        ge=0,
+        le=3
     )
 
     # The following class is part of the Pydantic configuration and is standard.
@@ -1069,7 +1161,8 @@ async def _execute_minion_protocol(
     LocalAssistantResponseModel: Any,
     ConversationStateModel: Any = None,
     QuestionDeduplicatorModel: Any = None,
-    ConversationFlowControllerModel: Any = None
+    ConversationFlowControllerModel: Any = None,
+    AnswerValidatorModel: Any = None
 ) -> str:
     """Execute the Minion protocol"""
     conversation_log = []
@@ -1094,6 +1187,14 @@ async def _execute_minion_protocol(
     flow_controller = None
     if valves.enable_flow_control and ConversationFlowControllerModel:
         flow_controller = ConversationFlowControllerModel()
+    
+    # Initialize answer validator if enabled
+    validator = None
+    if valves.enable_answer_validation and AnswerValidatorModel:
+        validator = AnswerValidatorModel()
+    
+    # Track clarification attempts per question
+    clarification_attempts = {}
     
     # Initialize metrics tracking
     overall_start_time = asyncio.get_event_loop().time()
@@ -1334,6 +1435,83 @@ Focus on areas not yet covered in our conversation."""
         elif not local_response_data.get("answer") and not local_response_data.get("parse_error"):
             response_for_claude = "Local LLM provided no answer."
 
+        # Validate answer quality if validation is enabled
+        original_response = response_for_claude
+        validation_passed = True
+        
+        if validator and valves.enable_answer_validation:
+            question_for_validation = claude_response.strip()
+            answer_confidence = local_response_data.get('confidence', 'MEDIUM')
+            
+            # Check if we've already tried clarification for this question
+            question_key = f"round_{round_num}_{hash(question_for_validation)}"
+            attempts = clarification_attempts.get(question_key, 0)
+            
+            if attempts < valves.max_clarification_attempts:
+                validation_result = validator.validate_answer(
+                    response_for_claude, 
+                    answer_confidence, 
+                    question_for_validation
+                )
+                
+                if validation_result["needs_clarification"]:
+                    validation_passed = False
+                    clarification_attempts[question_key] = attempts + 1
+                    
+                    if valves.show_conversation:
+                        conversation_log.append(f"🔍 **Answer validation detected issues:** {', '.join(validation_result['issues'])}")
+                        conversation_log.append(f"**Requesting clarification (attempt {attempts + 1}/{valves.max_clarification_attempts})...**\n")
+                    
+                    if valves.debug_mode:
+                        debug_log.append(f"  🔍 Answer validation failed: {validation_result['issues']} (Debug Mode)")
+                    
+                    # Generate clarification request
+                    clarification_request = validator.generate_clarification_request(
+                        validation_result, 
+                        question_for_validation,
+                        response_for_claude
+                    )
+                    
+                    # Get clarified response
+                    try:
+                        clarified_prompt = get_minion_local_prompt(context, query, clarification_request, valves)
+                        
+                        if valves.debug_mode:
+                            debug_log.append(f"  🔄 Requesting clarification for round {round_num + 1} (Debug Mode)")
+                        
+                        clarified_response = await call_ollama_func(
+                            valves,
+                            clarified_prompt,
+                            use_json=True,
+                            schema=LocalAssistantResponseModel
+                        )
+                        
+                        clarified_data = _parse_local_response(
+                            clarified_response,
+                            is_structured=True,
+                            use_structured_output=valves.use_structured_output,
+                            debug_mode=valves.debug_mode,
+                            LocalAssistantResponseModel=LocalAssistantResponseModel
+                        )
+                        
+                        # Use clarified response
+                        response_for_claude = clarified_data.get("answer", response_for_claude)
+                        local_response_data = clarified_data  # Update for metrics
+                        
+                        if valves.show_conversation:
+                            conversation_log.append(f"**💻 Local Model (Clarified):**")
+                            if valves.use_structured_output and clarified_data.get("parse_error") is None:
+                                conversation_log.append(f"```json\n{json.dumps(clarified_data, indent=2)}\n```")
+                            else:
+                                conversation_log.append(f"{response_for_claude}")
+                            conversation_log.append("\n")
+                            
+                    except Exception as e:
+                        if valves.debug_mode:
+                            debug_log.append(f"  ❌ Clarification request failed: {e} (Debug Mode)")
+                        # Continue with original response
+                        response_for_claude = original_response
+
         conversation_history.append(("user", response_for_claude))
         
         # Update conversation state if enabled
@@ -1540,7 +1718,8 @@ async def minion_pipe(
                         LocalAssistantResponseModel=LocalAssistantResponse,
                         ConversationStateModel=ConversationState,
                         QuestionDeduplicatorModel=QuestionDeduplicator,
-                        ConversationFlowControllerModel=ConversationFlowController
+                        ConversationFlowControllerModel=ConversationFlowController,
+                        AnswerValidatorModel=AnswerValidator
                     )
                     chunk_results.append(chunk_header + chunk_result)
                 except Exception as e:
@@ -1573,7 +1752,8 @@ The document was automatically divided into {len(chunks)} chunks for processing.
                 LocalAssistantResponseModel=LocalAssistantResponse, # Pass imported class
                 ConversationStateModel=ConversationState,
                 QuestionDeduplicatorModel=QuestionDeduplicator,
-                ConversationFlowControllerModel=ConversationFlowController
+                ConversationFlowControllerModel=ConversationFlowController,
+                AnswerValidatorModel=AnswerValidator
             )
             return result
 
