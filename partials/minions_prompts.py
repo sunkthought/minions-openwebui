@@ -70,19 +70,25 @@ Task: {task}'''
 
     if valves.use_structured_output:
         prompt_lines.append(f'''\n
-IMPORTANT: Provide your answer as a valid JSON object with the following structure:
+IMPORTANT: You must respond with ONLY a valid JSON object. Do not include any text before or after the JSON.
+
+Required JSON structure:
 {{
     "explanation": "Brief explanation of your findings for this task",
     "citation": "Direct quote from the text if applicable to this task, or null",
-    "answer": "Your complete answer to the task as a SINGLE STRING"
+    "answer": "Your complete answer to the task as a SINGLE STRING",
+    "confidence": "HIGH, MEDIUM, or LOW"
 }}''')
 
         structured_output_rules = [
-            "CRITICAL RULES FOR JSON:",
-            "1. The \"answer\" field MUST be a plain text string, NOT an object or array.",
-            "2. If you need to list multiple items in the \"answer\" field, format them as a single string with clear separators (e.g., \"Item 1: Description. Item 2: Description.\").",
-            "3. Do NOT create nested JSON structures within any field.",
-            "4. If you cannot confidently determine the information from the provided text to answer the task, ALL THREE fields (\"explanation\", \"citation\", \"answer\") in the JSON object must be null."
+            "\nCRITICAL RULES FOR JSON OUTPUT:",
+            "1. Output ONLY the JSON object - no markdown formatting, no explanatory text, no code blocks",
+            "2. The \"answer\" field MUST be a plain text string, NOT an object or array",
+            "3. If listing multiple items, format as a single string (e.g., \"Item 1: Description. Item 2: Description.\")",
+            "4. Use proper JSON escaping for quotes within strings (\\\" for quotes inside string values)",
+            "5. If information is not found, set \"answer\" to null and \"confidence\" to \"LOW\"",
+            "6. The \"confidence\" field must be exactly one of: \"HIGH\", \"MEDIUM\", or \"LOW\"",
+            "7. All string values must be properly quoted and escaped"
         ]
         prompt_lines.extend(structured_output_rules)
 
@@ -97,26 +103,64 @@ IMPORTANT: Provide your answer as a valid JSON object with the following structu
 
 
         prompt_lines.append(f'''
-EXAMPLE of CORRECT format:
+\nEXAMPLES OF CORRECT JSON OUTPUT:
+
+Example 1 - Information found:
 {{
-    "explanation": "Found information about X in the text for the task",
-    "citation": "The text states 'X is Y'...",
-    "answer": "X is Y according to the document."
+    "explanation": "Found budget information in the financial section",
+    "citation": "The total project budget is set at $2.5 million for fiscal year 2024",
+    "answer": "$2.5 million",
+    "confidence": "HIGH"
+}}
+
+Example 2 - Information NOT found:
+{{
+    "explanation": "Searched for revenue projections but this chunk only contains expense data",
+    "citation": null,
+    "answer": null,
+    "confidence": "LOW"
+}}
+
+Example 3 - Multiple items found:
+{{
+    "explanation": "Identified three risk factors mentioned in the document",
+    "citation": "Key risks include: market volatility, regulatory changes, and supply chain disruptions",
+    "answer": "1. Market volatility 2. Regulatory changes 3. Supply chain disruptions",
+    "confidence": "HIGH"
 }}''')
+        
         if hasattr(valves, 'expected_format') and valves.expected_format and valves.expected_format.lower() == "bullet points":
             prompt_lines.append(f'''
-EXAMPLE for "answer" field formatted as BULLET POINTS:
+\nExample with bullet points in answer field:
 {{
-    "explanation": "Found several points for the task.",
-    "citation": "Relevant quote...",
-    "answer": "- Point 1: Details about point 1.\\n- Point 2: Details about point 2."
+    "explanation": "Found multiple implementation steps",
+    "citation": "The implementation plan consists of three phases...",
+    "answer": "- Phase 1: Initial setup and configuration\\n- Phase 2: Testing and validation\\n- Phase 3: Full deployment",
+    "confidence": "MEDIUM"
 }}''')
 
         prompt_lines.append(f'''
-EXAMPLE of INCORRECT format (DO NOT DO THIS):
+\nEXAMPLES OF INCORRECT OUTPUT (DO NOT DO THIS):
+
+Wrong - Wrapped in markdown:
+```json
+{{"answer": "some value"}}
+```
+
+Wrong - Answer is not a string:
 {{
-    "answer": {{"key": "value"}}  // WRONG - "answer" field must be a string!
-}}''')
+    "answer": {{"key": "value"}},
+    "confidence": "HIGH"
+}}
+
+Wrong - Missing required fields:
+{{
+    "answer": "some value"
+}}
+
+Wrong - Text outside JSON:
+Here is my response:
+{{"answer": "some value"}}''')
 
     else: # Not using structured output
         prompt_lines.append("\n\nProvide a brief, specific answer based ONLY on the text provided above.")

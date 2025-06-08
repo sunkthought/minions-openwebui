@@ -58,8 +58,12 @@ class MinionsValves(BaseModel):
         default=1000, description="Maximum tokens (num_predict) for local Ollama model responses during task execution."
     )
     use_structured_output: bool = Field(
-        default=False, 
+        default=True, 
         description="Enable JSON structured output for local model responses (requires local model to support JSON mode and the TaskResult schema)."
+    )
+    structured_output_fallback_enabled: bool = Field(
+        default=True,
+        description="Enable fallback parsing when structured output fails. If False, parsing errors will be propagated."
     )
     extraction_instructions: str = Field(
         default="", title="Extraction Instructions", description="Specific instructions for the LLM on what to extract or how to process the information for each task."

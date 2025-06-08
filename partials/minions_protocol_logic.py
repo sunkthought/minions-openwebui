@@ -9,20 +9,47 @@ from .minions_models import RoundMetrics # Import RoundMetrics
 
 # Removed create_chunks function from here
 
-def parse_local_response(response: str, is_structured: bool, use_structured_output: bool, debug_mode: bool, TaskResultModel: Any) -> Dict:
+def parse_local_response(response: str, is_structured: bool, use_structured_output: bool, debug_mode: bool, TaskResultModel: Any, structured_output_fallback_enabled: bool = True) -> Dict:
     """Parse local model response, supporting both text and structured formats"""
     confidence_map = {'HIGH': 0.9, 'MEDIUM': 0.6, 'LOW': 0.3}
     default_numeric_confidence = 0.3 # Corresponds to LOW
 
     if is_structured and use_structured_output:
+        # Clean up common formatting issues
+        cleaned_response = response.strip()
+        
+        # Remove markdown code blocks if present
+        if cleaned_response.startswith("```json") and cleaned_response.endswith("```"):
+            cleaned_response = cleaned_response[7:-3].strip()
+        elif cleaned_response.startswith("```") and cleaned_response.endswith("```"):
+            cleaned_response = cleaned_response[3:-3].strip()
+        
+        # Try to extract JSON from response with explanatory text
+        if not cleaned_response.startswith("{"):
+            # Look for JSON object in the response
+            json_start = cleaned_response.find("{")
+            json_end = cleaned_response.rfind("}")
+            if json_start != -1 and json_end != -1 and json_end > json_start:
+                cleaned_response = cleaned_response[json_start:json_end+1]
+        
         try:
-            parsed_json = json.loads(response)
+            parsed_json = json.loads(cleaned_response)
+            
+            # Handle missing confidence field with default
+            if 'confidence' not in parsed_json:
+                parsed_json['confidence'] = 'LOW'
             
             # Safety net: if answer is a dict/list, stringify it
             if 'answer' in parsed_json and not isinstance(parsed_json['answer'], (str, type(None))):
                 if debug_mode:
                     print(f"DEBUG: Converting non-string answer to string: {type(parsed_json['answer'])}")
                 parsed_json['answer'] = json.dumps(parsed_json['answer']) if parsed_json['answer'] else None
+            
+            # Ensure required fields have defaults if missing
+            if 'explanation' not in parsed_json:
+                parsed_json['explanation'] = parsed_json.get('answer', '') or "No explanation provided"
+            if 'citation' not in parsed_json:
+                parsed_json['citation'] = None
             
             validated_model = TaskResultModel(**parsed_json)
             model_dict = validated_model.dict()
@@ -37,17 +64,70 @@ def parse_local_response(response: str, is_structured: bool, use_structured_outp
             else:
                 model_dict['_is_none_equivalent'] = False
             return model_dict
+            
+        except json.JSONDecodeError as e:
+            if debug_mode:
+                print(f"DEBUG: JSON decode error in MinionS: {e}. Cleaned response was: {cleaned_response[:500]}")
+            
+            if not structured_output_fallback_enabled:
+                # Re-raise the error if fallback is disabled
+                raise e
+            
+            # Try regex fallback to extract key information
+            import re
+            answer_match = re.search(r'"answer"\s*:\s*"([^"]*)"', response)
+            confidence_match = re.search(r'"confidence"\s*:\s*"(HIGH|MEDIUM|LOW)"', response, re.IGNORECASE)
+            
+            if answer_match:
+                answer = answer_match.group(1)
+                confidence = confidence_match.group(1).upper() if confidence_match else "LOW"
+                return {
+                    "answer": answer,
+                    "explanation": f"Extracted from malformed JSON: {answer}",
+                    "confidence": confidence,
+                    "numeric_confidence": confidence_map.get(confidence, default_numeric_confidence),
+                    "citation": None,
+                    "parse_error": f"JSON parse error (recovered): {str(e)}",
+                    "_is_none_equivalent": answer.strip().upper() == "NONE"
+                }
+            
+            # Complete fallback
+            is_none_equivalent_fallback = response.strip().upper() == "NONE"
+            return {
+                "answer": response, 
+                "explanation": response, 
+                "confidence": "LOW", 
+                "numeric_confidence": default_numeric_confidence, 
+                "parse_error": f"JSON parse error: {str(e)}", 
+                "_is_none_equivalent": is_none_equivalent_fallback
+            }
+            
         except Exception as e:
             if debug_mode:
                 print(f"DEBUG: Failed to parse structured output in MinionS: {e}. Response was: {response[:500]}")
             # Fallback for parsing failure
             is_none_equivalent_fallback = response.strip().upper() == "NONE"
-            return {"answer": response, "explanation": response, "confidence": "LOW", "numeric_confidence": default_numeric_confidence, "parse_error": str(e), "_is_none_equivalent": is_none_equivalent_fallback}
+            return {
+                "answer": response, 
+                "explanation": response, 
+                "confidence": "LOW", 
+                "numeric_confidence": default_numeric_confidence, 
+                "parse_error": str(e), 
+                "_is_none_equivalent": is_none_equivalent_fallback
+            }
     
     # Fallback for non-structured processing
     is_none_equivalent_text = response.strip().upper() == "NONE"
     # Confidence is MEDIUM by default in this path
-    return {"answer": response, "explanation": response, "confidence": "MEDIUM", "numeric_confidence": confidence_map['MEDIUM'], "citation": None, "parse_error": None, "_is_none_equivalent": is_none_equivalent_text}
+    return {
+        "answer": response, 
+        "explanation": response, 
+        "confidence": "MEDIUM", 
+        "numeric_confidence": confidence_map['MEDIUM'], 
+        "citation": None, 
+        "parse_error": None, 
+        "_is_none_equivalent": is_none_equivalent_text
+    }
 
 async def execute_tasks_on_chunks(
     tasks: List[str], 
@@ -72,6 +152,10 @@ async def execute_tasks_on_chunks(
     # Initialize Confidence Accumulators
     round_confidence_distribution = {"HIGH": 0, "MEDIUM": 0, "LOW": 0}
     aggregated_task_confidences = []
+    
+    # Structured output metrics
+    structured_output_attempts = 0
+    structured_output_successes = 0
 
     for task_idx, task in enumerate(tasks):
         tasks_executed_count += 1 # Track Tasks Executed
@@ -124,8 +208,15 @@ async def execute_tasks_on_chunks(
                     is_structured=True,
                     use_structured_output=valves.use_structured_output,
                     debug_mode=valves.debug_mode,
-                    TaskResultModel=TaskResult # Pass TaskResult to parse_local_response
+                    TaskResultModel=TaskResult, # Pass TaskResult to parse_local_response
+                    structured_output_fallback_enabled=getattr(valves, 'structured_output_fallback_enabled', True)
                 )
+                
+                # Track structured output success
+                if valves.use_structured_output:
+                    structured_output_attempts += 1
+                    if not response_data.get('parse_error'):
+                        structured_output_successes += 1
 
                 # Collect Confidence per Chunk
                 numeric_confidence = response_data.get('numeric_confidence', 0.3) # Default to LOW numeric
@@ -260,6 +351,11 @@ async def execute_tasks_on_chunks(
         # total_unique_findings_count will be handled later, defaulting in the model
     }
 
+    # Calculate structured output success rate if applicable
+    structured_output_success_rate = None
+    if structured_output_attempts > 0:
+        structured_output_success_rate = structured_output_successes / structured_output_attempts
+    
     return {
         "results": overall_task_results,
         "total_chunk_processing_attempts": total_attempts_this_call,
@@ -268,6 +364,11 @@ async def execute_tasks_on_chunks(
         "confidence_metrics_data": { # New confidence data
             "task_confidences": aggregated_task_confidences,
             "round_confidence_distribution": round_confidence_distribution
+        },
+        "structured_output_metrics": {
+            "attempts": structured_output_attempts,
+            "successes": structured_output_successes,
+            "success_rate": structured_output_success_rate
         }
     }
 
