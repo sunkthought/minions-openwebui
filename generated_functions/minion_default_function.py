@@ -21,8 +21,9 @@ from pydantic import BaseModel, Field
 from fastapi import Request # type: ignore
 
 # Partials File: partials/minion_models.py
-from typing import List, Optional, Dict
+from typing import List, Optional, Dict, Set, Any
 from pydantic import BaseModel, Field
+import asyncio
 
 class LocalAssistantResponse(BaseModel):
     """
@@ -92,6 +93,43 @@ class ConversationMetrics(BaseModel):
     
     class Config:
         extra = "ignore"
+
+class ConversationState(BaseModel):
+    """Tracks the evolving state of a Minion conversation"""
+    qa_pairs: List[Dict[str, Any]] = Field(default_factory=list)
+    topics_covered: Set[str] = Field(default_factory=set)
+    key_findings: Dict[str, str] = Field(default_factory=dict)
+    information_gaps: List[str] = Field(default_factory=list)
+    current_phase: str = Field(default="exploration")
+    knowledge_graph: Dict[str, List[str]] = Field(default_factory=dict)  # topic -> related facts
+    
+    def add_qa_pair(self, question: str, answer: str, confidence: str, key_points: List[str] = None):
+        """Add a Q&A pair and update derived state"""
+        self.qa_pairs.append({
+            "round": len(self.qa_pairs) + 1,
+            "question": question,
+            "answer": answer,
+            "confidence": confidence,
+            "key_points": key_points or [],
+            "timestamp": asyncio.get_event_loop().time() if asyncio.get_event_loop().is_running() else 0
+        })
+        
+    def get_state_summary(self) -> str:
+        """Generate a summary of current conversation state for the remote model"""
+        summary = f"Conversation Phase: {self.current_phase}\n"
+        summary += f"Questions Asked: {len(self.qa_pairs)}\n"
+        
+        if self.key_findings:
+            summary += "\nKey Findings:\n"
+            for topic, finding in self.key_findings.items():
+                summary += f"- {topic}: {finding}\n"
+                
+        if self.information_gaps:
+            summary += "\nInformation Gaps:\n"
+            for gap in self.information_gaps:
+                summary += f"- {gap}\n"
+                
+        return summary
 
 
 # Partials File: partials/minion_valves.py
@@ -196,6 +234,12 @@ class MinionValves(BaseModel):
     )
     confidence_threshold: float = Field(
         default=0.7, title="Confidence Threshold", description="Minimum confidence level for the LLM's response (0.0-1.0). Primarily a suggestion to the LLM.", ge=0, le=1
+    )
+    
+    # Conversation State Tracking (v0.3.6b)
+    track_conversation_state: bool = Field(
+        default=True,
+        description="Enable comprehensive conversation state tracking for better context awareness"
     )
 
     # The following class is part of the Pydantic configuration and is standard.
@@ -448,7 +492,7 @@ def create_chunks(context: str, chunk_size: int, max_chunks: int) -> List[str]:
 
 
 # Partials File: partials/minion_prompts.py
-from typing import List, Tuple, Any
+from typing import List, Tuple, Any, Optional
 
 # This file will store prompt generation functions for the Minion (single-turn) protocol.
 
@@ -618,9 +662,56 @@ Format your response clearly with:
 - Note if any information is not found in the document"""
         return base_prompt + non_structured_instructions
 
+def get_minion_initial_claude_prompt_with_state(query: str, context_len: int, valves: Any, conversation_state: Optional[Any] = None) -> str:
+    """
+    Enhanced version of initial prompt that includes conversation state if available.
+    """
+    base_prompt = get_minion_initial_claude_prompt(query, context_len, valves)
+    
+    if conversation_state and valves.track_conversation_state:
+        state_summary = conversation_state.get_state_summary()
+        if state_summary:
+            base_prompt = base_prompt.replace(
+                "Otherwise, ask your first strategic question to the local assistant.",
+                f"""
+CONVERSATION STATE CONTEXT:
+{state_summary}
+
+Based on this context, ask your first strategic question to the local assistant."""
+            )
+    
+    return base_prompt
+
+def get_minion_conversation_claude_prompt_with_state(history: List[Tuple[str, str]], original_query: str, valves: Any, conversation_state: Optional[Any] = None) -> str:
+    """
+    Enhanced version of conversation prompt that includes conversation state if available.
+    """
+    base_prompt = get_minion_conversation_claude_prompt(history, original_query, valves)
+    
+    if conversation_state and valves.track_conversation_state:
+        state_summary = conversation_state.get_state_summary()
+        
+        # Insert state summary before decision point
+        state_section = f"""
+CURRENT CONVERSATION STATE:
+{state_summary}
+
+TOPICS COVERED: {', '.join(conversation_state.topics_covered) if conversation_state.topics_covered else 'None yet'}
+KEY FINDINGS COUNT: {len(conversation_state.key_findings)}
+INFORMATION GAPS: {len(conversation_state.information_gaps)}
+"""
+        
+        base_prompt = base_prompt.replace(
+            "DECISION POINT:",
+            state_section + "\nDECISION POINT:"
+        )
+    
+    return base_prompt
+
 # Partials File: partials/minion_protocol_logic.py
 import asyncio
 import json
+import re
 from typing import List, Dict, Any, Tuple, Callable
 
 def _calculate_token_savings(conversation_history: List[Tuple[str, str]], context: str, query: str) -> dict:
@@ -779,7 +870,8 @@ async def _execute_minion_protocol(
     context: str,
     call_claude_func: Callable,
     call_ollama_func: Callable,
-    LocalAssistantResponseModel: Any
+    LocalAssistantResponseModel: Any,
+    ConversationStateModel: Any = None
 ) -> str:
     """Execute the Minion protocol"""
     conversation_log = []
@@ -787,6 +879,11 @@ async def _execute_minion_protocol(
     conversation_history = []
     actual_final_answer = "No final answer was explicitly provided by the remote model."
     claude_declared_final = False
+    
+    # Initialize conversation state if enabled
+    conversation_state = None
+    if valves.track_conversation_state and ConversationStateModel:
+        conversation_state = ConversationStateModel()
     
     # Initialize metrics tracking
     overall_start_time = asyncio.get_event_loop().time()
@@ -801,7 +898,7 @@ async def _execute_minion_protocol(
     }
 
     if valves.debug_mode:
-        debug_log.append(f"🔍 **Debug Info (Minion v0.3.6):**")
+        debug_log.append(f"🔍 **Debug Info (Minion v0.3.6b):**")
         debug_log.append(f"  - Query: {query[:100]}...")
         debug_log.append(f"  - Context length: {len(context)} chars")
         debug_log.append(f"  - Max rounds: {valves.max_rounds}")
@@ -819,7 +916,11 @@ async def _execute_minion_protocol(
 
         claude_prompt_for_this_round = ""
         if round_num == 0:
-            claude_prompt_for_this_round = get_minion_initial_claude_prompt(query, len(context), valves)
+            # Use state-aware prompt if state tracking is enabled
+            if conversation_state and valves.track_conversation_state:
+                claude_prompt_for_this_round = get_minion_initial_claude_prompt_with_state(query, len(context), valves, conversation_state)
+            else:
+                claude_prompt_for_this_round = get_minion_initial_claude_prompt(query, len(context), valves)
         else:
             # Check if this is the last round and force a final answer
             is_last_round = (round_num == valves.max_rounds - 1)
@@ -845,9 +946,15 @@ Based on ALL the information provided by the local assistant, you MUST now provi
 
 Respond with "FINAL ANSWER READY." followed by your synthesized answer. Do NOT ask any more questions."""
             else:
-                claude_prompt_for_this_round = get_minion_conversation_claude_prompt(
-                    conversation_history, query, valves
-                )
+                # Use state-aware prompt if state tracking is enabled
+                if conversation_state and valves.track_conversation_state:
+                    claude_prompt_for_this_round = get_minion_conversation_claude_prompt_with_state(
+                        conversation_history, query, valves, conversation_state
+                    )
+                else:
+                    claude_prompt_for_this_round = get_minion_conversation_claude_prompt(
+                        conversation_history, query, valves
+                    )
         
         claude_response = ""
         try:
@@ -942,6 +1049,30 @@ Respond with "FINAL ANSWER READY." followed by your synthesized answer. Do NOT a
             response_for_claude = "Local LLM provided no answer."
 
         conversation_history.append(("user", response_for_claude))
+        
+        # Update conversation state if enabled
+        if conversation_state and valves.track_conversation_state:
+            # Extract the question from Claude's response
+            question = claude_response.strip()
+            
+            # Add Q&A pair to state
+            conversation_state.add_qa_pair(
+                question=question,
+                answer=response_for_claude,
+                confidence=local_response_data.get('confidence', 'MEDIUM'),
+                key_points=local_response_data.get('key_points')
+            )
+            
+            # Extract topics from the question (simple keyword extraction)
+            keywords = re.findall(r'\b[A-Z][a-z]+\b|\b\w{5,}\b', question)
+            for keyword in keywords[:3]:  # Add up to 3 keywords as topics
+                conversation_state.topics_covered.add(keyword.lower())
+            
+            # Update key findings if high confidence answer
+            if local_response_data.get('confidence') == 'HIGH' and local_response_data.get('key_points'):
+                for idx, point in enumerate(local_response_data['key_points'][:2]):
+                    conversation_state.key_findings[f"round_{round_num+1}_finding_{idx+1}"] = point
+        
         if valves.show_conversation:
             conversation_log.append(f"**💻 Local Model ({valves.local_model}):**")
             if valves.use_structured_output and local_response_data.get("parse_error") is None:
@@ -1090,7 +1221,8 @@ async def minion_pipe(
                         context=chunk, 
                         call_claude_func=call_claude,
                         call_ollama_func=call_ollama,
-                        LocalAssistantResponseModel=LocalAssistantResponse
+                        LocalAssistantResponseModel=LocalAssistantResponse,
+                        ConversationStateModel=ConversationState
                     )
                     chunk_results.append(chunk_header + chunk_result)
                 except Exception as e:
@@ -1120,7 +1252,8 @@ The document was automatically divided into {len(chunks)} chunks for processing.
                 context=chunks[0] if chunks else context, 
                 call_claude_func=call_claude,  # Pass imported function
                 call_ollama_func=call_ollama,  # Pass imported function
-                LocalAssistantResponseModel=LocalAssistantResponse # Pass imported class
+                LocalAssistantResponseModel=LocalAssistantResponse, # Pass imported class
+                ConversationStateModel=ConversationState
             )
             return result
 

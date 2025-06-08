@@ -101,6 +101,12 @@ class MinionValves(BaseModel):
     confidence_threshold: float = Field(
         default=0.7, title="Confidence Threshold", description="Minimum confidence level for the LLM's response (0.0-1.0). Primarily a suggestion to the LLM.", ge=0, le=1
     )
+    
+    # Conversation State Tracking (v0.3.6b)
+    track_conversation_state: bool = Field(
+        default=True,
+        description="Enable comprehensive conversation state tracking for better context awareness"
+    )
 
     # The following class is part of the Pydantic configuration and is standard.
     # It ensures that extra fields passed to the model are ignored rather than causing an error.

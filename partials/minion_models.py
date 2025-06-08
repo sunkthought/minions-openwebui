@@ -1,6 +1,7 @@
 # Partials File: partials/minion_models.py
-from typing import List, Optional, Dict
+from typing import List, Optional, Dict, Set, Any
 from pydantic import BaseModel, Field
+import asyncio
 
 class LocalAssistantResponse(BaseModel):
     """
@@ -70,3 +71,40 @@ class ConversationMetrics(BaseModel):
     
     class Config:
         extra = "ignore"
+
+class ConversationState(BaseModel):
+    """Tracks the evolving state of a Minion conversation"""
+    qa_pairs: List[Dict[str, Any]] = Field(default_factory=list)
+    topics_covered: Set[str] = Field(default_factory=set)
+    key_findings: Dict[str, str] = Field(default_factory=dict)
+    information_gaps: List[str] = Field(default_factory=list)
+    current_phase: str = Field(default="exploration")
+    knowledge_graph: Dict[str, List[str]] = Field(default_factory=dict)  # topic -> related facts
+    
+    def add_qa_pair(self, question: str, answer: str, confidence: str, key_points: List[str] = None):
+        """Add a Q&A pair and update derived state"""
+        self.qa_pairs.append({
+            "round": len(self.qa_pairs) + 1,
+            "question": question,
+            "answer": answer,
+            "confidence": confidence,
+            "key_points": key_points or [],
+            "timestamp": asyncio.get_event_loop().time() if asyncio.get_event_loop().is_running() else 0
+        })
+        
+    def get_state_summary(self) -> str:
+        """Generate a summary of current conversation state for the remote model"""
+        summary = f"Conversation Phase: {self.current_phase}\n"
+        summary += f"Questions Asked: {len(self.qa_pairs)}\n"
+        
+        if self.key_findings:
+            summary += "\nKey Findings:\n"
+            for topic, finding in self.key_findings.items():
+                summary += f"- {topic}: {finding}\n"
+                
+        if self.information_gaps:
+            summary += "\nInformation Gaps:\n"
+            for gap in self.information_gaps:
+                summary += f"- {gap}\n"
+                
+        return summary

@@ -1,6 +1,7 @@
 # Partials File: partials/minion_protocol_logic.py
 import asyncio
 import json
+import re
 from typing import List, Dict, Any, Tuple, Callable
 
 def _calculate_token_savings(conversation_history: List[Tuple[str, str]], context: str, query: str) -> dict:
@@ -159,7 +160,8 @@ async def _execute_minion_protocol(
     context: str,
     call_claude_func: Callable,
     call_ollama_func: Callable,
-    LocalAssistantResponseModel: Any
+    LocalAssistantResponseModel: Any,
+    ConversationStateModel: Any = None
 ) -> str:
     """Execute the Minion protocol"""
     conversation_log = []
@@ -167,6 +169,11 @@ async def _execute_minion_protocol(
     conversation_history = []
     actual_final_answer = "No final answer was explicitly provided by the remote model."
     claude_declared_final = False
+    
+    # Initialize conversation state if enabled
+    conversation_state = None
+    if valves.track_conversation_state and ConversationStateModel:
+        conversation_state = ConversationStateModel()
     
     # Initialize metrics tracking
     overall_start_time = asyncio.get_event_loop().time()
@@ -181,7 +188,7 @@ async def _execute_minion_protocol(
     }
 
     if valves.debug_mode:
-        debug_log.append(f"🔍 **Debug Info (Minion v0.3.6):**")
+        debug_log.append(f"🔍 **Debug Info (Minion v0.3.6b):**")
         debug_log.append(f"  - Query: {query[:100]}...")
         debug_log.append(f"  - Context length: {len(context)} chars")
         debug_log.append(f"  - Max rounds: {valves.max_rounds}")
@@ -199,7 +206,11 @@ async def _execute_minion_protocol(
 
         claude_prompt_for_this_round = ""
         if round_num == 0:
-            claude_prompt_for_this_round = get_minion_initial_claude_prompt(query, len(context), valves)
+            # Use state-aware prompt if state tracking is enabled
+            if conversation_state and valves.track_conversation_state:
+                claude_prompt_for_this_round = get_minion_initial_claude_prompt_with_state(query, len(context), valves, conversation_state)
+            else:
+                claude_prompt_for_this_round = get_minion_initial_claude_prompt(query, len(context), valves)
         else:
             # Check if this is the last round and force a final answer
             is_last_round = (round_num == valves.max_rounds - 1)
@@ -225,9 +236,15 @@ Based on ALL the information provided by the local assistant, you MUST now provi
 
 Respond with "FINAL ANSWER READY." followed by your synthesized answer. Do NOT ask any more questions."""
             else:
-                claude_prompt_for_this_round = get_minion_conversation_claude_prompt(
-                    conversation_history, query, valves
-                )
+                # Use state-aware prompt if state tracking is enabled
+                if conversation_state and valves.track_conversation_state:
+                    claude_prompt_for_this_round = get_minion_conversation_claude_prompt_with_state(
+                        conversation_history, query, valves, conversation_state
+                    )
+                else:
+                    claude_prompt_for_this_round = get_minion_conversation_claude_prompt(
+                        conversation_history, query, valves
+                    )
         
         claude_response = ""
         try:
@@ -322,6 +339,30 @@ Respond with "FINAL ANSWER READY." followed by your synthesized answer. Do NOT a
             response_for_claude = "Local LLM provided no answer."
 
         conversation_history.append(("user", response_for_claude))
+        
+        # Update conversation state if enabled
+        if conversation_state and valves.track_conversation_state:
+            # Extract the question from Claude's response
+            question = claude_response.strip()
+            
+            # Add Q&A pair to state
+            conversation_state.add_qa_pair(
+                question=question,
+                answer=response_for_claude,
+                confidence=local_response_data.get('confidence', 'MEDIUM'),
+                key_points=local_response_data.get('key_points')
+            )
+            
+            # Extract topics from the question (simple keyword extraction)
+            keywords = re.findall(r'\b[A-Z][a-z]+\b|\b\w{5,}\b', question)
+            for keyword in keywords[:3]:  # Add up to 3 keywords as topics
+                conversation_state.topics_covered.add(keyword.lower())
+            
+            # Update key findings if high confidence answer
+            if local_response_data.get('confidence') == 'HIGH' and local_response_data.get('key_points'):
+                for idx, point in enumerate(local_response_data['key_points'][:2]):
+                    conversation_state.key_findings[f"round_{round_num+1}_finding_{idx+1}"] = point
+        
         if valves.show_conversation:
             conversation_log.append(f"**💻 Local Model ({valves.local_model}):**")
             if valves.use_structured_output and local_response_data.get("parse_error") is None:
