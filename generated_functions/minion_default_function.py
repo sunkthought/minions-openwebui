@@ -1030,7 +1030,7 @@ def _calculate_token_savings(conversation_history: List[Tuple[str, str]], contex
 
 def _is_final_answer(response: str) -> bool:
     """Check if response contains the specific final answer marker."""
-    return "FINAL ANSWER READY." in response
+    return "FINAL ANSWER READY." in response or "FINAL ANSWER READY:" in response
 
 def detect_completion(response: str) -> bool:
     """Check if remote model indicates it has sufficient information"""
