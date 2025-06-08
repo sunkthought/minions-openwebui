@@ -65,6 +65,10 @@ class MinionValves(BaseModel):
         default=True, 
         description="Enable JSON structured output for local model responses (requires local model support)."
     )
+    enable_completion_detection: bool = Field(
+        default=True,
+        description="Enable detection of when the remote model has gathered sufficient information without explicit 'FINAL ANSWER READY' marker."
+    )
     debug_mode: bool = Field(
         default=False, description="Show additional technical details and verbose logs."
     )

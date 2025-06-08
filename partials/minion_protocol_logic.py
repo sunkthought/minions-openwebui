@@ -33,6 +33,26 @@ def _is_final_answer(response: str) -> bool:
     """Check if response contains the specific final answer marker."""
     return "FINAL ANSWER READY." in response
 
+def detect_completion(response: str) -> bool:
+    """Check if remote model indicates it has sufficient information"""
+    completion_phrases = [
+        "i now have sufficient information",
+        "i can now answer",
+        "based on the information gathered",
+        "i have enough information",
+        "with this information, i can provide",
+        "i can now provide a comprehensive answer",
+        "based on what the local assistant has told me"
+    ]
+    response_lower = response.lower()
+    
+    # Check for explicit final answer marker first
+    if "FINAL ANSWER READY." in response:
+        return True
+    
+    # Check for completion phrases
+    return any(phrase in response_lower for phrase in completion_phrases)
+
 def _parse_local_response(response: str, is_structured: bool, use_structured_output: bool, debug_mode: bool, LocalAssistantResponseModel: Any) -> Dict:
     """Parse local model response, supporting both text and structured formats."""
     confidence_map = {'HIGH': 0.9, 'MEDIUM': 0.6, 'LOW': 0.3}
@@ -151,7 +171,7 @@ async def _execute_minion_protocol(
     overall_start_time = 0
     if valves.debug_mode:
         overall_start_time = asyncio.get_event_loop().time()
-        debug_log.append(f"🔍 **Debug Info (Minion v0.2.0):**")
+        debug_log.append(f"🔍 **Debug Info (Minion v0.3.6):**")
         debug_log.append(f"  - Query: {query[:100]}...")
         debug_log.append(f"  - Context length: {len(context)} chars")
         debug_log.append(f"  - Max rounds: {valves.max_rounds}")
@@ -221,6 +241,7 @@ Respond with "FINAL ANSWER READY." followed by your synthesized answer. Do NOT a
             conversation_log.append(f"**🤖 Remote Model ({valves.remote_model}):**")
             conversation_log.append(f"{claude_response}\n")
 
+        # Check for explicit final answer or completion indicators
         if _is_final_answer(claude_response):
             actual_final_answer = claude_response.split("FINAL ANSWER READY.", 1)[1].strip()
             claude_declared_final = True
@@ -228,6 +249,15 @@ Respond with "FINAL ANSWER READY." followed by your synthesized answer. Do NOT a
                 conversation_log.append(f"✅ **The remote model indicates FINAL ANSWER READY.**\n")
             if valves.debug_mode:
                 debug_log.append(f"  🏁 The remote model declared FINAL ANSWER READY in round {round_num + 1}. (Debug Mode)")
+            break
+        elif valves.enable_completion_detection and detect_completion(claude_response) and round_num > 0:
+            # Remote model indicates it has sufficient information
+            actual_final_answer = claude_response
+            claude_declared_final = True
+            if valves.show_conversation:
+                conversation_log.append(f"✅ **The remote model indicates it has sufficient information to answer.**\n")
+            if valves.debug_mode:
+                debug_log.append(f"  🏁 Completion detected: Remote model has sufficient information in round {round_num + 1}. (Debug Mode)")
             break
 
         # Skip local model call if this was the last round and the remote model provided final answer
