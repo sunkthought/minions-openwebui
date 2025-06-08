@@ -204,21 +204,24 @@ class ConversationFlowController:
             ConversationPhase.SYNTHESIS: ConversationPhase.SYNTHESIS
         }
         
-    def should_transition(self, state: ConversationState) -> bool:
+    def should_transition(self, state: ConversationState, valves: Any = None) -> bool:
         """Determine if conversation should move to next phase"""
         current_count = self.phase_question_count[self.current_phase]
         
         if self.current_phase == ConversationPhase.EXPLORATION:
-            # Move on after 2-3 broad questions or when main topics identified
-            return current_count >= 2 and len(state.topics_covered) >= 3
+            # Move on after configured questions or when main topics identified
+            max_questions = valves.max_exploration_questions if valves else 3
+            return current_count >= max_questions or (current_count >= 2 and len(state.topics_covered) >= 3)
             
         elif self.current_phase == ConversationPhase.DEEP_DIVE:
             # Move on after exploring key topics in detail
-            return current_count >= 3 or len(state.key_findings) >= 5
+            max_questions = valves.max_deep_dive_questions if valves else 4
+            return current_count >= max_questions or len(state.key_findings) >= 5
             
         elif self.current_phase == ConversationPhase.GAP_FILLING:
             # Move to synthesis when gaps are addressed
-            return current_count >= 2 or len(state.information_gaps) == 0
+            max_questions = valves.max_gap_filling_questions if valves else 2
+            return current_count >= max_questions or len(state.information_gaps) == 0
             
         return False
         
@@ -257,7 +260,6 @@ class ConversationFlowController:
 
 
 # Partials File: partials/minion_valves.py
-from typing import Dict
 from pydantic import BaseModel, Field
 
 class MinionValves(BaseModel):
@@ -384,9 +386,23 @@ class MinionValves(BaseModel):
         default=True,
         description="Enable phased conversation flow (exploration → deep dive → gap filling → synthesis)"
     )
-    questions_per_phase: Dict[str, int] = Field(
-        default={"exploration": 3, "deep_dive": 4, "gap_filling": 2, "synthesis": 1},
-        description="Maximum questions per conversation phase"
+    max_exploration_questions: int = Field(
+        default=3,
+        description="Maximum questions in exploration phase (broad understanding)",
+        ge=1,
+        le=10
+    )
+    max_deep_dive_questions: int = Field(
+        default=4,
+        description="Maximum questions in deep dive phase (specific topics)",
+        ge=1,
+        le=10
+    )
+    max_gap_filling_questions: int = Field(
+        default=2,
+        description="Maximum questions in gap filling phase (missing information)",
+        ge=1,
+        le=10
     )
 
     # The following class is part of the Pydantic configuration and is standard.
@@ -1328,7 +1344,7 @@ Focus on areas not yet covered in our conversation."""
             flow_controller.increment_question_count()
             
             # Check if we should transition to next phase
-            if conversation_state and flow_controller.should_transition(conversation_state):
+            if conversation_state and flow_controller.should_transition(conversation_state, valves):
                 old_phase = flow_controller.current_phase.value
                 flow_controller.transition_to_next_phase()
                 new_phase = flow_controller.current_phase.value

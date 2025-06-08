@@ -438,7 +438,7 @@ Focus on areas not yet covered in our conversation."""
             flow_controller.increment_question_count()
             
             # Check if we should transition to next phase
-            if conversation_state and flow_controller.should_transition(conversation_state):
+            if conversation_state and flow_controller.should_transition(conversation_state, valves):
                 old_phase = flow_controller.current_phase.value
                 flow_controller.transition_to_next_phase()
                 new_phase = flow_controller.current_phase.value

@@ -1,5 +1,4 @@
 # Partials File: partials/minion_valves.py
-from typing import Dict
 from pydantic import BaseModel, Field
 
 class MinionValves(BaseModel):
@@ -126,9 +125,23 @@ class MinionValves(BaseModel):
         default=True,
         description="Enable phased conversation flow (exploration → deep dive → gap filling → synthesis)"
     )
-    questions_per_phase: Dict[str, int] = Field(
-        default={"exploration": 3, "deep_dive": 4, "gap_filling": 2, "synthesis": 1},
-        description="Maximum questions per conversation phase"
+    max_exploration_questions: int = Field(
+        default=3,
+        description="Maximum questions in exploration phase (broad understanding)",
+        ge=1,
+        le=10
+    )
+    max_deep_dive_questions: int = Field(
+        default=4,
+        description="Maximum questions in deep dive phase (specific topics)",
+        ge=1,
+        le=10
+    )
+    max_gap_filling_questions: int = Field(
+        default=2,
+        description="Maximum questions in gap filling phase (missing information)",
+        ge=1,
+        le=10
     )
 
     # The following class is part of the Pydantic configuration and is standard.
