@@ -1,5 +1,5 @@
 # Partials File: partials/minion_models.py
-from typing import List, Optional
+from typing import List, Optional, Dict
 from pydantic import BaseModel, Field
 
 class LocalAssistantResponse(BaseModel):
@@ -30,3 +30,35 @@ class LocalAssistantResponse(BaseModel):
         #         "citations": ["The final report confirms project completion in Q4."]
         #     }
         # }
+
+class ConversationMetrics(BaseModel):
+    """
+    Metrics tracking for Minion protocol conversations.
+    Captures performance data for analysis and optimization.
+    """
+    rounds_used: int = Field(description="Number of Q&A rounds completed in the conversation")
+    questions_asked: int = Field(description="Total number of questions asked by the remote model")
+    avg_answer_confidence: float = Field(
+        description="Average confidence score across all local model responses (0.0-1.0)"
+    )
+    total_tokens_used: int = Field(
+        default=0,
+        description="Estimated total tokens used across all API calls"
+    )
+    conversation_duration_ms: float = Field(
+        description="Total conversation duration in milliseconds"
+    )
+    completion_detected: bool = Field(
+        description="Whether the conversation ended via completion detection vs max rounds"
+    )
+    unique_topics_explored: int = Field(
+        default=0,
+        description="Count of distinct topics/themes in questions (optional)"
+    )
+    confidence_distribution: Dict[str, int] = Field(
+        default_factory=dict,
+        description="Distribution of confidence levels (HIGH/MEDIUM/LOW counts)"
+    )
+    
+    class Config:
+        extra = "ignore"
