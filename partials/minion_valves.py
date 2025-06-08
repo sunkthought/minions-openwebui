@@ -61,6 +61,14 @@ class MinionValves(BaseModel):
         description="Top-k sampling for local model. Limits vocabulary to top k tokens. Set to 0 to disable.",
         ge=0
     )
+    chunk_size: int = Field(
+        default=5000, 
+        description="Maximum chunk size in characters for context fed to local models during conversation."
+    )
+    max_chunks: int = Field(
+        default=2, 
+        description="Maximum number of document chunks to process. Helps manage processing load for large documents."
+    )
     use_structured_output: bool = Field(
         default=True, 
         description="Enable JSON structured output for local model responses (requires local model support)."

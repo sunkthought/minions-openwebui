@@ -19,6 +19,7 @@
       "minion_valves.py",
       "common_api_calls.py",
       "common_context_utils.py",
+      "common_file_processing.py",
       "minion_prompts.py",
       "minion_protocol_logic.py",
       "minion_pipe_method.py"
