@@ -59,6 +59,9 @@ Once Open WebUI is running:
 3.  **Paste Function Code**:
     *   In this repository (`SunkThought/minions-openwebui`), navigate to the `generated_functions/` directory.
     *   Choose the function file based on your preference:
+        *   **Latest v0.3.8 (Current)**:
+            *   For Minion protocol: `minion_v037_function.py` 
+            *   For MinionS protocol: `minions_v037_function.py`
         *   **Default v0.3.7 (Enhanced)**:
             *   For Minion protocol: `minion_default_function.py`
             *   For MinionS protocol: `minions_default_function.py`
@@ -76,8 +79,11 @@ Once Open WebUI is running:
 Key valves to configure:
 
 #### Essential Settings
-*   `anthropic_api_key`: **Required**. Your API key for Anthropic Claude.
-*   `remote_model`: The Claude model you wish to use (e.g., `claude-3-5-haiku-20241022` for cost efficiency, `claude-3-5-sonnet-20241022` for quality).
+*   `supervisor_provider`: Choose between 'anthropic' or 'openai' for the supervisor model (default: 'anthropic').
+*   `anthropic_api_key`: Your API key for Anthropic Claude (required if using 'anthropic' provider).
+*   `openai_api_key`: Your API key for OpenAI (required if using 'openai' provider).
+*   `remote_model`: The Claude model you wish to use (e.g., `claude-3-5-haiku-20241022` for cost efficiency, `claude-3-5-sonnet-20241022` for quality). Note: When using OpenAI provider, see `openai_model` setting.
+*   `openai_model`: The OpenAI model to use when supervisor_provider is 'openai' (e.g., `gpt-4o`, `gpt-4-turbo`, `gpt-4`). Default is `gpt-4o`.
 *   `ollama_base_url`: The base URL of your Ollama server. Default is `http://localhost:11434`.
 *   `local_model`: The name of the local Ollama model you want to use (e.g., `llama3.2`, `mistral`). Ensure this model is available in your Ollama instance (e.g., via `ollama pull llama3.2`).
 
@@ -102,6 +108,12 @@ Key valves to configure:
 *   `max_round_timeout_failure_threshold_percent`: Warning threshold for timeouts (default: 50).
 *   `use_structured_output`: Enable JSON structured output (default: **true** as of v0.3.5).
 *   `structured_output_fallback_enabled`: Enable fallback parsing when structured output fails (default: true).
+
+##### Scaling Strategy Settings (v0.3.8)
+*   `scaling_strategy`: Choose scaling strategy for task execution: 'none', 'repeated_sampling', 'finer_decomposition', 'context_chunking' (default: 'none').
+*   `repeated_samples`: Number of samples to take when using repeated_sampling strategy (default: 3).
+*   `adaptive_rounds`: Enable adaptive round control based on information gain (default: true).
+*   `min_info_gain`: Minimum information gain (0.0-1.0) required to continue to the next round (default: 0.1).
 
 ##### Performance Profile
 *   `performance_profile`: Overall performance profile: 'high_quality', 'balanced', 'fastest_results'. Affects base thresholds and max_rounds before other adaptive modifiers. (default: "balanced", options: ["high_quality", "balanced", "fastest_results"])
@@ -277,6 +289,20 @@ By understanding these differences, you can choose the protocol that best fits t
 
 **Recommendation**: v0.3.7 is now the default for all new function generation. Use v0.3.6 only if you need compatibility with existing deployments or prefer the simpler architecture.
 
+### What's New in Version 0.3.8
+
+Version 0.3.8 represents a major advancement in collaborative AI capabilities:
+
+1. **Multi-Provider API Support**: Full support for both Anthropic Claude and OpenAI GPT models as supervisor models, providing flexibility in model selection and reducing dependency on a single provider.
+
+2. **Intelligent Scaling Strategies**: Implementation of research-backed scaling strategies including repeated sampling for higher confidence, finer decomposition for complex tasks, and intelligent context chunking for large documents.
+
+3. **Adaptive Round Control**: Smart termination based on information gain analysis that balances thoroughness with efficiency, automatically detecting when additional rounds provide diminishing returns.
+
+4. **Model Capability Detection**: Automatic detection and optimization based on model capabilities, ensuring optimal performance regardless of the specific models being used.
+
+These enhancements make v0.3.8 the most robust and intelligent version of the MinionS/Minion protocols, suitable for production use across a wide variety of scenarios and model combinations.
+
 ### What's New in Version 0.3.6b
 
 Version 0.3.6b introduces four major improvements to the Minion protocol:
@@ -321,6 +347,15 @@ The Minion and MinionS functions in this repository are not static; they are dyn
 ### Generating Functions
 
 You can generate different versions of Minion and MinionS functions:
+
+#### Latest Functions (v0.3.8 with OpenAI Support)
+```bash
+# Generates minion_v037_function.py using v0.3.8 features including OpenAI API support
+python generator_script.py minion --profile minion_v037
+
+# Generates minions_v037_function.py using v0.3.8 features including scaling strategies
+python generator_script.py minions --profile minions_v037
+```
 
 #### Default Functions (v0.3.7 Enhanced)
 ```bash
@@ -388,6 +423,32 @@ Let's say you want a version of the Minion function that uses a slightly differe
 This modular approach provides a powerful way to adapt and evolve the Minion/MinionS functions to fit a wide variety of use cases and preferences.
 
 ## Version History
+
+### v0.3.8 - Multi-Provider API Support & Intelligent Scaling (Latest)
+- **🔄 Multi-Provider API Support**: Added OpenAI API support as an alternative to Anthropic Claude
+  - **Provider Selection**: Choose between 'anthropic' or 'openai' for the supervisor model via `supervisor_provider` valve
+  - **Unified API Interface**: `call_supervisor_model()` function provides seamless switching between providers
+  - **Provider-Specific Configuration**: Separate API keys and model selection for each provider
+  - **Model Support**: Compatible with GPT-4o, GPT-4-turbo, Claude-3.5-Sonnet, and other models
+- **📈 Scaling Strategies (MinionS)**: Implemented three scaling strategies from the HazyResearch paper
+  - **Repeated Sampling**: Execute tasks multiple times and aggregate results for higher confidence
+  - **Finer Decomposition**: Break down complex tasks into smaller, more focused sub-tasks
+  - **Context Chunking**: Process large documents by intelligently splitting content across chunks
+  - **Strategy Selection**: Configure via `scaling_strategy` valve with options: none, repeated_sampling, finer_decomposition, context_chunking
+- **🧠 Adaptive Round Control**: Intelligent stopping based on information gain analysis
+  - **Information Gain Tracking**: Monitor the novelty and value of information gathered each round
+  - **Dynamic Convergence**: Automatically detect when additional rounds provide diminishing returns
+  - **Configurable Thresholds**: Fine-tune sensitivity with `min_info_gain` setting (0.0-1.0)
+  - **Smart Termination**: Balance thoroughness with efficiency by stopping when sufficient information is gathered
+- **🔍 Model Capability Detection**: Automatic parameter adjustment based on model capabilities
+  - **Capability Database**: Comprehensive database of model capabilities (context limits, JSON support, function calling)
+  - **Automatic Detection**: Detect model capabilities for both supervisor and worker models
+  - **Dynamic Adjustment**: Automatically adjust chunk sizes, token limits, and processing strategies
+  - **Performance Optimization**: Optimize processing based on each model's strengths and limitations
+- **🐛 Critical Bug Fixes**: Resolved JSON parsing errors that prevented local model execution
+  - **Escape Sequence Handling**: Fixed invalid JSON escape sequences generated by local models (e.g., `\a`, `\c`)
+  - **Robust Parsing**: Improved JSON parsing with better error recovery and fallback mechanisms
+  - **Preventive Fixes**: Applied fixes to both Minion and MinionS protocols for consistency
 
 ### v0.3.7 - Modular Architecture & Code Quality Improvements
 - **🏗️ Modular Architecture**: Complete redesign using centralized utility modules for better maintainability and consistency
