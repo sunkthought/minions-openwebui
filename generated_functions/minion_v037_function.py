@@ -4408,10 +4408,45 @@ Your response should:
 
 Provide your final comprehensive answer:"""
 
-            try:
-                final_answer = await call_claude(valves=pipe_self.valves, prompt=synthesis_prompt)
-            except Exception as e:
-                final_answer = f"❌ Error generating final synthesis: {str(e)}"
+            # Try final synthesis with retry logic
+            final_answer = ""
+            max_retries = 2
+            
+            for attempt in range(max_retries + 1):
+                try:
+                    if pipe_self.valves.debug_mode:
+                        print(f"DEBUG [Minion]: Attempting final synthesis (attempt {attempt + 1}/{max_retries + 1})")
+                    
+                    final_answer = await call_claude(valves=pipe_self.valves, prompt=synthesis_prompt)
+                    break  # Success, exit retry loop
+                    
+                except Exception as e:
+                    if attempt < max_retries:
+                        if pipe_self.valves.debug_mode:
+                            print(f"DEBUG [Minion]: Synthesis attempt {attempt + 1} failed: {str(e)}. Retrying...")
+                        await asyncio.sleep(1)  # Brief delay before retry
+                        continue
+                    else:
+                        # All retries failed, provide fallback
+                        if pipe_self.valves.debug_mode:
+                            print(f"DEBUG [Minion]: All synthesis attempts failed: {str(e)}")
+                        
+                        # Create a basic synthesis from chunk summaries as fallback
+                        chunk_summaries = []
+                        for i, result in enumerate(chunk_results):
+                            # Extract the "Result:" section from each chunk
+                            if "**Result:**" in result:
+                                summary = result.split("**Result:**")[1].strip()
+                                chunk_summaries.append(f"Chunk {i+1}: {summary}")
+                        
+                        if chunk_summaries:
+                            final_answer = f"""Based on the analysis of {len(chunks)} document chunks, here are the key findings for: "{user_query}"
+
+{chr(10).join(chunk_summaries)}
+
+Note: This synthesis was generated locally due to a temporary API connectivity issue. The individual chunk analyses above contain the detailed information extracted from the document."""
+                        else:
+                            final_answer = f"❌ Unable to generate final synthesis due to API connectivity issues: {str(e)}. Please refer to the individual chunk analyses above for the extracted information."
             
             # Combine all chunk results with final synthesis
             combined_result = "\n\n---\n\n".join(chunk_results)
