@@ -80,21 +80,9 @@ class MinionValves(BaseModel):
         description="Top-k sampling for local model. Limits vocabulary to top k tokens. Set to 0 to disable.",
         ge=0
     )
-    chunk_size: int = Field(
-        default=5000, 
-        description="Maximum chunk size in characters for context fed to local models during conversation."
-    )
-    max_chunks: int = Field(
-        default=2, 
-        description="Maximum number of document chunks to process. Helps manage processing load for large documents."
-    )
     use_structured_output: bool = Field(
         default=True, 
         description="Enable JSON structured output for local model responses (requires local model support)."
-    )
-    enable_completion_detection: bool = Field(
-        default=True,
-        description="Enable detection of when the remote model has gathered sufficient information without explicit 'FINAL ANSWER READY' marker."
     )
     enable_completion_detection: bool = Field(
         default=True,
@@ -165,6 +153,61 @@ class MinionValves(BaseModel):
         description="Maximum clarification requests per question",
         ge=0,
         le=3
+    )
+
+    # --- v0.3.9 Open WebUI Integration Features ---
+    
+    # Web Search Integration
+    enable_web_search: bool = Field(
+        default=False,
+        title="Enable Web Search",
+        description="Enable web search integration for conversational queries that require external information."
+    )
+    
+    # Native RAG Pipeline Integration
+    use_native_rag: bool = Field(
+        default=True,
+        title="Use Native RAG",
+        description="Use Open WebUI's RAG infrastructure for intelligent retrieval instead of naive chunking."
+    )
+    rag_top_k: int = Field(
+        default=5,
+        title="RAG Top-K Results",
+        description="Number of top relevant chunks to retrieve from RAG pipeline.",
+        ge=1, le=20
+    )
+    rag_relevance_threshold: float = Field(
+        default=0.7,
+        title="RAG Relevance Threshold",
+        description="Minimum relevance score for RAG retrieved chunks (0.0-1.0).",
+        ge=0.0, le=1.0
+    )
+    
+    # Streaming Response Support
+    enable_streaming_responses: bool = Field(
+        default=True,
+        title="Enable Streaming Responses",
+        description="Provide real-time updates during conversational rounds."
+    )
+    
+    # Advanced Citation System
+    enable_advanced_citations: bool = Field(
+        default=True,
+        title="Enable Advanced Citations",
+        description="Use Open WebUI's inline citation format for traceable conversational responses."
+    )
+    citation_max_length: int = Field(
+        default=100,
+        title="Citation Max Length",
+        description="Maximum length for citation text before truncation.",
+        ge=50, le=500
+    )
+    
+    # Multi-Document Knowledge Base Support
+    enable_multi_document_context: bool = Field(
+        default=True,
+        title="Multi-Document Context",
+        description="Enable conversations across multiple documents in knowledge base."
     )
 
     # The following class is part of the Pydantic configuration and is standard.

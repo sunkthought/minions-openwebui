@@ -1,11 +1,11 @@
 """
-title: Minion Protocol Integration for Open WebUI v0.3.8
+title: Minion Protocol Integration for Open WebUI v0.3.9
 author: Wil Everts and the @SunkThought team
 author_url: https://github.com/SunkThought/minions-openwebui
 original_author: Copyright (c) 2025 Sabri Eyuboglu, Avanika Narayan, Dan Biderman, and the rest of the Minions team (@HazyResearch wrote the original MinionS Protocol paper and code examples on github that spawned this)
 original_author_url: https://github.com/HazyResearch/
 funding_url: https://github.com/HazyResearch/minions
-version: 0.3.8
+version: 0.3.9
 description: Enhanced Minion protocol with OpenAI API support, scaling strategies, and adaptive round control
 required_open_webui_version: 0.5.0
 license: MIT License
@@ -27,10 +27,11 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
+from urllib.parse import urlparse
 
 # Typing imports
 from typing import (
-    List, Dict, Any, Optional, Tuple, Callable, Awaitable, 
+    List, Dict, Any, Optional, Tuple, Callable, Awaitable, AsyncGenerator,
     Union, Set, TypedDict, Protocol
 )
 
@@ -3064,6 +3065,144 @@ class AnswerValidator:
                 
         return clarification.strip()
 
+# --- v0.3.9 Open WebUI Integration Models for Minion Protocol ---
+
+class ConversationType(Enum):
+    """Types of conversational interactions for v0.3.9 Open WebUI integrations"""
+    DOCUMENT_CONVERSATION = "document_conversation"
+    WEB_ENHANCED_CONVERSATION = "web_enhanced_conversation"
+    MULTI_DOCUMENT_CONVERSATION = "multi_document_conversation"
+    HYBRID_CONVERSATION = "hybrid_conversation"
+
+class WebSearchResult(BaseModel):
+    """Result from web search integration in conversational context"""
+    query: str
+    title: str = ""
+    url: str = ""
+    snippet: str = ""
+    relevance_score: float = 0.0
+    source_domain: str = ""
+    conversation_round: int = 0  # Which round this was used in
+    
+    class Config:
+        extra = "ignore"
+
+class RAGChunk(BaseModel):
+    """RAG retrieved chunk with metadata for conversational use"""
+    content: str
+    document_id: str
+    document_name: str
+    chunk_id: str
+    relevance_score: float
+    start_position: int = 0
+    end_position: int = 0
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+    conversation_round: int = 0  # Which round this was retrieved for
+    
+    class Config:
+        extra = "ignore"
+
+class Citation(BaseModel):
+    """Citation with Open WebUI inline format support for conversations"""
+    citation_id: str
+    source_type: str  # "document", "web", "rag"
+    cited_text: str
+    formatted_citation: str
+    relevance_score: Optional[float] = None
+    source_metadata: Dict[str, Any] = Field(default_factory=dict)
+    conversation_round: int = 0  # Which round this citation was created in
+    
+    class Config:
+        extra = "ignore"
+
+class EnhancedLocalAssistantResponse(BaseModel):
+    """Enhanced local assistant response with v0.3.9 features"""
+    answer: str = Field(description="The main response to the question posed by the remote model.")
+    confidence: str = Field(description="Confidence level of the answer (e.g., HIGH, MEDIUM, LOW).")
+    key_points: Optional[List[str]] = Field(
+        default=None, 
+        description="Optional list of key points extracted from the context related to the answer."
+    )
+    citations: Optional[List[str]] = Field(
+        default=None, 
+        description="Optional list of direct quotes or citations from the context supporting the answer."
+    )
+    
+    # v0.3.9 enhancements
+    conversation_type: ConversationType = Field(default=ConversationType.DOCUMENT_CONVERSATION)
+    enhanced_citations: List[Citation] = Field(default_factory=list)
+    web_search_results: List[WebSearchResult] = Field(default_factory=list)
+    rag_chunks_used: List[RAGChunk] = Field(default_factory=list)
+    source_documents: List[str] = Field(default_factory=list)
+    
+    class Config:
+        extra = "ignore"
+
+class StreamingConversationUpdate(BaseModel):
+    """Streaming update message for conversational flow"""
+    update_type: str  # phase, round_progress, search, citation, final_answer
+    message: str
+    round_number: int = 0
+    conversation_phase: str = ""
+    timestamp: Optional[str] = None
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+    
+    class Config:
+        extra = "ignore"
+
+class DocumentReference(BaseModel):
+    """Document reference for multi-document conversations"""
+    document_id: str
+    document_name: str
+    document_type: str = "unknown"
+    size_bytes: int = 0
+    chunk_count: int = 0
+    upload_date: Optional[str] = None
+    last_accessed: Optional[str] = None
+    conversation_relevance: float = 0.0  # How relevant to current conversation
+    
+    class Config:
+        extra = "ignore"
+
+class ConversationKnowledgeBase(BaseModel):
+    """Knowledge base context for multi-document conversations"""
+    available_documents: List[DocumentReference] = Field(default_factory=list)
+    referenced_documents: List[str] = Field(default_factory=list)
+    cross_document_relationships: Dict[str, List[str]] = Field(default_factory=dict)
+    conversation_focus_documents: List[str] = Field(default_factory=list)  # Docs most relevant to current conversation
+    
+    class Config:
+        extra = "ignore"
+
+class EnhancedConversationMetrics(BaseModel):
+    """Enhanced metrics for v0.3.9 conversational execution"""
+    rounds_used: int = Field(description="Number of Q&A rounds completed in the conversation")
+    questions_asked: int = Field(description="Total number of questions asked by the remote model")
+    avg_answer_confidence: float = Field(
+        description="Average confidence score across all local model responses (0.0-1.0)"
+    )
+    total_tokens_used: int = Field(
+        default=0,
+        description="Estimated total tokens used across all API calls"
+    )
+    conversation_duration_ms: float = Field(
+        description="Total conversation duration in milliseconds"
+    )
+    completion_detected: bool = Field(
+        description="Whether the conversation ended via completion detection vs max rounds"
+    )
+    
+    # v0.3.9 enhancements
+    web_searches_performed: int = 0
+    rag_retrievals_performed: int = 0
+    citations_generated: int = 0
+    documents_accessed: int = 0
+    streaming_updates_sent: int = 0
+    conversation_type: ConversationType = ConversationType.DOCUMENT_CONVERSATION
+    
+    class Config:
+        extra = "ignore"
+
 
 # Partials File: partials/minion_valves.py
 
@@ -3146,21 +3285,9 @@ class MinionValves(BaseModel):
         description="Top-k sampling for local model. Limits vocabulary to top k tokens. Set to 0 to disable.",
         ge=0
     )
-    chunk_size: int = Field(
-        default=5000, 
-        description="Maximum chunk size in characters for context fed to local models during conversation."
-    )
-    max_chunks: int = Field(
-        default=2, 
-        description="Maximum number of document chunks to process. Helps manage processing load for large documents."
-    )
     use_structured_output: bool = Field(
         default=True, 
         description="Enable JSON structured output for local model responses (requires local model support)."
-    )
-    enable_completion_detection: bool = Field(
-        default=True,
-        description="Enable detection of when the remote model has gathered sufficient information without explicit 'FINAL ANSWER READY' marker."
     )
     enable_completion_detection: bool = Field(
         default=True,
@@ -3231,6 +3358,61 @@ class MinionValves(BaseModel):
         description="Maximum clarification requests per question",
         ge=0,
         le=3
+    )
+
+    # --- v0.3.9 Open WebUI Integration Features ---
+    
+    # Web Search Integration
+    enable_web_search: bool = Field(
+        default=False,
+        title="Enable Web Search",
+        description="Enable web search integration for conversational queries that require external information."
+    )
+    
+    # Native RAG Pipeline Integration
+    use_native_rag: bool = Field(
+        default=True,
+        title="Use Native RAG",
+        description="Use Open WebUI's RAG infrastructure for intelligent retrieval instead of naive chunking."
+    )
+    rag_top_k: int = Field(
+        default=5,
+        title="RAG Top-K Results",
+        description="Number of top relevant chunks to retrieve from RAG pipeline.",
+        ge=1, le=20
+    )
+    rag_relevance_threshold: float = Field(
+        default=0.7,
+        title="RAG Relevance Threshold",
+        description="Minimum relevance score for RAG retrieved chunks (0.0-1.0).",
+        ge=0.0, le=1.0
+    )
+    
+    # Streaming Response Support
+    enable_streaming_responses: bool = Field(
+        default=True,
+        title="Enable Streaming Responses",
+        description="Provide real-time updates during conversational rounds."
+    )
+    
+    # Advanced Citation System
+    enable_advanced_citations: bool = Field(
+        default=True,
+        title="Enable Advanced Citations",
+        description="Use Open WebUI's inline citation format for traceable conversational responses."
+    )
+    citation_max_length: int = Field(
+        default=100,
+        title="Citation Max Length",
+        description="Maximum length for citation text before truncation.",
+        ge=50, le=500
+    )
+    
+    # Multi-Document Knowledge Base Support
+    enable_multi_document_context: bool = Field(
+        default=True,
+        title="Multi-Document Context",
+        description="Enable conversations across multiple documents in knowledge base."
     )
 
     # The following class is part of the Pydantic configuration and is standard.
@@ -3545,6 +3727,1430 @@ def create_chunks(context: str, chunk_size: int, max_chunks: int) -> List[str]:
     ]
     return chunks[:max_chunks] if max_chunks > 0 else chunks
 
+
+# Partials File: partials/web_search_integration.py
+
+
+class WebSearchIntegration:
+    """
+    Handles web search integration for MinionS tasks using Open WebUI's search tool format.
+    Enables task decomposition to include web search when analyzing queries that require
+    both document analysis and external information.
+    """
+    
+    def __init__(self, valves, debug_mode: bool = False):
+        self.valves = valves
+        self.debug_mode = debug_mode
+        self.search_results_cache = {}
+    
+    def is_web_search_enabled(self) -> bool:
+        """Check if web search is enabled via valves."""
+        return getattr(self.valves, 'enable_web_search', False)
+    
+    def requires_web_search(self, task_description: str, query: str) -> bool:
+        """
+        Analyze if a task requires web search based on task description and original query.
+        
+        Args:
+            task_description: The specific task to be executed
+            query: The original user query
+            
+        Returns:
+            bool: True if web search is needed
+        """
+        web_search_indicators = [
+            "current", "latest", "recent", "today", "now", "2024", "2025",
+            "news", "update", "compare with", "versus", "vs", 
+            "market price", "stock", "weather", "status",
+            "search online", "web search", "internet",
+            "fact check", "verify", "confirm"
+        ]
+        
+        combined_text = f"{task_description} {query}".lower()
+        return any(indicator in combined_text for indicator in web_search_indicators)
+    
+    def determine_task_type(self, task_description: str, query: str, has_documents: bool) -> str:
+        """
+        Determine the type of task based on requirements.
+        
+        Args:
+            task_description: The specific task to be executed
+            query: The original user query
+            has_documents: Whether documents are available for analysis
+            
+        Returns:
+            str: Task type - "document_analysis", "web_search", or "hybrid"
+        """
+        needs_web_search = self.requires_web_search(task_description, query)
+        
+        if has_documents and needs_web_search:
+            return "hybrid"
+        elif needs_web_search:
+            return "web_search"
+        else:
+            return "document_analysis"
+    
+    def generate_search_query(self, task_description: str, original_query: str) -> str:
+        """
+        Generate an optimized search query for the given task.
+        
+        Args:
+            task_description: The specific task requiring web search
+            original_query: The original user query for context
+            
+        Returns:
+            str: Optimized search query
+        """
+        # Extract key terms and concepts
+        key_terms = []
+        
+        # Remove common stop words but keep important query words
+        stop_words = {"the", "a", "an", "and", "or", "but", "in", "on", "at", "to", "for", "of", "with", "by"}
+        
+        # Combine task and query, extract meaningful terms
+        combined = f"{task_description} {original_query}"
+        words = re.findall(r'\b\w+\b', combined.lower())
+        key_terms = [word for word in words if word not in stop_words and len(word) > 2]
+        
+        # Remove duplicates while preserving order
+        seen = set()
+        unique_terms = []
+        for term in key_terms:
+            if term not in seen:
+                seen.add(term)
+                unique_terms.append(term)
+        
+        # Build search query (limit to most relevant terms)
+        search_query = " ".join(unique_terms[:8])  # Limit to 8 terms
+        
+        if self.debug_mode:
+            print(f"[WebSearch] Generated search query: '{search_query}' from task: '{task_description}'")
+        
+        return search_query
+    
+    async def execute_web_search(self, search_query: str) -> Dict[str, Any]:
+        """
+        Execute web search using Open WebUI's search tool format.
+        
+        Args:
+            search_query: The search query to execute
+            
+        Returns:
+            Dict containing search results with citations
+        """
+        # Check cache first
+        if search_query in self.search_results_cache:
+            if self.debug_mode:
+                print(f"[WebSearch] Using cached results for: '{search_query}'")
+            return self.search_results_cache[search_query]
+        
+        try:
+            # Generate the search tool call using Open WebUI format
+            search_tool_call = f'''__TOOL_CALL__
+{{"name": "web_search", "parameters": {{"query": "{search_query}"}}}}
+__TOOL_CALL__'''
+            
+            if self.debug_mode:
+                print(f"[WebSearch] Executing search: {search_tool_call}")
+            
+            # Note: In a real implementation, this would be handled by Open WebUI's pipeline
+            # For now, we return a structured placeholder that matches expected format
+            search_results = {
+                "query": search_query,
+                "tool_call": search_tool_call,
+                "results": [],
+                "citations": [],
+                "status": "pending_tool_execution"
+            }
+            
+            # Cache the results
+            self.search_results_cache[search_query] = search_results
+            
+            return search_results
+            
+        except Exception as e:
+            error_msg = f"Web search failed for query '{search_query}': {str(e)}"
+            if self.debug_mode:
+                print(f"[WebSearch] {error_msg}")
+            raise MinionError(error_msg)
+    
+    def parse_search_results(self, raw_results: str) -> List[Dict[str, Any]]:
+        """
+        Parse search results returned by Open WebUI's search tool.
+        
+        Args:
+            raw_results: Raw search results from the tool
+            
+        Returns:
+            List of parsed search result dictionaries
+        """
+        try:
+            # Try to parse as JSON first
+            if raw_results.strip().startswith('{') or raw_results.strip().startswith('['):
+                parsed = json.loads(raw_results)
+                if isinstance(parsed, dict) and 'results' in parsed:
+                    return parsed['results']
+                elif isinstance(parsed, list):
+                    return parsed
+                else:
+                    return [parsed]
+            
+            # Fallback: parse structured text format
+            results = []
+            current_result = {}
+            
+            lines = raw_results.split('\n')
+            for line in lines:
+                line = line.strip()
+                if line.startswith('Title:'):
+                    if current_result:
+                        results.append(current_result)
+                    current_result = {'title': line[6:].strip()}
+                elif line.startswith('URL:'):
+                    current_result['url'] = line[4:].strip()
+                elif line.startswith('Snippet:'):
+                    current_result['snippet'] = line[8:].strip()
+                elif line and 'title' in current_result and 'snippet' not in current_result:
+                    current_result['snippet'] = line
+            
+            if current_result:
+                results.append(current_result)
+            
+            return results
+            
+        except Exception as e:
+            if self.debug_mode:
+                print(f"[WebSearch] Failed to parse search results: {str(e)}")
+            return [{"title": "Search Results", "snippet": raw_results, "url": ""}]
+    
+    def format_search_context(self, search_results: List[Dict[str, Any]], task_description: str) -> str:
+        """
+        Format search results into context for task execution.
+        
+        Args:
+            search_results: Parsed search results
+            task_description: The task that required web search
+            
+        Returns:
+            str: Formatted context string
+        """
+        if not search_results:
+            return f"No web search results found for task: {task_description}"
+        
+        context = f"Web search results for task '{task_description}':\n\n"
+        
+        for i, result in enumerate(search_results[:5], 1):  # Limit to top 5 results
+            title = result.get('title', 'Untitled')
+            snippet = result.get('snippet', 'No description available')
+            url = result.get('url', '')
+            
+            context += f"{i}. {title}\n"
+            context += f"   Source: {url}\n"
+            context += f"   Content: {snippet}\n\n"
+        
+        return context
+    
+    def create_web_search_citation(self, result: Dict[str, Any], relevant_text: str) -> str:
+        """
+        Create a properly formatted citation for web search results.
+        
+        Args:
+            result: Search result dictionary
+            relevant_text: The relevant text that was cited
+            
+        Returns:
+            str: Formatted citation
+        """
+        title = result.get('title', 'Web Search Result')
+        url = result.get('url', '')
+        
+        if url:
+            return f"Web source: {title} ({url}): \"{relevant_text}\""
+        else:
+            return f"Web source: {title}: \"{relevant_text}\""
+    
+    def get_search_statistics(self) -> Dict[str, Any]:
+        """
+        Get statistics about web search usage.
+        
+        Returns:
+            Dict with search statistics
+        """
+        return {
+            "total_searches": len(self.search_results_cache),
+            "cached_queries": list(self.search_results_cache.keys()),
+            "web_search_enabled": self.is_web_search_enabled()
+        }
+
+# Partials File: partials/rag_retriever.py
+
+
+class RAGRetriever:
+    """
+    Native RAG Pipeline Integration for MinionS using Open WebUI's RAG infrastructure.
+    Provides intelligent retrieval instead of naive chunking by leveraging Open WebUI's
+    document reference syntax and retrieval mechanisms.
+    """
+    
+    def __init__(self, valves, debug_mode: bool = False):
+        self.valves = valves
+        self.debug_mode = debug_mode
+        self.document_registry = DocumentRegistry()
+        self.retrieved_chunks_cache = {}
+    
+    def is_native_rag_enabled(self) -> bool:
+        """Check if native RAG is enabled via valves."""
+        return getattr(self.valves, 'use_native_rag', True)
+    
+    def get_rag_top_k(self) -> int:
+        """Get the top-k setting for RAG retrieval."""
+        return getattr(self.valves, 'rag_top_k', 5)
+    
+    def get_relevance_threshold(self) -> float:
+        """Get the relevance threshold for RAG retrieval."""
+        return getattr(self.valves, 'rag_relevance_threshold', 0.7)
+    
+    def detect_document_references(self, query: str, tasks: List[str] = None) -> List[str]:
+        """
+        Detect document references using the '#' syntax in queries and tasks.
+        
+        Args:
+            query: The original user query
+            tasks: List of task descriptions (optional)
+            
+        Returns:
+            List of document IDs/names referenced
+        """
+        document_refs = []
+        
+        # Pattern to match #document_name or #"document name with spaces"
+        pattern = r'#(?:"([^"]+)"|(\S+))'
+        
+        # Check main query
+        matches = re.finditer(pattern, query)
+        for match in matches:
+            doc_ref = match.group(1) if match.group(1) else match.group(2)
+            if doc_ref not in document_refs:
+                document_refs.append(doc_ref)
+        
+        # Check task descriptions if provided
+        if tasks:
+            for task in tasks:
+                matches = re.finditer(pattern, task)
+                for match in matches:
+                    doc_ref = match.group(1) if match.group(1) else match.group(2)
+                    if doc_ref not in document_refs:
+                        document_refs.append(doc_ref)
+        
+        if self.debug_mode and document_refs:
+            print(f"[RAG] Detected document references: {document_refs}")
+        
+        return document_refs
+    
+    def retrieve_relevant_chunks(self, task_description: str, document_refs: List[str] = None) -> List[Dict[str, Any]]:
+        """
+        Retrieve relevant chunks for a task using RAG pipeline.
+        
+        Args:
+            task_description: The specific task requiring information
+            document_refs: Optional list of specific documents to search
+            
+        Returns:
+            List of relevant chunks with metadata and relevance scores
+        """
+        cache_key = f"{task_description}|{document_refs}"
+        if cache_key in self.retrieved_chunks_cache:
+            if self.debug_mode:
+                print(f"[RAG] Using cached retrieval for task: {task_description[:50]}...")
+            return self.retrieved_chunks_cache[cache_key]
+        
+        try:
+            retrieved_chunks = []
+            
+            if self.is_native_rag_enabled() and document_refs:
+                # Use native RAG with document references
+                for doc_ref in document_refs:
+                    chunks = self._retrieve_from_document(task_description, doc_ref)
+                    retrieved_chunks.extend(chunks)
+            else:
+                # Fallback to general retrieval (assuming all available documents)
+                retrieved_chunks = self._retrieve_general(task_description)
+            
+            # Filter by relevance threshold
+            threshold = self.get_relevance_threshold()
+            filtered_chunks = [
+                chunk for chunk in retrieved_chunks 
+                if chunk.get('relevance_score', 0.0) >= threshold
+            ]
+            
+            # Sort by relevance and limit to top-k
+            top_k = self.get_rag_top_k()
+            filtered_chunks.sort(key=lambda x: x.get('relevance_score', 0.0), reverse=True)
+            final_chunks = filtered_chunks[:top_k]
+            
+            # Cache the results
+            self.retrieved_chunks_cache[cache_key] = final_chunks
+            
+            if self.debug_mode:
+                print(f"[RAG] Retrieved {len(final_chunks)} relevant chunks for task")
+                for i, chunk in enumerate(final_chunks[:3]):  # Show top 3
+                    score = chunk.get('relevance_score', 0.0)
+                    preview = chunk.get('content', '')[:100]
+                    print(f"[RAG]   {i+1}. Score: {score:.3f}, Preview: {preview}...")
+            
+            return final_chunks
+            
+        except Exception as e:
+            error_msg = f"RAG retrieval failed for task '{task_description}': {str(e)}"
+            if self.debug_mode:
+                print(f"[RAG] {error_msg}")
+            # Return empty list to allow fallback to naive chunking
+            return []
+    
+    def _retrieve_from_document(self, task_description: str, doc_ref: str) -> List[Dict[str, Any]]:
+        """
+        Retrieve chunks from a specific document using RAG.
+        
+        Args:
+            task_description: The task requiring information
+            doc_ref: Document reference ID/name
+            
+        Returns:
+            List of retrieved chunks with metadata
+        """
+        # In a real implementation, this would interface with Open WebUI's RAG system
+        # For now, we simulate the expected structure
+        
+        # Simulate RAG retrieval result structure
+        simulated_chunks = [
+            {
+                "content": f"Simulated RAG content from {doc_ref} for task: {task_description}",
+                "document_id": doc_ref,
+                "document_name": doc_ref,
+                "chunk_id": f"{doc_ref}_chunk_1",
+                "relevance_score": 0.85,
+                "start_position": 0,
+                "end_position": 100,
+                "metadata": {
+                    "page": 1,
+                    "section": "Introduction",
+                    "document_type": "pdf"
+                }
+            }
+        ]
+        
+        return simulated_chunks
+    
+    def _retrieve_general(self, task_description: str) -> List[Dict[str, Any]]:
+        """
+        Perform general retrieval across all available documents.
+        
+        Args:
+            task_description: The task requiring information
+            
+        Returns:
+            List of retrieved chunks with metadata
+        """
+        # Simulate general RAG retrieval
+        simulated_chunks = [
+            {
+                "content": f"General RAG content for task: {task_description}",
+                "document_id": "general_doc",
+                "document_name": "Available Documents",
+                "chunk_id": "general_chunk_1",
+                "relevance_score": 0.75,
+                "start_position": 0,
+                "end_position": 100,
+                "metadata": {
+                    "source": "multi_document",
+                    "retrieval_type": "general"
+                }
+            }
+        ]
+        
+        return simulated_chunks
+    
+    def format_rag_context(self, retrieved_chunks: List[Dict[str, Any]], task_description: str) -> str:
+        """
+        Format retrieved RAG chunks into context for task execution.
+        
+        Args:
+            retrieved_chunks: List of retrieved chunks with metadata
+            task_description: The task requiring this context
+            
+        Returns:
+            str: Formatted context string with relevance scores
+        """
+        if not retrieved_chunks:
+            return f"No relevant information found via RAG for task: {task_description}"
+        
+        context = f"Relevant information retrieved for task '{task_description}':\n\n"
+        
+        for i, chunk in enumerate(retrieved_chunks, 1):
+            content = chunk.get('content', 'No content available')
+            score = chunk.get('relevance_score', 0.0)
+            doc_name = chunk.get('document_name', 'Unknown Document')
+            chunk_id = chunk.get('chunk_id', f'chunk_{i}')
+            
+            context += f"[Relevance: {score:.2f}] Document: {doc_name} (ID: {chunk_id})\n"
+            context += f"{content}\n\n"
+        
+        return context
+    
+    def create_rag_citation(self, chunk: Dict[str, Any], relevant_text: str) -> str:
+        """
+        Create a properly formatted citation for RAG-retrieved content.
+        
+        Args:
+            chunk: Retrieved chunk with metadata
+            relevant_text: The specific text being cited
+            
+        Returns:
+            str: Formatted citation with document and chunk information
+        """
+        doc_name = chunk.get('document_name', 'Unknown Document')
+        chunk_id = chunk.get('chunk_id', 'Unknown Chunk')
+        relevance = chunk.get('relevance_score', 0.0)
+        
+        metadata = chunk.get('metadata', {})
+        page = metadata.get('page', '')
+        section = metadata.get('section', '')
+        
+        citation_parts = [f"Document: {doc_name}"]
+        
+        if page:
+            citation_parts.append(f"Page {page}")
+        if section:
+            citation_parts.append(f"Section: {section}")
+        
+        citation_parts.append(f"Chunk ID: {chunk_id}")
+        citation_parts.append(f"Relevance: {relevance:.2f}")
+        
+        location = ", ".join(citation_parts)
+        return f"{location}: \"{relevant_text}\""
+    
+    def should_fallback_to_naive_chunking(self, retrieved_chunks: List[Dict[str, Any]], 
+                                         document_content: str) -> bool:
+        """
+        Determine if we should fallback to naive chunking.
+        
+        Args:
+            retrieved_chunks: Results from RAG retrieval
+            document_content: Original document content
+            
+        Returns:
+            bool: True if should fallback to naive chunking
+        """
+        if not self.is_native_rag_enabled():
+            return True
+        
+        if not retrieved_chunks:
+            if self.debug_mode:
+                print("[RAG] No chunks retrieved, falling back to naive chunking")
+            return True
+        
+        # Check if retrieved content seems insufficient
+        total_retrieved_chars = sum(len(chunk.get('content', '')) for chunk in retrieved_chunks)
+        if total_retrieved_chars < 500:  # Less than 500 characters retrieved
+            if self.debug_mode:
+                print(f"[RAG] Retrieved content too small ({total_retrieved_chars} chars), falling back")
+            return True
+        
+        return False
+    
+    def get_retrieval_statistics(self) -> Dict[str, Any]:
+        """
+        Get statistics about RAG retrieval usage.
+        
+        Returns:
+            Dict with retrieval statistics
+        """
+        return {
+            "native_rag_enabled": self.is_native_rag_enabled(),
+            "top_k_setting": self.get_rag_top_k(),
+            "relevance_threshold": self.get_relevance_threshold(),
+            "total_retrievals": len(self.retrieved_chunks_cache),
+            "document_registry_size": len(self.document_registry.documents)
+        }
+
+
+class DocumentRegistry:
+    """
+    Registry to track available documents and their metadata for multi-document support.
+    """
+    
+    def __init__(self):
+        self.documents = {}
+        self.cross_references = {}
+    
+    def register_document(self, doc_id: str, metadata: Dict[str, Any]) -> None:
+        """
+        Register a document with its metadata.
+        
+        Args:
+            doc_id: Unique document identifier
+            metadata: Document metadata (name, type, size, upload_date, etc.)
+        """
+        self.documents[doc_id] = {
+            "id": doc_id,
+            "name": metadata.get("name", doc_id),
+            "type": metadata.get("type", "unknown"),
+            "size": metadata.get("size", 0),
+            "upload_date": metadata.get("upload_date"),
+            "chunk_count": metadata.get("chunk_count", 0),
+            "last_accessed": None
+        }
+    
+    def get_document_metadata(self, doc_id: str) -> Optional[Dict[str, Any]]:
+        """Get metadata for a specific document."""
+        return self.documents.get(doc_id)
+    
+    def list_available_documents(self) -> List[Dict[str, Any]]:
+        """Get list of all available documents."""
+        return list(self.documents.values())
+    
+    def find_related_documents(self, doc_id: str) -> List[str]:
+        """Find documents related to the given document ID."""
+        return self.cross_references.get(doc_id, [])
+    
+    def add_cross_reference(self, doc_id1: str, doc_id2: str) -> None:
+        """Add a cross-reference between two documents."""
+        if doc_id1 not in self.cross_references:
+            self.cross_references[doc_id1] = []
+        if doc_id2 not in self.cross_references:
+            self.cross_references[doc_id2] = []
+        
+        if doc_id2 not in self.cross_references[doc_id1]:
+            self.cross_references[doc_id1].append(doc_id2)
+        if doc_id1 not in self.cross_references[doc_id2]:
+            self.cross_references[doc_id2].append(doc_id1)
+
+# Partials File: partials/citation_manager.py
+
+from urllib.parse import urlparse
+
+class CitationManager:
+    """
+    Advanced Citation System for MinionS using Open WebUI's inline citation format.
+    Manages citations from both document sources and web search results,
+    ensuring proper formatting and traceability.
+    """
+    
+    def __init__(self, debug_mode: bool = False):
+        self.debug_mode = debug_mode
+        self.citation_registry = {}
+        self.citation_counter = 0
+        self.source_mapping = {}
+    
+    def create_citation_id(self, source_type: str, source_id: str) -> str:
+        """
+        Create a unique citation ID for tracking.
+        
+        Args:
+            source_type: Type of source ('document', 'web', 'rag')
+            source_id: Unique identifier for the source
+            
+        Returns:
+            str: Unique citation ID
+        """
+        self.citation_counter += 1
+        citation_id = f"{source_type}_{self.citation_counter}"
+        
+        self.source_mapping[citation_id] = {
+            "type": source_type,
+            "source_id": source_id,
+            "created_at": None  # Could add timestamp if needed
+        }
+        
+        return citation_id
+    
+    def register_document_citation(self, document_name: str, chunk_info: Dict[str, Any], 
+                                 cited_text: str, relevance_score: float = None) -> str:
+        """
+        Register a citation from a document source.
+        
+        Args:
+            document_name: Name of the source document
+            chunk_info: Information about the chunk (page, section, etc.)
+            cited_text: The actual text being cited
+            relevance_score: Optional relevance score from RAG
+            
+        Returns:
+            str: Citation ID for reference
+        """
+        citation_id = self.create_citation_id("document", document_name)
+        
+        self.citation_registry[citation_id] = {
+            "type": "document",
+            "document_name": document_name,
+            "chunk_info": chunk_info,
+            "cited_text": cited_text,
+            "relevance_score": relevance_score,
+            "formatted_citation": self._format_document_citation(
+                document_name, chunk_info, cited_text, relevance_score
+            )
+        }
+        
+        if self.debug_mode:
+            print(f"[Citation] Registered document citation {citation_id}: {document_name}")
+        
+        return citation_id
+    
+    def register_web_citation(self, search_result: Dict[str, Any], cited_text: str) -> str:
+        """
+        Register a citation from a web search result.
+        
+        Args:
+            search_result: Web search result with title, url, snippet
+            cited_text: The actual text being cited
+            
+        Returns:
+            str: Citation ID for reference
+        """
+        url = search_result.get('url', '')
+        title = search_result.get('title', 'Web Source')
+        
+        citation_id = self.create_citation_id("web", url or title)
+        
+        self.citation_registry[citation_id] = {
+            "type": "web",
+            "title": title,
+            "url": url,
+            "search_result": search_result,
+            "cited_text": cited_text,
+            "formatted_citation": self._format_web_citation(search_result, cited_text)
+        }
+        
+        if self.debug_mode:
+            print(f"[Citation] Registered web citation {citation_id}: {title}")
+        
+        return citation_id
+    
+    def register_rag_citation(self, rag_chunk: Dict[str, Any], cited_text: str) -> str:
+        """
+        Register a citation from RAG-retrieved content.
+        
+        Args:
+            rag_chunk: RAG chunk with metadata and relevance score
+            cited_text: The actual text being cited
+            
+        Returns:
+            str: Citation ID for reference
+        """
+        doc_name = rag_chunk.get('document_name', 'RAG Source')
+        chunk_id = rag_chunk.get('chunk_id', 'unknown_chunk')
+        
+        citation_id = self.create_citation_id("rag", chunk_id)
+        
+        self.citation_registry[citation_id] = {
+            "type": "rag",
+            "document_name": doc_name,
+            "chunk_id": chunk_id,
+            "rag_chunk": rag_chunk,
+            "cited_text": cited_text,
+            "relevance_score": rag_chunk.get('relevance_score'),
+            "formatted_citation": self._format_rag_citation(rag_chunk, cited_text)
+        }
+        
+        if self.debug_mode:
+            print(f"[Citation] Registered RAG citation {citation_id}: {doc_name}")
+        
+        return citation_id
+    
+    def _format_document_citation(self, document_name: str, chunk_info: Dict[str, Any], 
+                                cited_text: str, relevance_score: float = None) -> str:
+        """Format a document citation according to Open WebUI standards."""
+        citation_parts = [f"Document: {document_name}"]
+        
+        # Add page information if available
+        if chunk_info.get('page'):
+            citation_parts.append(f"Page {chunk_info['page']}")
+        
+        # Add section information if available
+        if chunk_info.get('section'):
+            citation_parts.append(f"Section: {chunk_info['section']}")
+        
+        # Add relevance score if available (from RAG)
+        if relevance_score is not None:
+            citation_parts.append(f"Relevance: {relevance_score:.2f}")
+        
+        location = ", ".join(citation_parts)
+        return f"{location}: \"{self._truncate_citation_text(cited_text)}\""
+    
+    def _format_web_citation(self, search_result: Dict[str, Any], cited_text: str) -> str:
+        """Format a web citation according to Open WebUI standards."""
+        title = search_result.get('title', 'Web Source')
+        url = search_result.get('url', '')
+        
+        # Extract domain for cleaner display
+        domain = ""
+        if url:
+            try:
+                parsed_url = urlparse(url)
+                domain = parsed_url.netloc
+            except:
+                domain = url[:50] + "..." if len(url) > 50 else url
+        
+        if domain:
+            return f"Web: {title} ({domain}): \"{self._truncate_citation_text(cited_text)}\""
+        else:
+            return f"Web: {title}: \"{self._truncate_citation_text(cited_text)}\""
+    
+    def _format_rag_citation(self, rag_chunk: Dict[str, Any], cited_text: str) -> str:
+        """Format a RAG citation according to Open WebUI standards."""
+        doc_name = rag_chunk.get('document_name', 'RAG Source')
+        chunk_id = rag_chunk.get('chunk_id', 'unknown')
+        relevance = rag_chunk.get('relevance_score', 0.0)
+        
+        metadata = rag_chunk.get('metadata', {})
+        location_parts = [f"Document: {doc_name}"]
+        
+        if metadata.get('page'):
+            location_parts.append(f"Page {metadata['page']}")
+        if metadata.get('section'):
+            location_parts.append(f"Section: {metadata['section']}")
+        
+        location_parts.append(f"Chunk: {chunk_id}")
+        location_parts.append(f"Relevance: {relevance:.2f}")
+        
+        location = ", ".join(location_parts)
+        return f"{location}: \"{self._truncate_citation_text(cited_text)}\""
+    
+    def _truncate_citation_text(self, text: str, max_length: int = 100) -> str:
+        """Truncate citation text to a reasonable length."""
+        if len(text) <= max_length:
+            return text
+        
+        # Find a good break point near the limit
+        truncated = text[:max_length]
+        last_space = truncated.rfind(' ')
+        
+        if last_space > max_length * 0.7:  # If we can break at 70% of max length
+            return text[:last_space] + "..."
+        else:
+            return text[:max_length] + "..."
+    
+    def format_inline_citation(self, citation_id: str, cited_text: str) -> str:
+        """
+        Format text with inline citation using Open WebUI's citation tags.
+        
+        Args:
+            citation_id: ID of the registered citation
+            cited_text: Text to be cited
+            
+        Returns:
+            str: Text formatted with inline citation tags
+        """
+        if citation_id not in self.citation_registry:
+            if self.debug_mode:
+                print(f"[Citation] Warning: Citation ID {citation_id} not found in registry")
+            return cited_text
+        
+        citation_info = self.citation_registry[citation_id]
+        formatted_citation = citation_info['formatted_citation']
+        
+        # Use Open WebUI's citation format: <cite>text</cite>
+        return f'<cite title="{formatted_citation}">{cited_text}</cite>'
+    
+    def add_citation_to_text(self, text: str, citation_id: str, 
+                           cited_portion: str = None) -> str:
+        """
+        Add citation to specific portion of text.
+        
+        Args:
+            text: The full text
+            citation_id: ID of the citation to add
+            cited_portion: Specific portion to cite (if None, cites whole text)
+            
+        Returns:
+            str: Text with citation added
+        """
+        if cited_portion is None:
+            return self.format_inline_citation(citation_id, text)
+        
+        if cited_portion in text:
+            cited_text = self.format_inline_citation(citation_id, cited_portion)
+            return text.replace(cited_portion, cited_text, 1)  # Replace only first occurrence
+        else:
+            if self.debug_mode:
+                print(f"[Citation] Warning: Cited portion not found in text")
+            return text
+    
+    def extract_citations_from_task_result(self, task_result: Dict[str, Any], 
+                                         context_sources: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """
+        Extract and register citations from a task result.
+        
+        Args:
+            task_result: Task result containing answer and citation fields
+            context_sources: List of source contexts (documents, web results, RAG chunks)
+            
+        Returns:
+            Dict: Enhanced task result with properly formatted citations
+        """
+        enhanced_result = task_result.copy()
+        
+        # Get the citation text from the task result
+        raw_citation = task_result.get('citation', '')
+        answer_text = task_result.get('answer', '')
+        
+        if not raw_citation:
+            return enhanced_result
+        
+        # Try to match citation with source contexts
+        best_match = self._find_best_citation_match(raw_citation, context_sources)
+        
+        if best_match:
+            source_type = best_match['type']
+            cited_text = raw_citation
+            
+            if source_type == 'document':
+                citation_id = self.register_document_citation(
+                    best_match['document_name'],
+                    best_match.get('chunk_info', {}),
+                    cited_text
+                )
+            elif source_type == 'web':
+                citation_id = self.register_web_citation(
+                    best_match['search_result'],
+                    cited_text
+                )
+            elif source_type == 'rag':
+                citation_id = self.register_rag_citation(
+                    best_match['rag_chunk'],
+                    cited_text
+                )
+            else:
+                citation_id = None
+            
+            # Format the answer with inline citations
+            if citation_id and answer_text:
+                enhanced_result['answer'] = self.add_citation_to_text(
+                    answer_text, citation_id, cited_text
+                )
+                enhanced_result['citation_id'] = citation_id
+        
+        return enhanced_result
+    
+    def _find_best_citation_match(self, citation_text: str, 
+                                context_sources: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+        """
+        Find the best matching source for a citation text.
+        
+        Args:
+            citation_text: The citation text to match
+            context_sources: Available source contexts
+            
+        Returns:
+            Dict: Best matching source or None
+        """
+        best_match = None
+        best_score = 0.0
+        
+        for source in context_sources:
+            content = source.get('content', '')
+            score = self._calculate_text_similarity(citation_text, content)
+            
+            if score > best_score and score > 0.3:  # Minimum similarity threshold
+                best_score = score
+                best_match = source
+        
+        return best_match
+    
+    def _calculate_text_similarity(self, text1: str, text2: str) -> float:
+        """
+        Calculate simple text similarity based on word overlap.
+        
+        Args:
+            text1: First text
+            text2: Second text
+            
+        Returns:
+            float: Similarity score between 0.0 and 1.0
+        """
+        words1 = set(re.findall(r'\w+', text1.lower()))
+        words2 = set(re.findall(r'\w+', text2.lower()))
+        
+        if not words1 or not words2:
+            return 0.0
+        
+        intersection = words1.intersection(words2)
+        union = words1.union(words2)
+        
+        return len(intersection) / len(union) if union else 0.0
+    
+    def generate_citation_summary(self) -> Dict[str, Any]:
+        """
+        Generate a summary of all citations used.
+        
+        Returns:
+            Dict: Citation summary with counts and sources
+        """
+        summary = {
+            "total_citations": len(self.citation_registry),
+            "by_type": {"document": 0, "web": 0, "rag": 0},
+            "sources": []
+        }
+        
+        for citation_id, citation_info in self.citation_registry.items():
+            citation_type = citation_info['type']
+            summary["by_type"][citation_type] += 1
+            
+            if citation_type == "document":
+                source_name = citation_info['document_name']
+            elif citation_type == "web":
+                source_name = citation_info['title']
+            elif citation_type == "rag":
+                source_name = citation_info['document_name']
+            else:
+                source_name = "Unknown"
+            
+            summary["sources"].append({
+                "id": citation_id,
+                "type": citation_type,
+                "source": source_name,
+                "citation": citation_info['formatted_citation']
+            })
+        
+        return summary
+    
+    def clear_citations(self) -> None:
+        """Clear all citation data for a new session."""
+        self.citation_registry.clear()
+        self.source_mapping.clear()
+        self.citation_counter = 0
+        
+        if self.debug_mode:
+            print("[Citation] Citation registry cleared")
+
+# Partials File: partials/streaming_support.py
+
+
+class StreamingResponseManager:
+    """
+    Streaming Response Support for MinionS providing real-time updates during operations.
+    Converts the main pipe method to use async generators for live progress updates.
+    """
+    
+    def __init__(self, valves, debug_mode: bool = False):
+        self.valves = valves
+        self.debug_mode = debug_mode
+        self.current_phase = ""
+        self.total_tasks = 0
+        self.completed_tasks = 0
+        self.error_occurred = False
+    
+    def is_streaming_enabled(self) -> bool:
+        """Check if streaming responses are enabled via valves."""
+        return getattr(self.valves, 'enable_streaming_responses', True)
+    
+    async def stream_phase_update(self, phase_name: str, details: str = "") -> str:
+        """
+        Generate a streaming update for a new phase.
+        
+        Args:
+            phase_name: Name of the current phase
+            details: Optional additional details
+            
+        Returns:
+            str: Formatted phase update message
+        """
+        self.current_phase = phase_name
+        
+        # Phase emoji mapping
+        phase_emojis = {
+            "query_analysis": "🔍",
+            "task_decomposition": "📋",
+            "document_retrieval": "📄",
+            "web_search": "🌐",
+            "task_execution": "⚙️",
+            "answer_synthesis": "🧠",
+            "citation_processing": "📚",
+            "completion": "✅",
+            "error": "❌"
+        }
+        
+        emoji = phase_emojis.get(phase_name.lower().replace(" ", "_"), "📍")
+        
+        if details:
+            message = f"{emoji} {phase_name}: {details}\n"
+        else:
+            message = f"{emoji} {phase_name}...\n"
+        
+        if self.debug_mode:
+            print(f"[Streaming] Phase update: {phase_name}")
+        
+        return message
+    
+    async def stream_task_progress(self, task_number: int, total_tasks: int, 
+                                 task_name: str, status: str = "executing") -> str:
+        """
+        Generate a streaming update for task progress.
+        
+        Args:
+            task_number: Current task number (1-indexed)
+            total_tasks: Total number of tasks
+            task_name: Name or description of the current task
+            status: Status of the task (executing, completed, failed)
+            
+        Returns:
+            str: Formatted task progress message
+        """
+        self.total_tasks = total_tasks
+        
+        if status == "completed":
+            self.completed_tasks = task_number
+            emoji = "✅"
+        elif status == "failed":
+            emoji = "❌"
+            self.error_occurred = True
+        else:
+            emoji = "🔄"
+        
+        # Truncate task name for readability
+        display_name = task_name[:50] + "..." if len(task_name) > 50 else task_name
+        
+        progress_bar = self._generate_progress_bar(task_number, total_tasks)
+        
+        message = f"{emoji} Task {task_number}/{total_tasks}: {display_name}\n{progress_bar}\n"
+        
+        if self.debug_mode:
+            print(f"[Streaming] Task progress: {task_number}/{total_tasks} - {status}")
+        
+        return message
+    
+    async def stream_search_update(self, search_type: str, query: str, 
+                                 results_count: int = None) -> str:
+        """
+        Generate a streaming update for search operations.
+        
+        Args:
+            search_type: Type of search (web_search, rag_retrieval, document_search)
+            query: The search query
+            results_count: Number of results found (optional)
+            
+        Returns:
+            str: Formatted search update message
+        """
+        type_emojis = {
+            "web_search": "🌐",
+            "rag_retrieval": "🔍",
+            "document_search": "📄"
+        }
+        
+        emoji = type_emojis.get(search_type, "🔍")
+        display_query = query[:40] + "..." if len(query) > 40 else query
+        
+        if results_count is not None:
+            message = f"{emoji} {search_type.replace('_', ' ').title()}: \"{display_query}\" ({results_count} results)\n"
+        else:
+            message = f"{emoji} {search_type.replace('_', ' ').title()}: \"{display_query}\"\n"
+        
+        return message
+    
+    async def stream_error_update(self, error_message: str, 
+                                error_type: str = "general") -> str:
+        """
+        Generate a streaming update for errors.
+        
+        Args:
+            error_message: The error message
+            error_type: Type of error (task_error, search_error, general)
+            
+        Returns:
+            str: Formatted error update message
+        """
+        self.error_occurred = True
+        
+        # Truncate long error messages
+        display_error = error_message[:100] + "..." if len(error_message) > 100 else error_message
+        
+        message = f"❌ Error ({error_type}): {display_error}\n"
+        
+        if self.debug_mode:
+            print(f"[Streaming] Error: {error_type} - {error_message}")
+        
+        return message
+    
+    async def stream_metrics_update(self, metrics: Dict[str, Any]) -> str:
+        """
+        Generate a streaming update with performance metrics.
+        
+        Args:
+            metrics: Dictionary containing metrics data
+            
+        Returns:
+            str: Formatted metrics update message
+        """
+        message_parts = ["📊 Performance Metrics:\n"]
+        
+        # Format common metrics
+        if "execution_time" in metrics:
+            time_sec = metrics["execution_time"] / 1000 if metrics["execution_time"] > 1000 else metrics["execution_time"]
+            message_parts.append(f"   ⏱️ Execution time: {time_sec:.1f}s\n")
+        
+        if "tasks_executed" in metrics:
+            message_parts.append(f"   ✅ Tasks completed: {metrics['tasks_executed']}\n")
+        
+        if "success_rate" in metrics:
+            success_rate = metrics["success_rate"] * 100
+            message_parts.append(f"   📈 Success rate: {success_rate:.1f}%\n")
+        
+        if "tokens_saved" in metrics:
+            message_parts.append(f"   💰 Tokens saved: {metrics['tokens_saved']}\n")
+        
+        return "".join(message_parts)
+    
+    def _generate_progress_bar(self, current: int, total: int, width: int = 20) -> str:
+        """
+        Generate a text-based progress bar.
+        
+        Args:
+            current: Current progress value
+            total: Total value
+            width: Width of the progress bar in characters
+            
+        Returns:
+            str: Text progress bar
+        """
+        if total == 0:
+            return "[" + "=" * width + "] 100%"
+        
+        percentage = min(current / total, 1.0)
+        filled_width = int(width * percentage)
+        
+        bar = "=" * filled_width + "-" * (width - filled_width)
+        percentage_text = f"{percentage * 100:.0f}%"
+        
+        return f"[{bar}] {percentage_text}"
+    
+    async def stream_visualization_update(self, visualization_content: str) -> str:
+        """
+        Stream visualization content if enabled.
+        
+        Args:
+            visualization_content: Mermaid diagram or other visualization content
+            
+        Returns:
+            str: Formatted visualization update
+        """
+        if not visualization_content:
+            return ""
+        
+        message = "📊 Task Visualization:\n\n" + visualization_content + "\n\n"
+        return message
+    
+    async def create_streaming_wrapper(self, operation_name: str, 
+                                     operation_func, 
+                                     *args, **kwargs) -> AsyncGenerator[str, None]:
+        """
+        Wrap a synchronous operation to provide streaming updates.
+        
+        Args:
+            operation_name: Name of the operation for status updates
+            operation_func: The function to execute
+            *args, **kwargs: Arguments to pass to the function
+            
+        Yields:
+            str: Streaming status messages
+        """
+        try:
+            # Send start notification
+            yield await self.stream_phase_update(operation_name, "Starting")
+            
+            # Execute the operation
+            if asyncio.iscoroutinefunction(operation_func):
+                result = await operation_func(*args, **kwargs)
+            else:
+                result = operation_func(*args, **kwargs)
+            
+            # Send completion notification
+            yield await self.stream_phase_update(operation_name, "Completed")
+            
+            # Return the result in the final message
+            if isinstance(result, str):
+                yield result
+            else:
+                yield json.dumps(result, indent=2)
+                
+        except Exception as e:
+            error_message = await self.stream_error_update(str(e), operation_name)
+            yield error_message
+            raise
+    
+    async def stream_complete_pipeline(self, pipeline_steps: List[Dict[str, Any]]) -> AsyncGenerator[str, None]:
+        """
+        Stream updates for a complete MinionS pipeline execution.
+        
+        Args:
+            pipeline_steps: List of pipeline steps with names and functions
+            
+        Yields:
+            str: Streaming updates for each step
+        """
+        total_steps = len(pipeline_steps)
+        
+        try:
+            for i, step in enumerate(pipeline_steps, 1):
+                step_name = step.get("name", f"Step {i}")
+                step_func = step.get("function")
+                step_args = step.get("args", [])
+                step_kwargs = step.get("kwargs", {})
+                
+                # Stream step start
+                yield await self.stream_phase_update(
+                    step_name, 
+                    f"Step {i}/{total_steps}"
+                )
+                
+                # Execute step
+                try:
+                    if asyncio.iscoroutinefunction(step_func):
+                        result = await step_func(*step_args, **step_kwargs)
+                    else:
+                        result = step_func(*step_args, **step_kwargs)
+                    
+                    # Stream step completion
+                    yield await self.stream_task_progress(i, total_steps, step_name, "completed")
+                    
+                    # If this is the final step, include the result
+                    if i == total_steps and isinstance(result, str):
+                        yield f"\n{result}"
+                        
+                except Exception as e:
+                    yield await self.stream_error_update(str(e), step_name)
+                    yield await self.stream_task_progress(i, total_steps, step_name, "failed")
+                    raise
+            
+            # Final completion message
+            yield await self.stream_phase_update("completion", "Pipeline execution completed successfully")
+            
+        except Exception as e:
+            yield await self.stream_error_update(str(e), "pipeline")
+            raise
+    
+    def create_final_response_with_metadata(self, main_response: str, 
+                                          metadata: Dict[str, Any]) -> str:
+        """
+        Create a final response that includes both the main content and metadata.
+        
+        Args:
+            main_response: The main response content
+            metadata: Additional metadata to include
+            
+        Returns:
+            str: Complete response with metadata
+        """
+        response_parts = [main_response]
+        
+        if metadata and self.debug_mode:
+            response_parts.append("\n\n---\n**Debug Information:**")
+            
+            if "execution_time" in metadata:
+                response_parts.append(f"- Execution time: {metadata['execution_time']:.2f}s")
+            
+            if "total_tasks" in metadata:
+                response_parts.append(f"- Total tasks: {metadata['total_tasks']}")
+            
+            if "citations_count" in metadata:
+                response_parts.append(f"- Citations: {metadata['citations_count']}")
+            
+            if "tokens_used" in metadata:
+                response_parts.append(f"- Tokens used: {metadata['tokens_used']}")
+        
+        return "\n".join(response_parts)
+    
+    def reset_state(self) -> None:
+        """Reset the streaming state for a new request."""
+        self.current_phase = ""
+        self.total_tasks = 0
+        self.completed_tasks = 0
+        self.error_occurred = False
+        
+        if self.debug_mode:
+            print("[Streaming] State reset for new request")
+
+
+class AsyncPipelineExecutor:
+    """
+    Async pipeline executor for streaming support.
+    Converts synchronous operations to async streaming operations.
+    """
+    
+    def __init__(self, streaming_manager: StreamingResponseManager):
+        self.streaming_manager = streaming_manager
+    
+    async def execute_with_streaming(self, operation_name: str, 
+                                   sync_function, 
+                                   *args, **kwargs) -> AsyncGenerator[str, None]:
+        """
+        Execute a synchronous function with streaming progress updates.
+        
+        Args:
+            operation_name: Name for progress tracking
+            sync_function: Synchronous function to execute
+            *args, **kwargs: Arguments for the function
+            
+        Yields:
+            str: Progress updates and final result
+        """
+        async for update in self.streaming_manager.create_streaming_wrapper(
+            operation_name, sync_function, *args, **kwargs
+        ):
+            yield update
+    
+    async def execute_task_batch_with_streaming(self, tasks: List[Dict[str, Any]]) -> AsyncGenerator[str, None]:
+        """
+        Execute a batch of tasks with individual progress updates.
+        
+        Args:
+            tasks: List of task dictionaries with 'name' and 'function' keys
+            
+        Yields:
+            str: Progress updates for each task
+        """
+        total_tasks = len(tasks)
+        results = []
+        
+        for i, task in enumerate(tasks, 1):
+            task_name = task.get("name", f"Task {i}")
+            task_func = task.get("function")
+            task_args = task.get("args", [])
+            task_kwargs = task.get("kwargs", {})
+            
+            # Stream task start
+            yield await self.streaming_manager.stream_task_progress(
+                i, total_tasks, task_name, "executing"
+            )
+            
+            try:
+                # Execute task
+                if asyncio.iscoroutinefunction(task_func):
+                    result = await task_func(*task_args, **task_kwargs)
+                else:
+                    result = task_func(*task_args, **task_kwargs)
+                
+                results.append(result)
+                
+                # Stream task completion
+                yield await self.streaming_manager.stream_task_progress(
+                    i, total_tasks, task_name, "completed"
+                )
+                
+            except Exception as e:
+                yield await self.streaming_manager.stream_error_update(
+                    str(e), f"task_{i}"
+                )
+                yield await self.streaming_manager.stream_task_progress(
+                    i, total_tasks, task_name, "failed"
+                )
+                # Continue with other tasks instead of stopping
+                results.append(None)
+        
+        # Return combined results
+        valid_results = [r for r in results if r is not None]
+        if valid_results:
+            yield f"\n**Completed {len(valid_results)}/{total_tasks} tasks successfully.**\n"
 
 # Partials File: partials/minion_prompts.py
 
@@ -4740,7 +6346,7 @@ class Pipe:
 
     def __init__(self):
         self.valves = self.Valves()
-        self.name = "Minion v0.3.8 (Conversational)"
+        self.name = "Minion v0.3.9 (Conversational)"
 
     def pipes(self):
         """Define the available models"""

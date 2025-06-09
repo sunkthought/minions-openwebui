@@ -317,3 +317,141 @@ class AnswerValidator:
             clarification += "Please provide more specific information from the document to fully address my question."
                 
         return clarification.strip()
+
+# --- v0.3.9 Open WebUI Integration Models for Minion Protocol ---
+
+class ConversationType(Enum):
+    """Types of conversational interactions for v0.3.9 Open WebUI integrations"""
+    DOCUMENT_CONVERSATION = "document_conversation"
+    WEB_ENHANCED_CONVERSATION = "web_enhanced_conversation"
+    MULTI_DOCUMENT_CONVERSATION = "multi_document_conversation"
+    HYBRID_CONVERSATION = "hybrid_conversation"
+
+class WebSearchResult(BaseModel):
+    """Result from web search integration in conversational context"""
+    query: str
+    title: str = ""
+    url: str = ""
+    snippet: str = ""
+    relevance_score: float = 0.0
+    source_domain: str = ""
+    conversation_round: int = 0  # Which round this was used in
+    
+    class Config:
+        extra = "ignore"
+
+class RAGChunk(BaseModel):
+    """RAG retrieved chunk with metadata for conversational use"""
+    content: str
+    document_id: str
+    document_name: str
+    chunk_id: str
+    relevance_score: float
+    start_position: int = 0
+    end_position: int = 0
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+    conversation_round: int = 0  # Which round this was retrieved for
+    
+    class Config:
+        extra = "ignore"
+
+class Citation(BaseModel):
+    """Citation with Open WebUI inline format support for conversations"""
+    citation_id: str
+    source_type: str  # "document", "web", "rag"
+    cited_text: str
+    formatted_citation: str
+    relevance_score: Optional[float] = None
+    source_metadata: Dict[str, Any] = Field(default_factory=dict)
+    conversation_round: int = 0  # Which round this citation was created in
+    
+    class Config:
+        extra = "ignore"
+
+class EnhancedLocalAssistantResponse(BaseModel):
+    """Enhanced local assistant response with v0.3.9 features"""
+    answer: str = Field(description="The main response to the question posed by the remote model.")
+    confidence: str = Field(description="Confidence level of the answer (e.g., HIGH, MEDIUM, LOW).")
+    key_points: Optional[List[str]] = Field(
+        default=None, 
+        description="Optional list of key points extracted from the context related to the answer."
+    )
+    citations: Optional[List[str]] = Field(
+        default=None, 
+        description="Optional list of direct quotes or citations from the context supporting the answer."
+    )
+    
+    # v0.3.9 enhancements
+    conversation_type: ConversationType = Field(default=ConversationType.DOCUMENT_CONVERSATION)
+    enhanced_citations: List[Citation] = Field(default_factory=list)
+    web_search_results: List[WebSearchResult] = Field(default_factory=list)
+    rag_chunks_used: List[RAGChunk] = Field(default_factory=list)
+    source_documents: List[str] = Field(default_factory=list)
+    
+    class Config:
+        extra = "ignore"
+
+class StreamingConversationUpdate(BaseModel):
+    """Streaming update message for conversational flow"""
+    update_type: str  # phase, round_progress, search, citation, final_answer
+    message: str
+    round_number: int = 0
+    conversation_phase: str = ""
+    timestamp: Optional[str] = None
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+    
+    class Config:
+        extra = "ignore"
+
+class DocumentReference(BaseModel):
+    """Document reference for multi-document conversations"""
+    document_id: str
+    document_name: str
+    document_type: str = "unknown"
+    size_bytes: int = 0
+    chunk_count: int = 0
+    upload_date: Optional[str] = None
+    last_accessed: Optional[str] = None
+    conversation_relevance: float = 0.0  # How relevant to current conversation
+    
+    class Config:
+        extra = "ignore"
+
+class ConversationKnowledgeBase(BaseModel):
+    """Knowledge base context for multi-document conversations"""
+    available_documents: List[DocumentReference] = Field(default_factory=list)
+    referenced_documents: List[str] = Field(default_factory=list)
+    cross_document_relationships: Dict[str, List[str]] = Field(default_factory=dict)
+    conversation_focus_documents: List[str] = Field(default_factory=list)  # Docs most relevant to current conversation
+    
+    class Config:
+        extra = "ignore"
+
+class EnhancedConversationMetrics(BaseModel):
+    """Enhanced metrics for v0.3.9 conversational execution"""
+    rounds_used: int = Field(description="Number of Q&A rounds completed in the conversation")
+    questions_asked: int = Field(description="Total number of questions asked by the remote model")
+    avg_answer_confidence: float = Field(
+        description="Average confidence score across all local model responses (0.0-1.0)"
+    )
+    total_tokens_used: int = Field(
+        default=0,
+        description="Estimated total tokens used across all API calls"
+    )
+    conversation_duration_ms: float = Field(
+        description="Total conversation duration in milliseconds"
+    )
+    completion_detected: bool = Field(
+        description="Whether the conversation ended via completion detection vs max rounds"
+    )
+    
+    # v0.3.9 enhancements
+    web_searches_performed: int = 0
+    rag_retrievals_performed: int = 0
+    citations_generated: int = 0
+    documents_accessed: int = 0
+    streaming_updates_sent: int = 0
+    conversation_type: ConversationType = ConversationType.DOCUMENT_CONVERSATION
+    
+    class Config:
+        extra = "ignore"
