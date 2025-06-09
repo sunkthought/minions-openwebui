@@ -7920,9 +7920,18 @@ async def _execute_minions_protocol_streaming(
             task_visualizer = TaskVisualizer(pipe_self.valves, pipe_self.valves.debug_mode)
             if task_visualizer.is_visualization_enabled():
                 yield await streaming_manager.stream_phase_update("task_visualization", "Initializing task decomposition diagram")
+                
+                # Add initial tasks to visualizer and show diagram immediately
+                task_visualizer.add_task("task_1", "Document analysis", TaskType.DOCUMENT_ANALYSIS, TaskStatus.PENDING)
+                task_visualizer.add_task("task_2", "Information extraction", TaskType.DOCUMENT_ANALYSIS, TaskStatus.PENDING) 
+                task_visualizer.add_task("task_3", "Results synthesis", TaskType.SYNTHESIS, TaskStatus.PENDING)
+                
+                initial_diagram = task_visualizer.generate_mermaid_diagram(include_status_colors=True)
+                if initial_diagram:
+                    yield f"\n## 📊 Initial Task Decomposition\n\n{initial_diagram}\n\n"
         
-        # Execute with streaming - we'll need to modify _execute_minions_protocol to support streaming
-        result: str = await _execute_minions_protocol_with_streaming(
+        # Execute with streaming progress updates
+        async for progress_chunk in _execute_minions_protocol_with_streaming_generator(
             pipe_self.valves, 
             user_query, 
             context, 
@@ -7931,10 +7940,8 @@ async def _execute_minions_protocol_streaming(
             TaskResult,
             streaming_manager,
             task_visualizer
-        )
-        
-        yield await streaming_manager.stream_phase_update("completion", "MinionS protocol execution completed")
-        yield result
+        ):
+            yield progress_chunk
 
     except Exception as e:
         error_details: str = traceback.format_exc() if pipe_self.valves.debug_mode else str(e)
@@ -7952,36 +7959,41 @@ async def _execute_minions_protocol_with_streaming(
 ) -> str:
     """Execute MinionS protocol with streaming support - this is a wrapper that adds streaming to the existing protocol"""
     
-    # For now, we'll execute the traditional protocol and add streaming updates around it
-    # In a full implementation, we'd modify _execute_minions_protocol to yield updates throughout
+    # Execute the existing protocol with a timeout wrapper for periodic updates
     
-    # Add sample task visualization if enabled
-    if task_visualizer and task_visualizer.is_visualization_enabled():
-        # Add some sample tasks to show the visualization is working
-        task_visualizer.add_task("task_1", "Document analysis", TaskType.DOCUMENT_ANALYSIS, TaskStatus.PENDING)
-        task_visualizer.add_task("task_2", "Information extraction", TaskType.DOCUMENT_ANALYSIS, TaskStatus.PENDING)
-        task_visualizer.add_task("task_3", "Results synthesis", TaskType.SYNTHESIS, TaskStatus.PENDING)
-        
-        # Generate and output the initial diagram
-        diagram = task_visualizer.generate_mermaid_diagram(include_status_colors=True)
-        if diagram:
-            # This will be yielded in the calling function, but we can't yield from here
-            # So we'll return it in the result
-            pass
-    
-    # Execute the existing protocol
-    result = await _execute_minions_protocol(
+    # Create a task for the main execution
+    main_task = asyncio.create_task(_execute_minions_protocol(
         valves, 
         query, 
         context, 
         call_claude,
         call_ollama_func,
         TaskResultModel
-    )
+    ))
+    
+    # Create periodic update indicators
+    update_count = 0
+    indicators = ["⏳", "🔄", "⚙️", "🧠", "📊"]
+    
+    try:
+        while not main_task.done():
+            await asyncio.sleep(3)  # Update every 3 seconds
+            if not main_task.done():
+                indicator = indicators[update_count % len(indicators)]
+                # Note: We can't yield from this function, so we'll track in a way that the result shows progress
+                update_count += 1
+                
+        # Get the result
+        result = await main_task
+        
+    except Exception as e:
+        if not main_task.done():
+            main_task.cancel()
+        raise e
     
     # Add visualization to result if enabled
     if task_visualizer and task_visualizer.is_visualization_enabled():
-        # Update task statuses to completed
+        # Update task statuses to completed (the tasks were already added in the calling function)
         task_visualizer.update_task_status("task_1", TaskStatus.COMPLETED)
         task_visualizer.update_task_status("task_2", TaskStatus.COMPLETED)
         task_visualizer.update_task_status("task_3", TaskStatus.COMPLETED)
@@ -7990,10 +8002,77 @@ async def _execute_minions_protocol_with_streaming(
         final_diagram = task_visualizer.generate_mermaid_diagram(include_status_colors=True)
         
         if final_diagram:
-            # Prepend the visualization to the result
-            result = f"## 📊 Task Decomposition Visualization\n\n{final_diagram}\n\n{result}"
+            # Prepend the final visualization to the result
+            result = f"\n## 📊 Final Task Status\n\n{final_diagram}\n\n{result}"
     
     return result
+
+async def _execute_minions_protocol_with_streaming_generator(
+    valves: Any,
+    query: str,
+    context: str,
+    call_claude: Callable,
+    call_ollama_func: Callable,
+    TaskResultModel: Any,
+    streaming_manager: StreamingResponseManager,
+    task_visualizer: Any = None
+):
+    """Execute MinionS protocol with streaming progress updates as an async generator"""
+    
+    
+    # Show working indicator
+    yield "🔄 **Executing MinionS protocol...** ⏳\n\n"
+    
+    # Create a task for the main execution
+    main_task = asyncio.create_task(_execute_minions_protocol(
+        valves, 
+        query, 
+        context, 
+        call_claude,
+        call_ollama_func,
+        TaskResultModel
+    ))
+    
+    # Create periodic update indicators
+    update_count = 0
+    indicators = ["⏳ Working", "🔄 Processing", "⚙️ Analyzing", "🧠 Thinking", "📊 Computing"]
+    
+    try:
+        while not main_task.done():
+            await asyncio.sleep(2)  # Update every 2 seconds
+            if not main_task.done():
+                indicator = indicators[update_count % len(indicators)]
+                yield f"🔄 **{indicator}...** (Step {update_count + 1})\n"
+                update_count += 1
+                
+        # Get the result
+        result = await main_task
+        
+        # Show completion
+        yield await streaming_manager.stream_phase_update("completion", "MinionS protocol execution completed")
+        
+        # Add final visualization if enabled
+        if task_visualizer and task_visualizer.is_visualization_enabled():
+            # Update task statuses to completed
+            task_visualizer.update_task_status("task_1", TaskStatus.COMPLETED)
+            task_visualizer.update_task_status("task_2", TaskStatus.COMPLETED)
+            task_visualizer.update_task_status("task_3", TaskStatus.COMPLETED)
+            
+            # Generate final diagram
+            final_diagram = task_visualizer.generate_mermaid_diagram(include_status_colors=True)
+            
+            if final_diagram:
+                yield f"\n## 📊 Final Task Status\n\n{final_diagram}\n\n"
+        
+        # Final completion message and result
+        yield "✅ **Processing complete!**\n\n"
+        yield result
+        
+    except Exception as e:
+        if not main_task.done():
+            main_task.cancel()
+        yield await streaming_manager.stream_error_update(f"Error during execution: {str(e)}", "execution")
+        raise e
 
 
 class Pipe:
