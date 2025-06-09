@@ -57,5 +57,70 @@
     ],
     "specific_imports_map": {},
     "execute_protocol_dependencies_map": {}
+  },
+  "minion_v037": {
+    "description": "Minion v0.3.7 with new modular architecture and improved error handling.",
+    "output_filename_template": "{profile_name}_function.py",
+    "target_pipe_class_name": "Pipe",
+    "target_pipe_name_in_init": "Minion v0.3.7 (Modular)",
+    "target_pipe_id_in_init": "minion-claude-v037",
+    "header_placeholders": {
+      "TITLE": "Minion Protocol Integration for Open WebUI v0.3.7",
+      "AUTHOR": "Wil Everts and the @SunkThought team",
+      "VERSION": "0.3.7",
+      "DESCRIPTION": "Enhanced Minion protocol with modular architecture, improved error handling, and structured debugging",
+      "REQUIRED_OPEN_WEBUI_VERSION": "0.5.0"
+    },
+    "partials_concat_order": [
+      "common_header.py",
+      "imports_registry.py",
+      "constants.py",
+      "error_handling.py",
+      "debug_utils.py",
+      "protocol_base.py",
+      "protocol_state.py",
+      "minion_models.py",
+      "minion_valves.py",
+      "common_api_calls.py",
+      "common_context_utils.py",
+      "common_file_processing.py",
+      "minion_prompts.py",
+      "minion_protocol_logic.py",
+      "minion_pipe_method.py"
+    ]
+  },
+  "minions_v037": {
+    "description": "MinionS v0.3.7 with new modular architecture and improved error handling.",
+    "output_filename_template": "{profile_name}_function.py",
+    "target_pipe_class_name": "Pipe",
+    "target_pipe_name_in_init": "MinionS v0.3.7 (Modular)",
+    "target_pipe_id_in_init": "minions-claude-v037",
+    "header_placeholders": {
+      "TITLE": "MinionS Protocol Integration for Open WebUI v0.3.7",
+      "AUTHOR": "Wil Everts and the @SunkThought team",
+      "VERSION": "0.3.7",
+      "DESCRIPTION": "Enhanced MinionS protocol with modular architecture, improved error handling, and structured debugging",
+      "REQUIRED_OPEN_WEBUI_VERSION": "0.5.0"
+    },
+    "partials_concat_order": [
+      "common_header.py",
+      "imports_registry.py",
+      "constants.py",
+      "error_handling.py",
+      "debug_utils.py",
+      "protocol_base.py",
+      "protocol_state.py",
+      "minions_models.py",
+      "minions_valves.py",
+      "common_api_calls.py",
+      "common_context_utils.py",
+      "common_file_processing.py",
+      "minions_prompts.py",
+      "minions_decomposition_logic.py",
+      "minions_protocol_logic.py",
+      "minion_sufficiency_analyzer.py",
+      "minion_convergence_detector.py",
+      "minions_pipe_method.py"
+    ]
   }
 }
