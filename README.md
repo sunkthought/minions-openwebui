@@ -63,14 +63,8 @@ Once Open WebUI is running:
     *   In this repository (`SunkThought/minions-openwebui`), navigate to the `generated_functions/` directory.
     *   Choose the function file based on your preference:
         *   **Latest v0.3.8 (Current)**:
-            *   For Minion protocol: `minion_v037_function.py` 
-            *   For MinionS protocol: `minions_v037_function.py`
-        *   **Default v0.3.7 (Enhanced)**:
-            *   For Minion protocol: `minion_default_function.py`
-            *   For MinionS protocol: `minions_default_function.py`
-        *   **Legacy v0.3.6 (Stable)**:
-            *   For Minion protocol: `minion_default_old_function.py`
-            *   For MinionS protocol: `minions_default_old_function.py`
+            *   For Minion protocol: `minion_function_038.py` 
+            *   For MinionS protocol: `minions_function_038.py`
     *   Copy the **entire content** of this file.
     *   Paste it into the import dialog in Open WebUI.
 4.  Click **Import** to add the function.
