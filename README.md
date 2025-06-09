@@ -59,12 +59,12 @@ Once Open WebUI is running:
 3.  **Paste Function Code**:
     *   In this repository (`SunkThought/minions-openwebui`), navigate to the `generated_functions/` directory.
     *   Choose the function file based on your preference:
-        *   **Recommended v0.3.7 (Enhanced)**:
-            *   For Minion protocol: `minion_v037_function.py` 
-            *   For MinionS protocol: `minions_v037_function.py`
-        *   **Legacy v0.3.6 (Stable)**:
+        *   **Default v0.3.7 (Enhanced)**:
             *   For Minion protocol: `minion_default_function.py`
             *   For MinionS protocol: `minions_default_function.py`
+        *   **Legacy v0.3.6 (Stable)**:
+            *   For Minion protocol: `minion_default_old_function.py`
+            *   For MinionS protocol: `minions_default_old_function.py`
     *   Copy the **entire content** of this file.
     *   Paste it into the import dialog in Open WebUI.
 4.  Click **Import** to add the function.
@@ -258,24 +258,24 @@ Both Minion and MinionS are designed for collaborative AI, but they employ diffe
 
 By understanding these differences, you can choose the protocol that best fits the complexity and nature of your task when using these functions in Open WebUI.
 
-### Choosing Between v0.3.6 and v0.3.7
+### Choosing Between v0.3.7 and v0.3.6
 
-#### v0.3.7 (Recommended)
+#### v0.3.7 (Default/Recommended)
 - **Enhanced architecture** with modular design for better maintainability
 - **Improved error handling** with context-aware messages and troubleshooting hints
 - **Structured debugging** with hierarchical logging and performance metrics
 - **Centralized constants** for easier customization
 - **Better code organization** for future development and modifications
-- Use profiles: `minion_v037` and `minions_v037`
+- Use profiles: `minion_default` and `minions_default` (default)
 
 #### v0.3.6 (Legacy/Stable)
 - **Proven stability** with extensive testing in production environments
 - **Simpler architecture** for users who prefer the traditional approach
 - **Smaller file sizes** due to less comprehensive utility modules
 - **Established workflows** for users already familiar with the codebase
-- Use profiles: `minion_default` and `minions_default`
+- Use profiles: `minion_default_old` and `minions_default_old`
 
-**Recommendation**: Use v0.3.7 for new deployments to benefit from improved architecture and enhanced features. Continue with v0.3.6 if you have existing stable deployments and prefer not to change.
+**Recommendation**: v0.3.7 is now the default for all new function generation. Use v0.3.6 only if you need compatibility with existing deployments or prefer the simpler architecture.
 
 ### What's New in Version 0.3.6b
 
@@ -322,22 +322,22 @@ The Minion and MinionS functions in this repository are not static; they are dyn
 
 You can generate different versions of Minion and MinionS functions:
 
-#### Default Functions (Legacy v0.3.6)
+#### Default Functions (v0.3.7 Enhanced)
 ```bash
-# Generates minion_default_function.py using the 'minion_default' profile
+# Generates minion_default_function.py using the enhanced v0.3.7 modular architecture
 python generator_script.py minion
 
-# Generates minions_default_function.py using the 'minions_default' profile
+# Generates minions_default_function.py using the enhanced v0.3.7 modular architecture
 python generator_script.py minions
 ```
 
-#### Enhanced v0.3.7 Functions (Recommended)
+#### Legacy Functions (v0.3.6 Stable)
 ```bash
-# Generates minion_v037_function.py with modular architecture
-python generator_script.py minion --profile minion_v037
+# Generates minion_default_old_function.py with legacy architecture
+python generator_script.py minion --profile minion_default_old
 
-# Generates minions_v037_function.py with modular architecture
-python generator_script.py minions --profile minions_v037
+# Generates minions_default_old_function.py with legacy architecture
+python generator_script.py minions --profile minions_default_old
 ```
 
 The output files will be placed in the `generated_functions/` directory.
