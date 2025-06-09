@@ -6364,6 +6364,7 @@ class Pipe:
         __request__: Request,
         __files__: List[dict] = [],
         __pipe_id__: str = "minion-claude",
-    ) -> str:
+    ) -> AsyncGenerator[str, None]:
         """Execute the Minion protocol with Claude"""
-        return await minion_pipe(self, body, __user__, __request__, __files__, __pipe_id__)
+        async for chunk in minion_pipe(self, body, __user__, __request__, __files__, __pipe_id__):
+            yield chunk

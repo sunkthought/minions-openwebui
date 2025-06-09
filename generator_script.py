@@ -155,9 +155,10 @@ class Pipe:
         __request__: Request,
         __files__: List[dict] = [],
         __pipe_id__: str = "{pipe_id}",
-    ) -> str:
+    ) -> AsyncGenerator[str, None]:
         """Execute the {'Minion' if function_type == 'minion' else 'MinionS'} protocol with Claude"""
-        return await {pipe_method}(self, body, __user__, __request__, __files__, __pipe_id__)'''
+        async for chunk in {pipe_method}(self, body, __user__, __request__, __files__, __pipe_id__):
+            yield chunk'''
     
     return class_def
 
