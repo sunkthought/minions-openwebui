@@ -1,3 +1,6 @@
+# Warning: THIS SOFTWARE WAS HEAVILY AI GENERATED
+Use at your own risk. Any voluntary submissions by humans greatly accepted.
+
 # Collaborative AI with Minion and MinionS for Open WebUI
 
 This repository provides an implementation of the Minion and MinionS protocols, designed by HazyResearch, tailored for use as **Functions** within the [Open WebUI](https://github.com/open-webui/open-webui) platform. These protocols enable sophisticated collaboration between local AI models (e.g., Ollama) and powerful remote AI models (e.g., Anthropic's Claude) to tackle complex tasks.
