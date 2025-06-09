@@ -1,5 +1,5 @@
 # Warning: THIS SOFTWARE WAS HEAVILY AI GENERATED
-Use at your own risk. Any voluntary submissions by humans greatly accepted.
+Use at your own risk. Any voluntary testing, reporting of issues and successed, and submissions by humans greatly accepted. Currently there are a LOT of user valves you can tweak in your testing, this is because I still need to do a ton of testing to find the baseline "good" zones, after which I think some of these can be put into the function generation config for power users. Feel free to tweak with these to your content.
 
 # Collaborative AI with Minion and MinionS for Open WebUI
 
