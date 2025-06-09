@@ -125,8 +125,10 @@ class QuestionDeduplicator:
         
         # Check for semantic similarity (simplified approach)
         for idx, prev_normalized in enumerate(self.question_embeddings):
-            if self._calculate_similarity(normalized, prev_normalized) > self.similarity_threshold:
-                return True, self.asked_questions[idx]
+            # Safety check to prevent IndexError
+            if idx < len(self.asked_questions):
+                if self._calculate_similarity(normalized, prev_normalized) > self.similarity_threshold:
+                    return True, self.asked_questions[idx]
                 
         return False, None
         
