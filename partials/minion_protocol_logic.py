@@ -158,7 +158,6 @@ async def _execute_minion_protocol(
     valves: Any,
     query: str,
     context: str,
-    call_claude_func: Callable,
     call_ollama_func: Callable,
     LocalAssistantResponseModel: Any,
     ConversationStateModel: Any = None,
@@ -284,7 +283,7 @@ Respond with "FINAL ANSWER READY." followed by your synthesized answer. Do NOT a
         try:
             if valves.debug_mode: 
                 start_time_claude = asyncio.get_event_loop().time()
-            claude_response = await call_claude_func(valves, claude_prompt_for_this_round)
+            claude_response = await call_supervisor_model(valves, claude_prompt_for_this_round)
             if valves.debug_mode:
                 end_time_claude = asyncio.get_event_loop().time()
                 time_taken_claude = end_time_claude - start_time_claude

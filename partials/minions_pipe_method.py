@@ -5,7 +5,7 @@ from enum import Enum # Ensured Enum is present
 from typing import Any, List, Callable, Dict
 from fastapi import Request
 
-from .common_api_calls import call_claude, call_ollama
+from .common_api_calls import call_claude, call_ollama, call_supervisor_model
 from .minions_protocol_logic import execute_tasks_on_chunks, calculate_token_savings
 from .common_file_processing import create_chunks
 from .minions_models import TaskResult, RoundMetrics # Import RoundMetrics
@@ -94,9 +94,9 @@ class QueryComplexityClassifier:
 # --- Content from common_query_utils.py END ---
 
 
-async def _call_claude_directly(valves: Any, query: str, call_claude_func: Callable) -> str:
-    """Fallback to direct Claude call when no context is available"""
-    return await call_claude_func(valves, f"Please answer this question: {query}")
+async def _call_supervisor_directly(valves: Any, query: str) -> str:
+    """Fallback to direct supervisor call when no context is available"""
+    return await call_supervisor_model(valves, f"Please answer this question: {query}")
 
 async def _execute_minions_protocol(
     valves: Any,
@@ -229,7 +229,7 @@ async def _execute_minions_protocol(
         if valves.debug_mode: 
             start_time_claude = asyncio.get_event_loop().time()
         try:
-            final_response = await _call_claude_directly(valves, query, call_claude_func=call_claude)
+            final_response = await _call_supervisor_directly(valves, query)
             if valves.debug_mode:
                 end_time_claude = asyncio.get_event_loop().time()
                 time_taken_claude = end_time_claude - start_time_claude
@@ -265,7 +265,6 @@ async def _execute_minions_protocol(
         # Note: now returns three values instead of two
         tasks, claude_response_for_decomposition, decomposition_prompt = await decompose_task(
             valves=valves,
-            call_claude_func=call_claude,
             query=query,
             scratchpad_content=scratchpad_content,
             num_chunks=len(chunks),
@@ -798,8 +797,11 @@ async def minions_pipe_method(
     """Execute the MinionS protocol with Claude"""
     try:
         # Validate configuration
-        if not pipe_self.valves.anthropic_api_key:
-            return "❌ **Error:** Please configure your Anthropic API key (and Ollama settings if applicable) in the function settings."
+        provider = getattr(pipe_self.valves, 'supervisor_provider', 'anthropic')
+        if provider == 'anthropic' and not pipe_self.valves.anthropic_api_key:
+            return "❌ **Error:** Please configure your Anthropic API key in the function settings."
+        elif provider == 'openai' and not pipe_self.valves.openai_api_key:
+            return "❌ **Error:** Please configure your OpenAI API key in the function settings."
 
         # Extract user message and context
         messages: List[Dict[str, Any]] = body.get("messages", [])
@@ -821,11 +823,12 @@ async def minions_pipe_method(
 
         context: str = "\n\n".join(all_context_parts) if all_context_parts else ""
 
-        # If no context, make a direct call to Claude
+        # If no context, make a direct call to supervisor
         if not context:
-            direct_response = await _call_claude_directly(pipe_self.valves, user_query, call_claude_func=call_claude)
+            direct_response = await _call_supervisor_directly(pipe_self.valves, user_query)
+            provider_name = getattr(pipe_self.valves, 'supervisor_provider', 'anthropic').title()
             return (
-                "ℹ️ **Note:** No significant context detected. Using standard Claude response.\n\n"
+                f"ℹ️ **Note:** No significant context detected. Using standard {provider_name} response.\n\n"
                 + direct_response
             )
 

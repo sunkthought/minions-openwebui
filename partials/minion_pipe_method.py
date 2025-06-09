@@ -3,15 +3,15 @@ import asyncio
 from typing import Any, List, Callable, Dict
 from fastapi import Request
 
-from .common_api_calls import call_claude, call_ollama
+from .common_api_calls import call_claude, call_ollama, call_supervisor_model
 from .minion_protocol_logic import _execute_minion_protocol
 from .minion_models import LocalAssistantResponse, ConversationState, QuestionDeduplicator, ConversationFlowController, AnswerValidator # Import all models
 from .common_context_utils import extract_context_from_messages, extract_context_from_files
 from .common_file_processing import create_chunks
 
-async def _call_claude_directly(valves: Any, query: str, call_claude_func: Callable) -> str: # Renamed for clarity
-    """Fallback to direct Claude call when no context is available"""
-    return await call_claude_func(valves, f"Please answer this question: {query}")
+async def _call_supervisor_directly(valves: Any, query: str) -> str:
+    """Fallback to direct supervisor call when no context is available"""
+    return await call_supervisor_model(valves, f"Please answer this question: {query}")
 
 async def _execute_simplified_chunk_protocol(
     valves: Any,
@@ -19,7 +19,6 @@ async def _execute_simplified_chunk_protocol(
     context: str,
     chunk_num: int,
     total_chunks: int,
-    call_claude_func: Callable,
     call_ollama_func: Callable,
     LocalAssistantResponseModel: Any,
     shared_state: Any = None,
@@ -47,15 +46,15 @@ Be concise and focused since this is one chunk of a larger analysis.
 Ask your first question about this chunk:"""
 
     try:
-        # Round 1: Get Claude's question
-        claude_response = await call_claude_func(valves, claude_prompt)
+        # Round 1: Get supervisor's question
+        supervisor_response = await call_supervisor_model(valves, claude_prompt)
         
         if valves.show_conversation:
-            conversation_log.append(f"**🤖 Remote Model (Chunk {chunk_num}):** {claude_response}")
+            conversation_log.append(f"**🤖 Remote Model (Chunk {chunk_num}):** {supervisor_response}")
         
         # Get local response
         from .minion_prompts import get_minion_local_prompt
-        local_prompt = get_minion_local_prompt(context, query, claude_response, valves)
+        local_prompt = get_minion_local_prompt(context, query, supervisor_response, valves)
         
         local_response_str = await call_ollama_func(
             valves,
@@ -86,7 +85,7 @@ Provide a brief summary of what this chunk (#{chunk_num} of {total_chunks}) cont
 
 Keep it concise since this is just one part of a larger document analysis."""
 
-        final_response = await call_claude_func(valves, synthesis_prompt)
+        final_response = await call_supervisor_model(valves, synthesis_prompt)
         
         if valves.show_conversation:
             conversation_log.append(f"**🎯 Chunk Summary:** {final_response}")
@@ -113,8 +112,11 @@ async def minion_pipe(
     """Execute the Minion protocol with Claude"""
     try:
         # Validate configuration
-        if not pipe_self.valves.anthropic_api_key: # Add ollama key check if necessary
+        provider = getattr(pipe_self.valves, 'supervisor_provider', 'anthropic')
+        if provider == 'anthropic' and not pipe_self.valves.anthropic_api_key:
             return "❌ **Error:** Please configure your Anthropic API key in the function settings."
+        elif provider == 'openai' and not pipe_self.valves.openai_api_key:
+            return "❌ **Error:** Please configure your OpenAI API key in the function settings."
 
         # Extract user message and context
         messages: List[Dict[str, Any]] = body.get("messages", [])
@@ -137,10 +139,10 @@ async def minion_pipe(
         context: str = "\n\n".join(all_context_parts) if all_context_parts else ""
 
         if not context:
-            # Pass the imported call_claude to _call_claude_directly
-            direct_response = await _call_claude_directly(pipe_self.valves, user_query, call_claude_func=call_claude)
+            direct_response = await _call_supervisor_directly(pipe_self.valves, user_query)
+            provider_name = getattr(pipe_self.valves, 'supervisor_provider', 'anthropic').title()
             return (
-                "ℹ️ **Note:** No significant context detected. Using standard Claude response.\n\n"
+                f"ℹ️ **Note:** No significant context detected. Using standard {provider_name} response.\n\n"
                 + direct_response
             )
 
@@ -157,7 +159,6 @@ async def minion_pipe(
                 valves=pipe_self.valves, 
                 query=user_query, 
                 context=combined_context, 
-                call_claude_func=call_claude,
                 call_ollama_func=call_ollama,
                 LocalAssistantResponseModel=LocalAssistantResponse,
                 ConversationStateModel=ConversationState,
@@ -189,7 +190,6 @@ async def minion_pipe(
                         context=chunk,
                         chunk_num=i+1,
                         total_chunks=len(chunks),
-                        call_claude_func=call_claude,
                         call_ollama_func=call_ollama,
                         LocalAssistantResponseModel=LocalAssistantResponse,
                         shared_state=conversation_state,
@@ -225,7 +225,7 @@ Provide your final comprehensive answer:"""
                     if pipe_self.valves.debug_mode:
                         print(f"DEBUG [Minion]: Attempting final synthesis (attempt {attempt + 1}/{max_retries + 1})")
                     
-                    final_answer = await call_claude(valves=pipe_self.valves, prompt=synthesis_prompt)
+                    final_answer = await call_supervisor_model(valves=pipe_self.valves, prompt=synthesis_prompt)
                     break  # Success, exit retry loop
                     
                 except Exception as e:

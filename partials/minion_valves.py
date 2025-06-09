@@ -9,12 +9,23 @@ class MinionValves(BaseModel):
     expected output format, and confidence threshold.
     """
     # Essential configuration only
+    supervisor_provider: str = Field(
+        default="anthropic", 
+        description="Provider for supervisor model: 'anthropic' or 'openai'"
+    )
     anthropic_api_key: str = Field(
         default="", description="Anthropic API key for the remote model (e.g., Claude)"
     )
+    openai_api_key: str = Field(
+        default="", description="OpenAI API key"
+    )
     remote_model: str = Field(
         default="claude-3-5-haiku-20241022",
-        description="Remote model identifier (e.g., for Anthropic: claude-3-5-haiku-20241022 for cost efficiency, claude-3-5-sonnet-20241022 for quality)",
+        description="Remote model identifier (e.g., for Anthropic: claude-3-5-haiku-20241022 for cost efficiency, claude-3-5-sonnet-20241022 for quality; for OpenAI: gpt-4o, gpt-4-turbo, gpt-4)",
+    )
+    openai_model: str = Field(
+        default="gpt-4o", 
+        description="OpenAI model to use when supervisor_provider is 'openai'"
     )
     ollama_base_url: str = Field(
         default="http://localhost:11434", description="Ollama server URL"

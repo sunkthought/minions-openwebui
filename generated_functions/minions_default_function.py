@@ -1,28 +1,2755 @@
 """
-title: MinionS Protocol Integration for Open WebUI
+title: MinionS Protocol Integration for Open WebUI v0.3.8
 author: Wil Everts and the @SunkThought team
 author_url: https://github.com/SunkThought/minions-openwebui
 original_author: Copyright (c) 2025 Sabri Eyuboglu, Avanika Narayan, Dan Biderman, and the rest of the Minions team (@HazyResearch wrote the original MinionS Protocol paper and code examples on github that spawned this)
 original_author_url: https://github.com/HazyResearch/
 funding_url: https://github.com/HazyResearch/minions
-version: 0.3.5b
-description: MinionS protocol - task decomposition and parallel processing between local and cloud models
+version: 0.3.8
+description: Enhanced MinionS protocol with OpenAI API support, scaling strategies, and adaptive round control
 required_open_webui_version: 0.5.0
 license: MIT License
 """
 
 
-# Partials File: partials/common_imports.py
+# Centralized imports for v0.3.8 modular architecture
+
+# Standard library imports
 import asyncio
-import aiohttp
 import json
-from typing import List, Optional, Dict, Any, Tuple, Callable, Awaitable
-from pydantic import BaseModel, Field
-from fastapi import Request # type: ignore
+import re
+import hashlib
+import traceback
+import inspect
+import time
+from abc import ABC, abstractmethod
+from contextlib import contextmanager
+from dataclasses import dataclass, field
+from enum import Enum
+from pathlib import Path
+
+# Typing imports
+from typing import (
+    List, Dict, Any, Optional, Tuple, Callable, Awaitable, 
+    Union, Set, TypedDict, Protocol
+)
+
+# Third-party imports
+import aiohttp
+from pydantic import BaseModel, Field, ValidationError
+from fastapi import Request
+
+"""
+Centralized constants and configuration values for MinionS/Minions OpenWebUI.
+This module contains all hardcoded values, magic numbers, and configuration
+constants used across the codebase.
+"""
+
+from typing import Set, Dict, List
+from enum import Enum
+
+
+# ============================================================================
+# Model & API Configuration
+# ============================================================================
+
+class ModelDefaults:
+    """Default model names for different providers."""
+    CLAUDE_HAIKU = "claude-3-5-haiku-20241022"
+    CLAUDE_SONNET = "claude-3-5-sonnet-20241022"
+    OLLAMA_DEFAULT = "llama3.2"
+    ANTHROPIC_API_VERSION = "2023-06-01"
+
+
+class APIEndpoints:
+    """API endpoints and base URLs."""
+    OLLAMA_BASE_URL = "http://localhost:11434"
+    OLLAMA_GENERATE_ENDPOINT = "http://localhost:11434/api/generate"
+    ANTHROPIC_MESSAGES_ENDPOINT = "https://api.anthropic.com/v1/messages"
+
+
+# Models that support structured output (JSON mode)
+STRUCTURED_OUTPUT_CAPABLE_MODELS: Set[str] = {
+    "llama3.2", "llama3.1", "llama3", "llama2",
+    "mistral", "mixtral", "mistral-nemo",
+    "qwen2", "qwen2.5", 
+    "gemma2", "gemma",
+    "phi3", "phi",
+    "command-r", "command-r-plus",
+    "deepseek-coder", "deepseek-coder-v2",
+    "codellama",
+    "dolphin-llama3", "dolphin-mixtral",
+    "solar", "starling-lm",
+    "yi", "zephyr",
+    "neural-chat", "openchat"
+}
+
+
+# ============================================================================
+# Timeouts & Performance
+# ============================================================================
+
+class Timeouts:
+    """Timeout values in seconds unless otherwise specified."""
+    CLAUDE_DEFAULT = 60
+    LOCAL_DEFAULT_MINION = 60
+    LOCAL_DEFAULT_MINIONS = 30
+    MAX_COMMAND_MS = 120000  # 2 minutes in milliseconds
+    ABSOLUTE_MAX_MS = 600000  # 10 minutes in milliseconds
+
+
+class TokenLimits:
+    """Token and context length limits."""
+    MAX_TOKENS_CLAUDE_MINION = 4000
+    MAX_TOKENS_CLAUDE_MINIONS = 2000
+    OLLAMA_NUM_PREDICT_DEFAULT = 1000
+    LOCAL_MODEL_CONTEXT_LENGTH = 4096
+    CHARS_PER_TOKEN = 3.5  # Conversion ratio
+
+
+class ChunkSettings:
+    """Document chunking configuration."""
+    DEFAULT_SIZE = 5000
+    DEFAULT_MAX_CHUNKS = 2
+    MAX_LINES_PER_READ = 2000
+    MAX_OUTPUT_CHARS = 30000
+
+
+# ============================================================================
+# Processing & Round Limits
+# ============================================================================
+
+class RoundLimits:
+    """Limits for rounds and tasks."""
+    MAX_ROUNDS_DEFAULT = 2
+    MAX_TASKS_PER_ROUND = 3
+    MIN_ROUNDS_BEFORE_STOPPING = 1
+    CONVERGENCE_ROUNDS_MIN_NOVELTY = 2
+    MAX_ROUND_TIMEOUT_FAILURE_THRESHOLD_PERCENT = 50
+
+
+class QuestionLimits:
+    """Limits for different types of questions."""
+    MAX_EXPLORATION_QUESTIONS = 3
+    MAX_DEEP_DIVE_QUESTIONS = 4
+    MAX_GAP_FILLING_QUESTIONS = 2
+    MAX_CLARIFICATION_ATTEMPTS = 1
+
+
+# ============================================================================
+# Confidence & Thresholds
+# ============================================================================
+
+class ConfidenceMapping:
+    """Confidence level mappings."""
+    LEVELS = {'HIGH': 0.9, 'MEDIUM': 0.6, 'LOW': 0.3}
+    DEFAULT_NUMERIC = 0.3  # Corresponds to LOW
+    
+
+class ConfidenceThresholds:
+    """Various confidence and threshold values."""
+    DEFAULT = 0.7
+    SIMPLE_QUERY = 0.85
+    MEDIUM_QUERY = 0.75
+    CONVERGENCE_NOVELTY = 0.10
+    CONVERGENCE_SUFFICIENCY = 0.7
+    DEDUPLICATION = 0.8
+    FIRST_ROUND_HIGH_NOVELTY = 0.75
+    KEYWORD_OVERLAP_MIN = 0.2
+    HIGH_NOVELTY_PREDICTION = 0.5
+    LOW_NOVELTY_PREDICTION = 0.1
+    FAILURE_RATE_TREND_TOLERANCE = 0.05
+
+
+# ============================================================================
+# Document Size Configuration
+# ============================================================================
+
+class DocumentSizeLimits:
+    """Character limits for document size classification."""
+    SMALL_CHAR_LIMIT = 5000
+    LARGE_CHAR_START = 50000
+
+
+# ============================================================================
+# Adaptive Modifiers
+# ============================================================================
+
+class AdaptiveModifiers:
+    """Adaptive modifiers for confidence and sufficiency."""
+    CONFIDENCE_SMALL_DOC = 0.0
+    CONFIDENCE_LARGE_DOC = 0.0
+    SUFFICIENCY_SIMPLE_QUERY = 0.0
+    SUFFICIENCY_COMPLEX_QUERY = 0.0
+    NOVELTY_SIMPLE_QUERY = 0.0
+    NOVELTY_COMPLEX_QUERY = 0.0
+    SUFFICIENCY_HIGH_FIRST_ROUND_NOVELTY = -0.05
+
+
+# ============================================================================
+# Generation Parameters
+# ============================================================================
+
+class GenerationParams:
+    """Parameters for text generation."""
+    LOCAL_MODEL_TEMPERATURE = 0.7
+    CLAUDE_API_TEMPERATURE = 0.1
+    LOCAL_MODEL_TOP_K = 40
+
+
+# ============================================================================
+# Performance Profiles
+# ============================================================================
+
+class PerformanceProfiles:
+    """Available performance profiles."""
+    HIGH_QUALITY = "high_quality"
+    BALANCED = "balanced"
+    FASTEST_RESULTS = "fastest_results"
+    
+    ALL_PROFILES = [HIGH_QUALITY, BALANCED, FASTEST_RESULTS]
+    DEFAULT = BALANCED
+
+
+# ============================================================================
+# Text Constants
+# ============================================================================
+
+# Phrases that indicate completion
+COMPLETION_PHRASES = [
+    "i now have sufficient information",
+    "i can now answer",
+    "based on the information gathered",
+    "i have enough information",
+    "with this information, i can provide",
+    "i can now provide a comprehensive answer",
+    "based on what the local assistant has told me"
+]
+
+# Phrases indicating lack of information
+NON_ANSWER_PHRASES = [
+    "i don't know",
+    "not sure", 
+    "unclear",
+    "cannot determine",
+    "no information",
+    "not available",
+    "not found",
+    "not mentioned",
+    "not specified"
+]
+
+# Stop words for deduplication
+STOP_WORDS: Set[str] = {
+    "what", "is", "the", "are", "how", "does", "can", "you", "tell", "me", "about",
+    "please", "could", "would", "explain", "describe", "provide", "give", "any",
+    "there", "which", "when", "where", "who", "why", "do", "have", "has", "been",
+    "was", "were", "will", "be", "being", "a", "an", "and", "or", "but", "in",
+    "on", "at", "to", "for", "of", "with", "by", "from", "as", "this", "that"
+}
+
+
+# ============================================================================
+# Enumerations
+# ============================================================================
+
+class ConversationPhase(str, Enum):
+    """Phases of conversation in Minion protocol."""
+    EXPLORATION = "exploration"
+    DEEP_DIVE = "deep_dive"
+    GAP_FILLING = "gap_filling"
+    SYNTHESIS = "synthesis"
+
+
+class TaskStatus(str, Enum):
+    """Status values for task execution."""
+    SUCCESS = "success"
+    TIMEOUT_ALL_CHUNKS = "timeout_all_chunks"
+    NOT_FOUND = "not_found"
+
+
+class FailureTrend(str, Enum):
+    """Trends in failure rates."""
+    INCREASING = "increasing_failures"
+    DECREASING = "decreasing_failures"
+    STABLE = "stable_failures"
+
+
+class PredictedValue(str, Enum):
+    """Predicted values for analysis."""
+    HIGH = "high"
+    MEDIUM = "medium"
+    LOW = "low"
+
+
+class Severity(str, Enum):
+    """Severity levels."""
+    HIGH = "high"
+    LOW = "low"
+    NONE = "none"
+
+
+# ============================================================================
+# Numeric Limits
+# ============================================================================
+
+class NumericLimits:
+    """Various numeric limits and thresholds."""
+    MIN_TASK_LENGTH = 10
+    MAX_QUERY_WORDS_FOR_KEYWORDS = 5
+    MAX_KEYWORDS_PER_TOPIC = 3
+    MIN_WORD_LENGTH_FOR_STOP = 2
+    MAX_DEBUG_OUTPUT_CHARS = 500
+    MAX_CONVERSATION_LOG_CHARS = 100
+    MAX_ANSWER_PREVIEW_CHARS = 70
+    MAX_CLAUDE_RESPONSE_PREVIEW = 200
+
+
+# ============================================================================
+# Format & Display
+# ============================================================================
+
+class FormatOptions:
+    """Available output format options."""
+    TEXT = "text"
+    JSON = "JSON"
+    BULLET_POINTS = "bullet points"
+    DEFAULT = TEXT
+
+
+class ConfidenceLevels:
+    """Text representations of confidence levels."""
+    HIGH = "HIGH"
+    MEDIUM = "MEDIUM"
+    LOW = "LOW"
+
+
+# ============================================================================
+# System Requirements & Markers
+# ============================================================================
+
+class SystemRequirements:
+    """System version requirements."""
+    MIN_OPENWEBUI_VERSION = "0.5.0"
+    CURRENT_VERSION = "v0.3.7"
+
+
+class SpecialMarkers:
+    """Special markers and triggers in responses."""
+    FINAL_ANSWER_READY = "FINAL ANSWER READY."
+    FINAL_ANSWER_READY_ALT = "FINAL ANSWER READY:"
+    NO_INFO_MARKER = "NONE"
+    ERROR_PREFIX = "CLAUDE_ERROR:"
+
+
+# ============================================================================
+# Helper Functions
+# ============================================================================
+
+def get_profile_settings(profile: str) -> Dict[str, Any]:
+    """
+    Get settings for a specific performance profile.
+    
+    Args:
+        profile: Name of the performance profile
+        
+    Returns:
+        Dictionary of settings for the profile
+    """
+    profiles = {
+        PerformanceProfiles.HIGH_QUALITY: {
+            'max_rounds': 3,
+            'confidence_threshold': 0.65,
+            'max_tokens_claude': 4000,
+        },
+        PerformanceProfiles.BALANCED: {
+            'max_rounds': 2,
+            'confidence_threshold': 0.7,
+            'max_tokens_claude': 2000,
+        },
+        PerformanceProfiles.FASTEST_RESULTS: {
+            'max_rounds': 1,
+            'confidence_threshold': 0.75,
+            'max_tokens_claude': 1000,
+        }
+    }
+    return profiles.get(profile, profiles[PerformanceProfiles.BALANCED])
+
+
+def is_structured_output_model(model_name: str) -> bool:
+    """
+    Check if a model supports structured output.
+    
+    Args:
+        model_name: Name of the model to check
+        
+    Returns:
+        True if model supports structured output, False otherwise
+    """
+    # Check if any supported model name is in the provided model name
+    return any(supported in model_name.lower() for supported in STRUCTURED_OUTPUT_CAPABLE_MODELS)
+
+"""
+Centralized error handling for MinionS/Minions OpenWebUI functions.
+This module provides consistent error handling, formatting, and logging
+across all protocols and components.
+"""
+
+import json
+import re
+import traceback
+import asyncio
+from typing import List, Dict, Any, Optional, Callable, Union
+from pydantic import BaseModel, ValidationError
+
+
+class ErrorContext:
+    """Context information for error handling."""
+    
+    def __init__(
+        self,
+        round_num: Optional[int] = None,
+        chunk_idx: Optional[int] = None,
+        task_idx: Optional[int] = None,
+        operation: Optional[str] = None,
+        service_name: Optional[str] = None,
+        model_name: Optional[str] = None
+    ):
+        self.round_num = round_num
+        self.chunk_idx = chunk_idx
+        self.task_idx = task_idx
+        self.operation = operation
+        self.service_name = service_name
+        self.model_name = model_name
+    
+    def __str__(self) -> str:
+        """Generate context string for error messages."""
+        parts = []
+        
+        if self.operation:
+            parts.append(self.operation)
+        
+        if self.service_name:
+            parts.append(f"({self.service_name})")
+        
+        if self.round_num is not None:
+            parts.append(f"round {self.round_num + 1}")
+        
+        if self.task_idx is not None:
+            parts.append(f"task {self.task_idx + 1}")
+        
+        if self.chunk_idx is not None:
+            parts.append(f"chunk {self.chunk_idx + 1}")
+        
+        return " ".join(parts) if parts else "operation"
+
+
+class ErrorHandler:
+    """Centralized error handling with consistent formatting and logging."""
+    
+    def __init__(self, debug_mode: bool = False):
+        self.debug_mode = debug_mode
+    
+    def format_error_message(
+        self,
+        error_type: str,
+        context: Union[ErrorContext, str],
+        details: str,
+        include_emoji: bool = True
+    ) -> str:
+        """
+        Format error message with consistent structure.
+        
+        Args:
+            error_type: Type of error (e.g., "API Error", "Timeout")
+            context: Error context information
+            details: Specific error details
+            include_emoji: Whether to include emoji prefix
+            
+        Returns:
+            Formatted error message
+        """
+        emoji = "❌ " if include_emoji else ""
+        context_str = str(context) if context else "operation"
+        return f"{emoji}{error_type} in {context_str}: {details}"
+    
+    def handle_api_error(
+        self,
+        error: Exception,
+        context: ErrorContext,
+        response_text: Optional[str] = None
+    ) -> str:
+        """
+        Handle API-related errors with consistent formatting.
+        
+        Args:
+            error: The exception that occurred
+            context: Context information for the error
+            response_text: Optional API response text
+            
+        Returns:
+            Formatted error message
+        """
+        error_details = str(error)
+        
+        # Extract useful information from common API errors
+        if hasattr(error, 'status'):
+            error_details = f"HTTP {error.status}"
+            if response_text:
+                # Truncate response for readability
+                truncated_response = response_text[:200] + "..." if len(response_text) > 200 else response_text
+                error_details += f" - {truncated_response}"
+        elif "timeout" in str(error).lower():
+            error_details = "Request timed out"
+        elif "connection" in str(error).lower():
+            error_details = "Connection failed"
+        
+        return self.format_error_message("API Error", context, error_details)
+    
+    def handle_timeout_error(
+        self,
+        error: asyncio.TimeoutError,
+        context: ErrorContext,
+        timeout_duration: Optional[int] = None
+    ) -> str:
+        """
+        Handle timeout errors with duration information.
+        
+        Args:
+            error: The timeout exception
+            context: Context information for the error
+            timeout_duration: Timeout duration in seconds
+            
+        Returns:
+            Formatted error message
+        """
+        if timeout_duration:
+            details = f"Operation timed out after {timeout_duration}s"
+        else:
+            details = "Operation timed out"
+        
+        return self.format_error_message("Timeout", context, details)
+    
+    def handle_json_parse_error(
+        self,
+        error: json.JSONDecodeError,
+        response_text: str,
+        context: ErrorContext,
+        attempt_fallback: bool = True
+    ) -> tuple[str, Optional[Dict[str, Any]]]:
+        """
+        Handle JSON parsing errors with fallback mechanism.
+        
+        Args:
+            error: The JSON decode error
+            response_text: The text that failed to parse
+            context: Context information for the error
+            attempt_fallback: Whether to attempt regex fallback
+            
+        Returns:
+            Tuple of (error_message, parsed_data_if_successful)
+        """
+        error_msg = self.format_error_message(
+            "JSON Parse Error",
+            context,
+            f"Invalid JSON response: {str(error)}"
+        )
+        
+        parsed_data = None
+        
+        if attempt_fallback and response_text:
+            # Attempt regex fallback for common JSON patterns
+            parsed_data = self._json_regex_fallback(response_text)
+            if parsed_data:
+                error_msg += " (recovered using fallback parsing)"
+        
+        return error_msg, parsed_data
+    
+    def handle_validation_error(
+        self,
+        error: ValidationError,
+        context: ErrorContext,
+        data: Optional[Dict[str, Any]] = None
+    ) -> str:
+        """
+        Handle Pydantic validation errors.
+        
+        Args:
+            error: The validation error
+            context: Context information for the error
+            data: The data that failed validation
+            
+        Returns:
+            Formatted error message
+        """
+        # Extract the first error for simplicity
+        first_error = error.errors()[0] if error.errors() else {}
+        field = ".".join(str(x) for x in first_error.get('loc', []))
+        msg = first_error.get('msg', 'Validation failed')
+        
+        details = f"Field '{field}': {msg}" if field else msg
+        
+        return self.format_error_message("Validation Error", context, details)
+    
+    def handle_connection_error(
+        self,
+        error: Exception,
+        context: ErrorContext,
+        base_url: Optional[str] = None
+    ) -> str:
+        """
+        Handle connection-related errors.
+        
+        Args:
+            error: The connection exception
+            context: Context information for the error
+            base_url: The base URL that failed to connect
+            
+        Returns:
+            Formatted error message
+        """
+        details = "Connection failed"
+        
+        if base_url:
+            details += f" to {base_url}"
+        
+        if "refused" in str(error).lower():
+            details += " (connection refused)"
+        elif "timeout" in str(error).lower():
+            details += " (connection timeout)"
+        
+        return self.format_error_message("Connection Error", context, details)
+    
+    def log_error_to_conversation(
+        self,
+        message: str,
+        conversation_log: List[str]
+    ) -> None:
+        """
+        Log error message to conversation log.
+        
+        Args:
+            message: Error message to log
+            conversation_log: Conversation log list to append to
+        """
+        conversation_log.append(message)
+    
+    def log_error_to_debug(
+        self,
+        message: str,
+        debug_log: List[str],
+        error: Optional[Exception] = None,
+        include_traceback: bool = None
+    ) -> None:
+        """
+        Log error message to debug log with optional traceback.
+        
+        Args:
+            message: Error message to log
+            debug_log: Debug log list to append to
+            error: Optional exception for traceback
+            include_traceback: Whether to include traceback (defaults to debug_mode)
+        """
+        debug_log.append(f"DEBUG [ErrorHandler]: {message}")
+        
+        if include_traceback is None:
+            include_traceback = self.debug_mode
+        
+        if include_traceback and error:
+            tb_str = traceback.format_exc()
+            debug_log.append(f"DEBUG [ErrorHandler]: Full traceback:\n{tb_str}")
+    
+    def log_error(
+        self,
+        message: str,
+        conversation_log: Optional[List[str]] = None,
+        debug_log: Optional[List[str]] = None,
+        error: Optional[Exception] = None
+    ) -> None:
+        """
+        Log error to both conversation and debug logs.
+        
+        Args:
+            message: Error message to log
+            conversation_log: Optional conversation log
+            debug_log: Optional debug log
+            error: Optional exception for debug traceback
+        """
+        if conversation_log is not None:
+            self.log_error_to_conversation(message, conversation_log)
+        
+        if debug_log is not None:
+            self.log_error_to_debug(message, debug_log, error)
+    
+    def _json_regex_fallback(self, response_text: str) -> Optional[Dict[str, Any]]:
+        """
+        Attempt to extract JSON from malformed response using regex patterns.
+        
+        Args:
+            response_text: The malformed response text
+            
+        Returns:
+            Parsed JSON data if successful, None otherwise
+        """
+        # Common patterns for extracting JSON from responses
+        patterns = [
+            r'\{[^{}]*"[^"]*"[^{}]*\}',  # Simple object pattern
+            r'\{.*\}',  # Greedy object pattern
+            r'```json\s*(\{.*?\})\s*```',  # JSON code block
+            r'```\s*(\{.*?\})\s*```',  # Generic code block
+        ]
+        
+        for pattern in patterns:
+            matches = re.findall(pattern, response_text, re.DOTALL)
+            for match in matches:
+                try:
+                    return json.loads(match)
+                except json.JSONDecodeError:
+                    continue
+        
+        return None
+    
+    async def api_retry_with_backoff(
+        self,
+        api_call_func: Callable,
+        max_retries: int = 3,
+        base_delay: float = 1.0,
+        context: Optional[ErrorContext] = None
+    ) -> Any:
+        """
+        Retry API calls with exponential backoff.
+        
+        Args:
+            api_call_func: Async function to retry
+            max_retries: Maximum number of retry attempts
+            base_delay: Base delay in seconds
+            context: Error context for logging
+            
+        Returns:
+            Result of successful API call
+            
+        Raises:
+            Last exception if all retries fail
+        """
+        last_error = None
+        
+        for attempt in range(max_retries + 1):
+            try:
+                return await api_call_func()
+            except Exception as e:
+                last_error = e
+                
+                if attempt < max_retries:
+                    delay = base_delay * (2 ** attempt)
+                    if self.debug_mode and context:
+                        error_msg = f"Attempt {attempt + 1} failed, retrying in {delay}s: {str(e)}"
+                        print(f"DEBUG [ErrorHandler]: {error_msg}")
+                    await asyncio.sleep(delay)
+                else:
+                    # Final attempt failed
+                    break
+        
+        # All retries exhausted
+        if last_error:
+            raise last_error
+        else:
+            raise Exception("API retry failed with unknown error")
+    
+    def add_troubleshooting_hints(
+        self,
+        error_type: str,
+        context: ErrorContext,
+        base_url: Optional[str] = None
+    ) -> List[str]:
+        """
+        Generate troubleshooting hints based on error type.
+        
+        Args:
+            error_type: Type of error that occurred
+            context: Error context information
+            base_url: Optional base URL for connection issues
+            
+        Returns:
+            List of troubleshooting hint strings
+        """
+        hints = []
+        
+        if "timeout" in error_type.lower():
+            hints.extend([
+                "• Try increasing the timeout value in valves",
+                "• Check if the model is responding normally",
+                "• Consider using a faster model or smaller input"
+            ])
+        
+        elif "connection" in error_type.lower():
+            if base_url and "localhost" in base_url:
+                hints.extend([
+                    f"• Ensure Ollama is running on {base_url}",
+                    "• Check if the Ollama service is accessible",
+                    "• Verify the base URL in valves configuration"
+                ])
+            else:
+                hints.extend([
+                    "• Check your internet connection",
+                    "• Verify API endpoint URLs",
+                    "• Check if service is experiencing downtime"
+                ])
+        
+        elif "api" in error_type.lower():
+            if context.service_name == "Anthropic":
+                hints.extend([
+                    "• Verify your Anthropic API key is valid",
+                    "• Check if you have sufficient API credits",
+                    "• Ensure the model name is correct"
+                ])
+            elif context.service_name == "Ollama":
+                hints.extend([
+                    f"• Verify the model '{context.model_name}' is installed in Ollama",
+                    "• Check if Ollama has sufficient resources",
+                    "• Try pulling the model: ollama pull <model_name>"
+                ])
+        
+        elif "json" in error_type.lower():
+            hints.extend([
+                "• The model may not support structured output",
+                "• Try a different model or disable JSON mode",
+                "• Check if the model is properly configured"
+            ])
+        
+        return hints
+    
+    def create_comprehensive_error_report(
+        self,
+        error: Exception,
+        context: ErrorContext,
+        response_text: Optional[str] = None,
+        include_hints: bool = True
+    ) -> str:
+        """
+        Create a comprehensive error report with context and hints.
+        
+        Args:
+            error: The exception that occurred
+            context: Error context information
+            response_text: Optional response text
+            include_hints: Whether to include troubleshooting hints
+            
+        Returns:
+            Comprehensive error report string
+        """
+        # Determine error type and handle accordingly
+        if isinstance(error, asyncio.TimeoutError):
+            error_msg = self.handle_timeout_error(error, context)
+        elif isinstance(error, json.JSONDecodeError):
+            error_msg, _ = self.handle_json_parse_error(error, response_text or "", context)
+        elif isinstance(error, ValidationError):
+            error_msg = self.handle_validation_error(error, context)
+        elif "connection" in str(error).lower():
+            error_msg = self.handle_connection_error(error, context)
+        else:
+            error_msg = self.handle_api_error(error, context, response_text)
+        
+        report_parts = [error_msg]
+        
+        if include_hints:
+            hints = self.add_troubleshooting_hints(type(error).__name__, context)
+            if hints:
+                report_parts.append("\nTroubleshooting suggestions:")
+                report_parts.extend(hints)
+        
+        return "\n".join(report_parts)
+
+
+# Utility functions for common error scenarios
+def safe_json_parse(
+    text: str,
+    fallback_value: Any = None,
+    error_handler: Optional[ErrorHandler] = None,
+    context: Optional[ErrorContext] = None
+) -> tuple[Any, Optional[str]]:
+    """
+    Safely parse JSON with fallback handling.
+    
+    Args:
+        text: JSON text to parse
+        fallback_value: Value to return if parsing fails
+        error_handler: Optional error handler for logging
+        context: Optional error context
+        
+    Returns:
+        Tuple of (parsed_data, error_message)
+    """
+    try:
+        return json.loads(text), None
+    except json.JSONDecodeError as e:
+        error_msg = None
+        if error_handler and context:
+            error_msg, fallback_data = error_handler.handle_json_parse_error(e, text, context)
+            if fallback_data is not None:
+                return fallback_data, error_msg
+        
+        return fallback_value, error_msg or f"JSON parse error: {str(e)}"
+
+
+def create_error_context(
+    operation: str,
+    service_name: Optional[str] = None,
+    round_num: Optional[int] = None,
+    chunk_idx: Optional[int] = None,
+    task_idx: Optional[int] = None,
+    model_name: Optional[str] = None
+) -> ErrorContext:
+    """
+    Convenience function to create error context.
+    
+    Args:
+        operation: Description of the operation
+        service_name: Name of the service (e.g., "Anthropic", "Ollama")
+        round_num: Round number (0-indexed)
+        chunk_idx: Chunk index (0-indexed)
+        task_idx: Task index (0-indexed)
+        model_name: Name of the model being used
+        
+    Returns:
+        ErrorContext instance
+    """
+    return ErrorContext(
+        operation=operation,
+        service_name=service_name,
+        round_num=round_num,
+        chunk_idx=chunk_idx,
+        task_idx=task_idx,
+        model_name=model_name
+    )
+
+"""
+Structured debug logging utilities for MinionS/Minions OpenWebUI functions.
+This module provides centralized, consistent debug logging with context awareness
+and multiple output channels.
+"""
+
+import time
+import json
+import traceback
+from typing import List, Dict, Any, Optional, Union, Callable
+from contextlib import contextmanager
+from dataclasses import dataclass, field
+from enum import Enum
+
+
+class DebugLevel(str, Enum):
+    """Debug logging levels."""
+    ERROR = "ERROR"
+    WARNING = "WARNING" 
+    INFO = "INFO"
+    TIMING = "TIMING"
+    API = "API"
+    STATE = "STATE"
+    METRICS = "METRICS"
+    TRACE = "TRACE"
+
+
+@dataclass
+class DebugContext:
+    """Context information for debug logging."""
+    component: str
+    round_num: Optional[int] = None
+    task_idx: Optional[int] = None
+    chunk_idx: Optional[int] = None
+    phase: Optional[str] = None
+    operation: Optional[str] = None
+    indent_level: int = 0
+    
+    def __str__(self) -> str:
+        """Generate context string for debug messages."""
+        parts = [self.component]
+        
+        if self.round_num is not None:
+            parts.append(f"R{self.round_num + 1}")
+        
+        if self.task_idx is not None:
+            parts.append(f"T{self.task_idx + 1}")
+        
+        if self.chunk_idx is not None:
+            parts.append(f"C{self.chunk_idx + 1}")
+        
+        if self.phase:
+            parts.append(f"({self.phase})")
+        
+        return ":".join(parts)
+
+
+@dataclass
+class TimingInfo:
+    """Information about operation timing."""
+    operation: str
+    start_time: float
+    end_time: Optional[float] = None
+    duration: Optional[float] = None
+    context: Optional[DebugContext] = None
+    
+    def finish(self) -> float:
+        """Mark timing as finished and calculate duration."""
+        self.end_time = time.time()
+        self.duration = self.end_time - self.start_time
+        return self.duration
+
+
+class DebugLogger:
+    """
+    Centralized debug logger with context awareness and multiple output channels.
+    """
+    
+    def __init__(
+        self,
+        enabled: bool = False,
+        console_output: bool = True,
+        max_response_preview: int = 500,
+        max_entries: int = 1000
+    ):
+        self.enabled = enabled
+        self.console_output = console_output
+        self.max_response_preview = max_response_preview
+        self.max_entries = max_entries
+        
+        # Storage for debug entries
+        self.entries: List[Dict[str, Any]] = []
+        self.timings: List[TimingInfo] = []
+        self.active_timers: Dict[str, TimingInfo] = {}
+        
+        # Current context stack for hierarchical logging
+        self.context_stack: List[DebugContext] = []
+    
+    def set_enabled(self, enabled: bool) -> None:
+        """Enable or disable debug logging."""
+        self.enabled = enabled
+    
+    def push_context(self, context: DebugContext) -> None:
+        """Push a new context onto the stack."""
+        if self.context_stack:
+            # Inherit indent level from parent
+            context.indent_level = self.context_stack[-1].indent_level + 1
+        self.context_stack.append(context)
+    
+    def pop_context(self) -> Optional[DebugContext]:
+        """Pop the current context from the stack."""
+        return self.context_stack.pop() if self.context_stack else None
+    
+    def get_current_context(self) -> Optional[DebugContext]:
+        """Get the current context."""
+        return self.context_stack[-1] if self.context_stack else None
+    
+    def log(
+        self,
+        level: DebugLevel,
+        message: str,
+        data: Optional[Dict[str, Any]] = None,
+        context: Optional[DebugContext] = None,
+        debug_log: Optional[List[str]] = None
+    ) -> None:
+        """
+        Log a debug message with level and context.
+        
+        Args:
+            level: Debug level
+            message: Debug message
+            data: Optional additional data
+            context: Optional context (uses current if not provided)
+            debug_log: Optional debug log list to append to
+        """
+        if not self.enabled:
+            return
+        
+        # Use provided context or current context
+        ctx = context or self.get_current_context()
+        
+        # Create debug entry
+        entry = {
+            "timestamp": time.time(),
+            "level": level.value,
+            "message": message,
+            "context": str(ctx) if ctx else "GLOBAL",
+            "indent_level": ctx.indent_level if ctx else 0,
+            "data": data
+        }
+        
+        # Store entry
+        self.entries.append(entry)
+        
+        # Limit entries to prevent memory issues
+        if len(self.entries) > self.max_entries:
+            self.entries = self.entries[-self.max_entries:]
+        
+        # Format for output
+        formatted_msg = self._format_message(entry)
+        
+        # Output to console if enabled
+        if self.console_output:
+            print(formatted_msg)
+        
+        # Append to debug log if provided
+        if debug_log is not None:
+            debug_log.append(formatted_msg)
+    
+    def info(self, message: str, **kwargs) -> None:
+        """Log an info message."""
+        self.log(DebugLevel.INFO, message, **kwargs)
+    
+    def warning(self, message: str, **kwargs) -> None:
+        """Log a warning message."""
+        self.log(DebugLevel.WARNING, message, **kwargs)
+    
+    def error(self, message: str, **kwargs) -> None:
+        """Log an error message."""
+        self.log(DebugLevel.ERROR, message, **kwargs)
+    
+    def api(self, message: str, **kwargs) -> None:
+        """Log an API-related message."""
+        self.log(DebugLevel.API, message, **kwargs)
+    
+    def state(self, message: str, **kwargs) -> None:
+        """Log a state change message."""
+        self.log(DebugLevel.STATE, message, **kwargs)
+    
+    def metrics(self, message: str, **kwargs) -> None:
+        """Log a metrics message."""
+        self.log(DebugLevel.METRICS, message, **kwargs)
+    
+    def timing(self, message: str, duration: Optional[float] = None, **kwargs) -> None:
+        """Log a timing message."""
+        if duration is not None:
+            message += f" ({duration:.2f}s)"
+        self.log(DebugLevel.TIMING, message, **kwargs)
+    
+    def trace(self, message: str, **kwargs) -> None:
+        """Log a detailed trace message."""
+        self.log(DebugLevel.TRACE, message, **kwargs)
+    
+    def api_call(
+        self,
+        service: str,
+        operation: str,
+        duration: Optional[float] = None,
+        response_preview: Optional[str] = None,
+        error: Optional[str] = None,
+        **kwargs
+    ) -> None:
+        """
+        Log an API call with standardized format.
+        
+        Args:
+            service: Service name (e.g., "Claude", "Ollama")
+            operation: Operation description
+            duration: Optional call duration
+            response_preview: Optional response preview
+            error: Optional error message
+        """
+        if error:
+            message = f"{service} {operation} failed: {error}"
+            level = DebugLevel.ERROR
+        else:
+            message = f"{service} {operation}"
+            if duration is not None:
+                message += f" ({duration:.2f}s)"
+            level = DebugLevel.API
+        
+        data = {}
+        if response_preview:
+            # Truncate long responses
+            if len(response_preview) > self.max_response_preview:
+                preview = response_preview[:self.max_response_preview] + "..."
+            else:
+                preview = response_preview
+            data["response_preview"] = preview
+        
+        self.log(level, message, data=data if data else None, **kwargs)
+    
+    def json_response(
+        self,
+        service: str,
+        raw_response: str,
+        parsed_data: Optional[Dict[str, Any]] = None,
+        parse_error: Optional[str] = None,
+        used_fallback: bool = False,
+        **kwargs
+    ) -> None:
+        """
+        Log JSON response parsing details.
+        
+        Args:
+            service: Service name
+            raw_response: Raw response text
+            parsed_data: Successfully parsed data
+            parse_error: Parsing error if any
+            used_fallback: Whether fallback parsing was used
+        """
+        if parse_error:
+            message = f"{service} JSON parsing failed: {parse_error}"
+            if used_fallback:
+                message += " (fallback used)"
+            level = DebugLevel.WARNING
+        else:
+            message = f"{service} JSON parsed successfully"
+            level = DebugLevel.API
+        
+        data = {
+            "raw_response_length": len(raw_response),
+            "used_fallback": used_fallback
+        }
+        
+        if parsed_data:
+            data["parsed_keys"] = list(parsed_data.keys()) if isinstance(parsed_data, dict) else None
+        
+        self.log(level, message, data=data, **kwargs)
+    
+    def confidence_analysis(
+        self,
+        confidence_score: float,
+        threshold: float,
+        component_scores: Optional[Dict[str, float]] = None,
+        modifiers: Optional[Dict[str, float]] = None,
+        **kwargs
+    ) -> None:
+        """
+        Log confidence analysis details.
+        
+        Args:
+            confidence_score: Final confidence score
+            threshold: Threshold used
+            component_scores: Component-wise scores
+            modifiers: Applied modifiers
+        """
+        status = "PASS" if confidence_score >= threshold else "FAIL"
+        message = f"Confidence analysis: {confidence_score:.3f} vs {threshold:.3f} [{status}]"
+        
+        data = {
+            "score": confidence_score,
+            "threshold": threshold,
+            "passed": confidence_score >= threshold
+        }
+        
+        if component_scores:
+            data["components"] = component_scores
+        
+        if modifiers:
+            data["modifiers"] = modifiers
+        
+        self.log(DebugLevel.METRICS, message, data=data, **kwargs)
+    
+    def round_summary(
+        self,
+        round_num: int,
+        tasks_completed: int,
+        total_duration: float,
+        confidence_scores: Optional[List[float]] = None,
+        **kwargs
+    ) -> None:
+        """
+        Log round completion summary.
+        
+        Args:
+            round_num: Round number (0-indexed)
+            tasks_completed: Number of tasks completed
+            total_duration: Total round duration
+            confidence_scores: Confidence scores for tasks
+        """
+        message = f"Round {round_num + 1} completed: {tasks_completed} tasks in {total_duration:.2f}s"
+        
+        data = {
+            "round_num": round_num,
+            "tasks_completed": tasks_completed,
+            "duration": total_duration
+        }
+        
+        if confidence_scores:
+            data["avg_confidence"] = sum(confidence_scores) / len(confidence_scores)
+            data["confidence_range"] = [min(confidence_scores), max(confidence_scores)]
+        
+        self.log(DebugLevel.STATE, message, data=data, **kwargs)
+    
+    @contextmanager
+    def timer(self, operation: str, context: Optional[DebugContext] = None):
+        """
+        Context manager for timing operations.
+        
+        Args:
+            operation: Description of the operation being timed
+            context: Optional debug context
+            
+        Yields:
+            TimingInfo object that can be used to access timing data
+        """
+        timer_key = f"{operation}_{time.time()}"
+        timing_info = TimingInfo(
+            operation=operation,
+            start_time=time.time(),
+            context=context or self.get_current_context()
+        )
+        
+        self.active_timers[timer_key] = timing_info
+        
+        try:
+            yield timing_info
+        finally:
+            duration = timing_info.finish()
+            self.timings.append(timing_info)
+            del self.active_timers[timer_key]
+            
+            if self.enabled:
+                self.timing(f"{operation} completed", duration=duration, context=context)
+    
+    @contextmanager
+    def context(
+        self,
+        component: str,
+        round_num: Optional[int] = None,
+        task_idx: Optional[int] = None,
+        chunk_idx: Optional[int] = None,
+        phase: Optional[str] = None,
+        operation: Optional[str] = None
+    ):
+        """
+        Context manager for debug context.
+        
+        Args:
+            component: Component name
+            round_num: Optional round number
+            task_idx: Optional task index
+            chunk_idx: Optional chunk index
+            phase: Optional phase name
+            operation: Optional operation name
+        """
+        ctx = DebugContext(
+            component=component,
+            round_num=round_num,
+            task_idx=task_idx,
+            chunk_idx=chunk_idx,
+            phase=phase,
+            operation=operation
+        )
+        
+        self.push_context(ctx)
+        try:
+            yield ctx
+        finally:
+            self.pop_context()
+    
+    def _format_message(self, entry: Dict[str, Any]) -> str:
+        """Format a debug entry for output."""
+        level = entry["level"]
+        context = entry["context"]
+        message = entry["message"]
+        indent = "  " * entry["indent_level"]
+        
+        # Level-specific formatting
+        if level == DebugLevel.ERROR.value:
+            prefix = "❌"
+        elif level == DebugLevel.WARNING.value:
+            prefix = "⚠️"
+        elif level == DebugLevel.TIMING.value:
+            prefix = "⏱️"
+        elif level == DebugLevel.API.value:
+            prefix = "🔗"
+        elif level == DebugLevel.STATE.value:
+            prefix = "🔄"
+        elif level == DebugLevel.METRICS.value:
+            prefix = "📊"
+        else:
+            prefix = "🔍"
+        
+        formatted = f"{indent}DEBUG [{context}] {prefix} {message}"
+        
+        # Add data if present
+        if entry.get("data"):
+            data_str = json.dumps(entry["data"], indent=2)
+            formatted += f"\n{indent}  Data: {data_str}"
+        
+        return formatted
+    
+    def get_summary(self) -> Dict[str, Any]:
+        """Get a summary of debug activity."""
+        if not self.entries:
+            return {"message": "No debug entries recorded"}
+        
+        # Count by level
+        level_counts = {}
+        for entry in self.entries:
+            level = entry["level"]
+            level_counts[level] = level_counts.get(level, 0) + 1
+        
+        # Timing summary
+        timing_summary = {
+            "total_operations": len(self.timings),
+            "avg_duration": sum(t.duration for t in self.timings if t.duration) / len(self.timings) if self.timings else 0,
+            "longest_operation": max(self.timings, key=lambda t: t.duration or 0).operation if self.timings else None
+        }
+        
+        return {
+            "total_entries": len(self.entries),
+            "level_breakdown": level_counts,
+            "timing_summary": timing_summary,
+            "active_timers": len(self.active_timers),
+            "context_depth": len(self.context_stack)
+        }
+    
+    def export_logs(self, include_data: bool = True) -> List[Dict[str, Any]]:
+        """Export all debug logs as structured data."""
+        if include_data:
+            return self.entries.copy()
+        else:
+            return [
+                {k: v for k, v in entry.items() if k != "data"}
+                for entry in self.entries
+            ]
+    
+    def clear(self) -> None:
+        """Clear all debug logs and reset state."""
+        self.entries.clear()
+        self.timings.clear()
+        self.active_timers.clear()
+        self.context_stack.clear()
+
+
+# Global debug logger instance
+_global_debug_logger: Optional[DebugLogger] = None
+
+
+def get_debug_logger() -> DebugLogger:
+    """Get the global debug logger instance."""
+    global _global_debug_logger
+    if _global_debug_logger is None:
+        _global_debug_logger = DebugLogger()
+    return _global_debug_logger
+
+
+def init_debug_logger(
+    enabled: bool = False,
+    console_output: bool = True,
+    **kwargs
+) -> DebugLogger:
+    """
+    Initialize the global debug logger.
+    
+    Args:
+        enabled: Whether debug logging is enabled
+        console_output: Whether to output to console
+        **kwargs: Additional DebugLogger parameters
+        
+    Returns:
+        Configured DebugLogger instance
+    """
+    global _global_debug_logger
+    _global_debug_logger = DebugLogger(
+        enabled=enabled,
+        console_output=console_output,
+        **kwargs
+    )
+    return _global_debug_logger
+
+
+# Convenience functions that use the global logger
+def debug_info(message: str, **kwargs) -> None:
+    """Log info message using global logger."""
+    get_debug_logger().info(message, **kwargs)
+
+
+def debug_timing(message: str, duration: Optional[float] = None, **kwargs) -> None:
+    """Log timing message using global logger."""
+    get_debug_logger().timing(message, duration=duration, **kwargs)
+
+
+def debug_api_call(service: str, operation: str, **kwargs) -> None:
+    """Log API call using global logger."""
+    get_debug_logger().api_call(service, operation, **kwargs)
+
+
+def debug_context(**kwargs):
+    """Create debug context using global logger."""
+    return get_debug_logger().context(**kwargs)
+
+
+def debug_timer(operation: str, **kwargs):
+    """Create debug timer using global logger."""
+    return get_debug_logger().timer(operation, **kwargs)
+
+"""
+Base protocol functionality for MinionS/Minions OpenWebUI functions.
+This module contains shared patterns, utilities, and base classes
+used by both Minion and MinionS protocols.
+"""
+
+import json
+import re
+import time
+import asyncio
+from typing import Dict, List, Any, Optional, Tuple, Union
+from abc import ABC, abstractmethod
+from dataclasses import dataclass, field
+
+
+# Shared constants
+CONFIDENCE_MAPPING = {'HIGH': 0.9, 'MEDIUM': 0.6, 'LOW': 0.3}
+DEFAULT_NUMERIC_CONFIDENCE = 0.3
+CHARS_PER_TOKEN = 3.5
+
+
+@dataclass
+class ParsedResponse:
+    """Standardized parsed response structure."""
+    success: bool
+    confidence: float
+    content: Any
+    parse_method: str  # "json", "fallback", "text"
+    error_message: Optional[str] = None
+    raw_response: Optional[str] = None
+
+
+@dataclass
+class ExecutionMetrics:
+    """Shared execution metrics structure."""
+    total_duration: float = 0.0
+    api_calls: int = 0
+    successful_calls: int = 0
+    failed_calls: int = 0
+    timeout_calls: int = 0
+    confidence_scores: List[float] = field(default_factory=list)
+    token_savings: Optional[Dict[str, Any]] = None
+    
+    def add_confidence_score(self, score: float) -> None:
+        """Add a confidence score to the metrics."""
+        self.confidence_scores.append(score)
+    
+    def get_average_confidence(self) -> float:
+        """Calculate average confidence score."""
+        return sum(self.confidence_scores) / len(self.confidence_scores) if self.confidence_scores else 0.0
+    
+    def get_success_rate(self) -> float:
+        """Calculate API call success rate."""
+        total = self.successful_calls + self.failed_calls + self.timeout_calls
+        return self.successful_calls / total if total > 0 else 0.0
+
+
+class BaseResponseParser:
+    """Base class for response parsing functionality."""
+    
+    @staticmethod
+    def clean_json_response(response: str) -> str:
+        """
+        Clean and prepare response text for JSON parsing.
+        
+        Args:
+            response: Raw response text
+            
+        Returns:
+            Cleaned response text
+        """
+        # Remove markdown code blocks
+        response = re.sub(r'```json\s*', '', response, flags=re.IGNORECASE)
+        response = re.sub(r'```\s*$', '', response, flags=re.MULTILINE)
+        response = response.strip()
+        
+        # Remove common prefixes/suffixes
+        response = re.sub(r'^[^{]*(?=\{)', '', response)
+        response = re.sub(r'\}[^}]*$', '}', response)
+        
+        return response
+    
+    @staticmethod
+    def extract_json_with_regex(response: str) -> Optional[Dict[str, Any]]:
+        """
+        Extract JSON from response using regex patterns.
+        
+        Args:
+            response: Response text to parse
+            
+        Returns:
+            Parsed JSON data or None if extraction fails
+        """
+        # Common patterns for JSON extraction
+        patterns = [
+            r'\{[^{}]*"[^"]*"[^{}]*\}',  # Simple object pattern
+            r'\{.*\}',  # Greedy object pattern
+            r'```json\s*(\{.*?\})\s*```',  # JSON code block
+            r'```\s*(\{.*?\})\s*```',  # Generic code block
+        ]
+        
+        for pattern in patterns:
+            matches = re.findall(pattern, response, re.DOTALL)
+            for match in matches:
+                try:
+                    return json.loads(match)
+                except json.JSONDecodeError:
+                    continue
+        
+        return None
+    
+    @staticmethod
+    def map_confidence_to_numeric(confidence_str: str) -> float:
+        """
+        Map string confidence to numeric value.
+        
+        Args:
+            confidence_str: Confidence string ("HIGH", "MEDIUM", "LOW")
+            
+        Returns:
+            Numeric confidence value
+        """
+        return CONFIDENCE_MAPPING.get(confidence_str.upper(), DEFAULT_NUMERIC_CONFIDENCE)
+    
+    def parse_response(
+        self,
+        response: str,
+        expected_format: str = "json",
+        fallback_enabled: bool = True,
+        debug_mode: bool = False
+    ) -> ParsedResponse:
+        """
+        Parse response with multiple fallback strategies.
+        
+        Args:
+            response: Raw response text
+            expected_format: Expected response format ("json", "text")
+            fallback_enabled: Whether to attempt fallback parsing
+            debug_mode: Whether debug mode is enabled
+            
+        Returns:
+            ParsedResponse object with parsing results
+        """
+        if expected_format.lower() == "json":
+            return self._parse_json_response(response, fallback_enabled, debug_mode)
+        else:
+            return self._parse_text_response(response, debug_mode)
+    
+    def _parse_json_response(
+        self,
+        response: str,
+        fallback_enabled: bool,
+        debug_mode: bool
+    ) -> ParsedResponse:
+        """Parse JSON response with fallback handling."""
+        # First, try direct JSON parsing
+        cleaned_response = self.clean_json_response(response)
+        
+        try:
+            data = json.loads(cleaned_response)
+            confidence = self._extract_confidence_from_data(data)
+            
+            return ParsedResponse(
+                success=True,
+                confidence=confidence,
+                content=data,
+                parse_method="json",
+                raw_response=response
+            )
+        except json.JSONDecodeError as e:
+            if debug_mode:
+                print(f"DEBUG [ResponseParser]: Direct JSON parsing failed: {str(e)}")
+            
+            # Try regex fallback if enabled
+            if fallback_enabled:
+                fallback_data = self.extract_json_with_regex(response)
+                if fallback_data:
+                    confidence = self._extract_confidence_from_data(fallback_data)
+                    
+                    return ParsedResponse(
+                        success=True,
+                        confidence=confidence,
+                        content=fallback_data,
+                        parse_method="fallback",
+                        raw_response=response
+                    )
+            
+            # Both parsing methods failed
+            return ParsedResponse(
+                success=False,
+                confidence=DEFAULT_NUMERIC_CONFIDENCE,
+                content=response,
+                parse_method="text",
+                error_message=f"JSON parsing failed: {str(e)}",
+                raw_response=response
+            )
+    
+    def _parse_text_response(self, response: str, debug_mode: bool) -> ParsedResponse:
+        """Parse text response."""
+        # For text responses, try to extract confidence if present
+        confidence = self._extract_confidence_from_text(response)
+        
+        return ParsedResponse(
+            success=True,
+            confidence=confidence,
+            content=response.strip(),
+            parse_method="text",
+            raw_response=response
+        )
+    
+    def _extract_confidence_from_data(self, data: Dict[str, Any]) -> float:
+        """Extract confidence from parsed JSON data."""
+        # Common confidence field names
+        confidence_fields = ['confidence', 'confidence_level', 'confidence_score']
+        
+        for field in confidence_fields:
+            if field in data:
+                confidence_value = data[field]
+                if isinstance(confidence_value, str):
+                    return self.map_confidence_to_numeric(confidence_value)
+                elif isinstance(confidence_value, (int, float)):
+                    return float(confidence_value)
+        
+        return DEFAULT_NUMERIC_CONFIDENCE
+    
+    def _extract_confidence_from_text(self, text: str) -> float:
+        """Extract confidence from text response."""
+        # Look for confidence keywords
+        text_lower = text.lower()
+        
+        if any(phrase in text_lower for phrase in ['high confidence', 'very confident', 'certain']):
+            return CONFIDENCE_MAPPING['HIGH']
+        elif any(phrase in text_lower for phrase in ['medium confidence', 'somewhat confident', 'likely']):
+            return CONFIDENCE_MAPPING['MEDIUM']
+        elif any(phrase in text_lower for phrase in ['low confidence', 'uncertain', 'not sure']):
+            return CONFIDENCE_MAPPING['LOW']
+        
+        return DEFAULT_NUMERIC_CONFIDENCE
+
+
+class TokenSavingsCalculator:
+    """Utility class for calculating token savings."""
+    
+    @staticmethod
+    def estimate_tokens(text: str) -> int:
+        """
+        Estimate token count for text.
+        
+        Args:
+            text: Text to analyze
+            
+        Returns:
+            Estimated token count
+        """
+        return int(len(text) / CHARS_PER_TOKEN)
+    
+    @staticmethod
+    def calculate_traditional_tokens(
+        user_query: str,
+        document_content: str,
+        final_answer: str
+    ) -> int:
+        """
+        Calculate tokens for traditional approach.
+        
+        Args:
+            user_query: User's query
+            document_content: Full document content
+            final_answer: Final answer
+            
+        Returns:
+            Estimated traditional token count
+        """
+        traditional_prompt = f"Query: {user_query}\n\nDocument: {document_content}\n\nPlease answer the query based on the document."
+        return TokenSavingsCalculator.estimate_tokens(traditional_prompt + final_answer)
+    
+    @staticmethod
+    def calculate_protocol_tokens(
+        rounds_data: List[Dict[str, Any]],
+        final_answer: str = ""
+    ) -> int:
+        """
+        Calculate tokens used by protocol approach.
+        
+        Args:
+            rounds_data: List of round data dictionaries
+            final_answer: Final answer text
+            
+        Returns:
+            Estimated protocol token count
+        """
+        total_tokens = 0
+        
+        for round_data in rounds_data:
+            # Add tokens for questions/tasks
+            if 'questions' in round_data:
+                for question in round_data['questions']:
+                    total_tokens += TokenSavingsCalculator.estimate_tokens(str(question))
+            
+            if 'tasks' in round_data:
+                for task in round_data['tasks']:
+                    total_tokens += TokenSavingsCalculator.estimate_tokens(str(task))
+            
+            # Add tokens for responses
+            if 'responses' in round_data:
+                for response in round_data['responses']:
+                    total_tokens += TokenSavingsCalculator.estimate_tokens(str(response))
+        
+        # Add final answer tokens
+        total_tokens += TokenSavingsCalculator.estimate_tokens(final_answer)
+        
+        return total_tokens
+    
+    @staticmethod
+    def calculate_savings(
+        traditional_tokens: int,
+        protocol_tokens: int
+    ) -> Dict[str, Any]:
+        """
+        Calculate token savings metrics.
+        
+        Args:
+            traditional_tokens: Tokens for traditional approach
+            protocol_tokens: Tokens for protocol approach
+            
+        Returns:
+            Dictionary with savings metrics
+        """
+        savings = traditional_tokens - protocol_tokens
+        savings_percentage = (savings / traditional_tokens * 100) if traditional_tokens > 0 else 0
+        
+        return {
+            "traditional_tokens": traditional_tokens,
+            "protocol_tokens": protocol_tokens,
+            "tokens_saved": savings,
+            "savings_percentage": round(savings_percentage, 1)
+        }
+
+
+class BaseProtocolExecutor(ABC):
+    """
+    Abstract base class for protocol executors.
+    Provides common functionality for both Minion and MinionS protocols.
+    """
+    
+    def __init__(self, debug_mode: bool = False):
+        self.debug_mode = debug_mode
+        self.response_parser = BaseResponseParser()
+        self.token_calculator = TokenSavingsCalculator()
+        self.metrics = ExecutionMetrics()
+        self.start_time = time.time()
+    
+    @abstractmethod
+    async def execute_protocol(self, *args, **kwargs) -> Dict[str, Any]:
+        """Execute the protocol. Must be implemented by subclasses."""
+        pass
+    
+    def handle_api_timeout(
+        self,
+        error: asyncio.TimeoutError,
+        context: str,
+        timeout_duration: int
+    ) -> str:
+        """
+        Handle API timeout errors consistently.
+        
+        Args:
+            error: The timeout error
+            context: Context description
+            timeout_duration: Timeout duration in seconds
+            
+        Returns:
+            Formatted error message
+        """
+        self.metrics.timeout_calls += 1
+        error_msg = f"❌ Timeout in {context} after {timeout_duration}s"
+        
+        if self.debug_mode:
+            print(f"DEBUG [Protocol]: {error_msg}")
+        
+        return error_msg
+    
+    def handle_api_error(
+        self,
+        error: Exception,
+        context: str,
+        response_text: Optional[str] = None
+    ) -> str:
+        """
+        Handle general API errors consistently.
+        
+        Args:
+            error: The exception that occurred
+            context: Context description
+            response_text: Optional response text
+            
+        Returns:
+            Formatted error message
+        """
+        self.metrics.failed_calls += 1
+        
+        # Extract useful information from the error
+        if hasattr(error, 'status'):
+            error_detail = f"HTTP {error.status}"
+            if response_text:
+                preview = response_text[:200] + "..." if len(response_text) > 200 else response_text
+                error_detail += f" - {preview}"
+        else:
+            error_detail = str(error)
+        
+        error_msg = f"❌ Error in {context}: {error_detail}"
+        
+        if self.debug_mode:
+            print(f"DEBUG [Protocol]: {error_msg}")
+            if response_text:
+                print(f"DEBUG [Protocol]: Full response: {response_text[:500]}...")
+        
+        return error_msg
+    
+    def record_successful_call(self, duration: Optional[float] = None) -> None:
+        """Record a successful API call."""
+        self.metrics.successful_calls += 1
+        if duration:
+            if self.debug_mode:
+                print(f"DEBUG [Protocol]: API call completed in {duration:.2f}s")
+    
+    def calculate_final_metrics(self, final_answer: str = "") -> Dict[str, Any]:
+        """
+        Calculate final execution metrics.
+        
+        Args:
+            final_answer: The final answer text
+            
+        Returns:
+            Dictionary with comprehensive metrics
+        """
+        self.metrics.total_duration = time.time() - self.start_time
+        
+        return {
+            "execution_time": round(self.metrics.total_duration, 2),
+            "api_calls": {
+                "total": self.metrics.api_calls,
+                "successful": self.metrics.successful_calls,
+                "failed": self.metrics.failed_calls,
+                "timeouts": self.metrics.timeout_calls,
+                "success_rate": round(self.metrics.get_success_rate() * 100, 1)
+            },
+            "confidence_analysis": {
+                "average": round(self.metrics.get_average_confidence(), 3),
+                "scores": self.metrics.confidence_scores,
+                "count": len(self.metrics.confidence_scores)
+            },
+            "token_savings": self.metrics.token_savings
+        }
+    
+    def debug_log(self, message: str, data: Optional[Dict[str, Any]] = None) -> None:
+        """
+        Log debug message if debug mode is enabled.
+        
+        Args:
+            message: Debug message
+            data: Optional additional data
+        """
+        if self.debug_mode:
+            print(f"DEBUG [Protocol]: {message}")
+            if data:
+                print(f"DEBUG [Protocol]: Data: {json.dumps(data, indent=2)}")
+
+
+class ProtocolUtils:
+    """Utility functions shared across protocols."""
+    
+    @staticmethod
+    def truncate_for_display(text: str, max_length: int = 100) -> str:
+        """
+        Truncate text for display purposes.
+        
+        Args:
+            text: Text to truncate
+            max_length: Maximum length
+            
+        Returns:
+            Truncated text with ellipsis if needed
+        """
+        if len(text) <= max_length:
+            return text
+        return text[:max_length] + "..."
+    
+    @staticmethod
+    def format_duration(seconds: float) -> str:
+        """
+        Format duration in human-readable format.
+        
+        Args:
+            seconds: Duration in seconds
+            
+        Returns:
+            Formatted duration string
+        """
+        if seconds < 1:
+            return f"{seconds*1000:.0f}ms"
+        elif seconds < 60:
+            return f"{seconds:.1f}s"
+        else:
+            minutes = int(seconds // 60)
+            remaining_seconds = seconds % 60
+            return f"{minutes}m {remaining_seconds:.1f}s"
+    
+    @staticmethod
+    def safe_get_nested(data: Dict[str, Any], keys: List[str], default: Any = None) -> Any:
+        """
+        Safely get nested dictionary value.
+        
+        Args:
+            data: Dictionary to search
+            keys: List of nested keys
+            default: Default value if key not found
+            
+        Returns:
+            Nested value or default
+        """
+        current = data
+        for key in keys:
+            if isinstance(current, dict) and key in current:
+                current = current[key]
+            else:
+                return default
+        return current
+    
+    @staticmethod
+    def merge_confidence_scores(scores: List[float], weights: Optional[List[float]] = None) -> float:
+        """
+        Merge multiple confidence scores with optional weights.
+        
+        Args:
+            scores: List of confidence scores
+            weights: Optional weights for each score
+            
+        Returns:
+            Merged confidence score
+        """
+        if not scores:
+            return DEFAULT_NUMERIC_CONFIDENCE
+        
+        if weights and len(weights) == len(scores):
+            weighted_sum = sum(score * weight for score, weight in zip(scores, weights))
+            total_weight = sum(weights)
+            return weighted_sum / total_weight if total_weight > 0 else DEFAULT_NUMERIC_CONFIDENCE
+        else:
+            return sum(scores) / len(scores)
+
+
+# Convenience functions for common operations
+def parse_json_response(response: str, debug_mode: bool = False) -> ParsedResponse:
+    """Parse JSON response using base parser."""
+    parser = BaseResponseParser()
+    return parser.parse_response(response, "json", True, debug_mode)
+
+
+def calculate_token_savings(
+    user_query: str,
+    document_content: str,
+    rounds_data: List[Dict[str, Any]],
+    final_answer: str = ""
+) -> Dict[str, Any]:
+    """Calculate token savings using base calculator."""
+    calculator = TokenSavingsCalculator()
+    
+    traditional_tokens = calculator.calculate_traditional_tokens(
+        user_query, document_content, final_answer
+    )
+    
+    protocol_tokens = calculator.calculate_protocol_tokens(rounds_data, final_answer)
+    
+    return calculator.calculate_savings(traditional_tokens, protocol_tokens)
+
+"""
+State management utilities for MinionS/Minions OpenWebUI protocols.
+This module provides centralized state tracking, round management,
+and execution context for both Minion and MinionS protocols.
+"""
+
+import time
+import json
+from typing import Dict, List, Any, Optional, Union
+from dataclasses import dataclass, field
+from enum import Enum
+
+
+class ProtocolType(str, Enum):
+    """Types of protocols supported."""
+    MINION = "minion"
+    MINIONS = "minions"
+
+
+class RoundStatus(str, Enum):
+    """Status of protocol rounds."""
+    PENDING = "pending"
+    IN_PROGRESS = "in_progress"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    TIMEOUT = "timeout"
+
+
+class TaskStatus(str, Enum):
+    """Status of individual tasks."""
+    PENDING = "pending"
+    IN_PROGRESS = "in_progress"
+    SUCCESS = "success"
+    TIMEOUT_ALL_CHUNKS = "timeout_all_chunks"
+    NOT_FOUND = "not_found"
+    FAILED = "failed"
+
+
+@dataclass
+class TaskResult:
+    """Result of a single task execution."""
+    task_id: str
+    status: TaskStatus
+    content: Any
+    confidence: float
+    execution_time: float
+    chunk_indices: List[int] = field(default_factory=list)
+    error_message: Optional[str] = None
+    metadata: Dict[str, Any] = field(default_factory=dict)
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary representation."""
+        return {
+            "task_id": self.task_id,
+            "status": self.status.value,
+            "content": self.content,
+            "confidence": self.confidence,
+            "execution_time": self.execution_time,
+            "chunk_indices": self.chunk_indices,
+            "error_message": self.error_message,
+            "metadata": self.metadata
+        }
+
+
+@dataclass
+class RoundResult:
+    """Result of a complete round execution."""
+    round_num: int
+    status: RoundStatus
+    start_time: float
+    end_time: Optional[float] = None
+    duration: Optional[float] = None
+    tasks: List[TaskResult] = field(default_factory=list)
+    metrics: Dict[str, Any] = field(default_factory=dict)
+    error_message: Optional[str] = None
+    
+    def finish(self) -> None:
+        """Mark round as finished and calculate duration."""
+        self.end_time = time.time()
+        self.duration = self.end_time - self.start_time
+    
+    def add_task_result(self, task_result: TaskResult) -> None:
+        """Add a task result to this round."""
+        self.tasks.append(task_result)
+    
+    def get_successful_tasks(self) -> List[TaskResult]:
+        """Get list of successful tasks."""
+        return [task for task in self.tasks if task.status == TaskStatus.SUCCESS]
+    
+    def get_failed_tasks(self) -> List[TaskResult]:
+        """Get list of failed tasks."""
+        return [task for task in self.tasks if task.status in [TaskStatus.FAILED, TaskStatus.TIMEOUT_ALL_CHUNKS]]
+    
+    def get_success_rate(self) -> float:
+        """Calculate success rate for this round."""
+        if not self.tasks:
+            return 0.0
+        successful = len(self.get_successful_tasks())
+        return successful / len(self.tasks)
+    
+    def get_average_confidence(self) -> float:
+        """Calculate average confidence for successful tasks."""
+        successful_tasks = self.get_successful_tasks()
+        if not successful_tasks:
+            return 0.0
+        return sum(task.confidence for task in successful_tasks) / len(successful_tasks)
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary representation."""
+        return {
+            "round_num": self.round_num,
+            "status": self.status.value,
+            "start_time": self.start_time,
+            "end_time": self.end_time,
+            "duration": self.duration,
+            "tasks": [task.to_dict() for task in self.tasks],
+            "metrics": self.metrics,
+            "error_message": self.error_message,
+            "success_rate": self.get_success_rate(),
+            "average_confidence": self.get_average_confidence()
+        }
+
+
+@dataclass
+class ConversationState:
+    """State management for conversational protocols (Minion)."""
+    questions_asked: List[str] = field(default_factory=list)
+    answers_received: List[str] = field(default_factory=list)
+    conversation_log: List[str] = field(default_factory=list)
+    deduplication_fingerprints: set = field(default_factory=set)
+    phase: str = "exploration"
+    clarification_attempts: int = 0
+    final_answer_detected: bool = False
+    
+    def add_question(self, question: str) -> None:
+        """Add a question to the conversation."""
+        self.questions_asked.append(question)
+        self.conversation_log.append(f"Q: {question}")
+    
+    def add_answer(self, answer: str) -> None:
+        """Add an answer to the conversation."""
+        self.answers_received.append(answer)
+        self.conversation_log.append(f"A: {answer}")
+    
+    def add_fingerprint(self, fingerprint: str) -> bool:
+        """
+        Add deduplication fingerprint.
+        
+        Args:
+            fingerprint: Question/task fingerprint
+            
+        Returns:
+            True if fingerprint was new, False if duplicate
+        """
+        if fingerprint in self.deduplication_fingerprints:
+            return False
+        self.deduplication_fingerprints.add(fingerprint)
+        return True
+    
+    def get_conversation_summary(self) -> Dict[str, Any]:
+        """Get summary of conversation state."""
+        return {
+            "total_questions": len(self.questions_asked),
+            "total_answers": len(self.answers_received),
+            "current_phase": self.phase,
+            "clarification_attempts": self.clarification_attempts,
+            "final_answer_detected": self.final_answer_detected,
+            "unique_fingerprints": len(self.deduplication_fingerprints)
+        }
+
+
+@dataclass
+class ProtocolMetrics:
+    """Comprehensive metrics tracking for protocol execution."""
+    protocol_type: ProtocolType
+    start_time: float = field(default_factory=time.time)
+    end_time: Optional[float] = None
+    total_duration: Optional[float] = None
+    
+    # API call metrics
+    total_api_calls: int = 0
+    successful_api_calls: int = 0
+    failed_api_calls: int = 0
+    timeout_api_calls: int = 0
+    
+    # Confidence metrics
+    confidence_scores: List[float] = field(default_factory=list)
+    confidence_distribution: Dict[str, int] = field(default_factory=lambda: {"HIGH": 0, "MEDIUM": 0, "LOW": 0})
+    
+    # Token metrics
+    token_savings: Optional[Dict[str, Any]] = None
+    
+    # Protocol-specific metrics
+    custom_metrics: Dict[str, Any] = field(default_factory=dict)
+    
+    def finish(self) -> None:
+        """Mark metrics collection as finished."""
+        self.end_time = time.time()
+        self.total_duration = self.end_time - self.start_time
+    
+    def record_api_call(self, success: bool, timeout: bool = False) -> None:
+        """Record an API call result."""
+        self.total_api_calls += 1
+        if timeout:
+            self.timeout_api_calls += 1
+        elif success:
+            self.successful_api_calls += 1
+        else:
+            self.failed_api_calls += 1
+    
+    def add_confidence_score(self, score: float, level: Optional[str] = None) -> None:
+        """Add a confidence score to metrics."""
+        self.confidence_scores.append(score)
+        
+        if level:
+            self.confidence_distribution[level] = self.confidence_distribution.get(level, 0) + 1
+        else:
+            # Categorize based on score
+            if score >= 0.8:
+                self.confidence_distribution["HIGH"] += 1
+            elif score >= 0.5:
+                self.confidence_distribution["MEDIUM"] += 1
+            else:
+                self.confidence_distribution["LOW"] += 1
+    
+    def get_api_success_rate(self) -> float:
+        """Calculate API call success rate."""
+        total_calls = self.successful_api_calls + self.failed_api_calls + self.timeout_api_calls
+        return self.successful_api_calls / total_calls if total_calls > 0 else 0.0
+    
+    def get_average_confidence(self) -> float:
+        """Calculate average confidence score."""
+        return sum(self.confidence_scores) / len(self.confidence_scores) if self.confidence_scores else 0.0
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary representation."""
+        return {
+            "protocol_type": self.protocol_type.value,
+            "execution_time": self.total_duration,
+            "api_calls": {
+                "total": self.total_api_calls,
+                "successful": self.successful_api_calls,
+                "failed": self.failed_api_calls,
+                "timeouts": self.timeout_api_calls,
+                "success_rate": round(self.get_api_success_rate() * 100, 1)
+            },
+            "confidence_analysis": {
+                "average": round(self.get_average_confidence(), 3),
+                "distribution": self.confidence_distribution,
+                "scores": self.confidence_scores
+            },
+            "token_savings": self.token_savings,
+            "custom_metrics": self.custom_metrics
+        }
+
+
+class ProtocolState:
+    """
+    Centralized state management for protocol execution.
+    Handles round tracking, metrics collection, and execution context.
+    """
+    
+    def __init__(
+        self,
+        protocol_type: ProtocolType,
+        max_rounds: int = 2,
+        debug_mode: bool = False
+    ):
+        self.protocol_type = protocol_type
+        self.max_rounds = max_rounds
+        self.debug_mode = debug_mode
+        
+        # State tracking
+        self.current_round: int = 0
+        self.rounds: List[RoundResult] = []
+        self.metrics = ProtocolMetrics(protocol_type)
+        self.conversation_state = ConversationState() if protocol_type == ProtocolType.MINION else None
+        
+        # Execution context
+        self.user_query: str = ""
+        self.document_content: str = ""
+        self.document_chunks: List[str] = []
+        self.final_answer: str = ""
+        self.execution_complete: bool = False
+        
+        # Debug and logging
+        self.debug_log: List[str] = []
+        self.conversation_log: List[str] = []
+    
+    def start_round(self, round_num: Optional[int] = None) -> RoundResult:
+        """
+        Start a new round.
+        
+        Args:
+            round_num: Optional round number (defaults to current_round)
+            
+        Returns:
+            New RoundResult object
+        """
+        if round_num is None:
+            round_num = self.current_round
+        
+        round_result = RoundResult(
+            round_num=round_num,
+            status=RoundStatus.IN_PROGRESS,
+            start_time=time.time()
+        )
+        
+        # Ensure we have enough space in rounds list
+        while len(self.rounds) <= round_num:
+            self.rounds.append(None)
+        
+        self.rounds[round_num] = round_result
+        self.current_round = round_num
+        
+        if self.debug_mode:
+            self.debug_log.append(f"DEBUG [ProtocolState]: Started round {round_num + 1}")
+        
+        return round_result
+    
+    def finish_round(
+        self,
+        round_num: Optional[int] = None,
+        status: RoundStatus = RoundStatus.COMPLETED,
+        error_message: Optional[str] = None
+    ) -> Optional[RoundResult]:
+        """
+        Finish the specified round.
+        
+        Args:
+            round_num: Round number to finish (defaults to current_round)
+            status: Final status for the round
+            error_message: Optional error message
+            
+        Returns:
+            Finished RoundResult or None if round doesn't exist
+        """
+        if round_num is None:
+            round_num = self.current_round
+        
+        if round_num < len(self.rounds) and self.rounds[round_num]:
+            round_result = self.rounds[round_num]
+            round_result.status = status
+            round_result.error_message = error_message
+            round_result.finish()
+            
+            if self.debug_mode:
+                self.debug_log.append(
+                    f"DEBUG [ProtocolState]: Finished round {round_num + 1} "
+                    f"({status.value}) in {round_result.duration:.2f}s"
+                )
+            
+            return round_result
+        
+        return None
+    
+    def add_task_result(
+        self,
+        task_result: TaskResult,
+        round_num: Optional[int] = None
+    ) -> None:
+        """
+        Add a task result to the specified round.
+        
+        Args:
+            task_result: TaskResult to add
+            round_num: Round number (defaults to current_round)
+        """
+        if round_num is None:
+            round_num = self.current_round
+        
+        if round_num < len(self.rounds) and self.rounds[round_num]:
+            self.rounds[round_num].add_task_result(task_result)
+            
+            # Update metrics
+            if task_result.status == TaskStatus.SUCCESS:
+                self.metrics.add_confidence_score(task_result.confidence)
+        
+        # Record API call for metrics
+        success = task_result.status == TaskStatus.SUCCESS
+        timeout = task_result.status == TaskStatus.TIMEOUT_ALL_CHUNKS
+        self.metrics.record_api_call(success, timeout)
+    
+    def get_current_round(self) -> Optional[RoundResult]:
+        """Get the current round result."""
+        if self.current_round < len(self.rounds):
+            return self.rounds[self.current_round]
+        return None
+    
+    def get_round(self, round_num: int) -> Optional[RoundResult]:
+        """Get a specific round result."""
+        if round_num < len(self.rounds):
+            return self.rounds[round_num]
+        return None
+    
+    def get_all_successful_tasks(self) -> List[TaskResult]:
+        """Get all successful tasks across all rounds."""
+        successful_tasks = []
+        for round_result in self.rounds:
+            if round_result:
+                successful_tasks.extend(round_result.get_successful_tasks())
+        return successful_tasks
+    
+    def should_continue_rounds(self) -> bool:
+        """
+        Determine if more rounds should be executed.
+        
+        Returns:
+            True if more rounds should be executed
+        """
+        if self.execution_complete:
+            return False
+        
+        if self.current_round >= self.max_rounds:
+            return False
+        
+        # Protocol-specific continuation logic can be added here
+        return True
+    
+    def calculate_overall_confidence(self) -> float:
+        """Calculate overall confidence across all successful tasks."""
+        all_successful = self.get_all_successful_tasks()
+        if not all_successful:
+            return 0.0
+        
+        return sum(task.confidence for task in all_successful) / len(all_successful)
+    
+    def get_execution_summary(self) -> Dict[str, Any]:
+        """Get comprehensive execution summary."""
+        self.metrics.finish()
+        
+        summary = {
+            "protocol_type": self.protocol_type.value,
+            "total_rounds": len([r for r in self.rounds if r is not None]),
+            "max_rounds": self.max_rounds,
+            "execution_complete": self.execution_complete,
+            "overall_confidence": round(self.calculate_overall_confidence(), 3),
+            "metrics": self.metrics.to_dict(),
+            "rounds": [round_result.to_dict() for round_result in self.rounds if round_result]
+        }
+        
+        # Add conversation state for Minion protocol
+        if self.conversation_state:
+            summary["conversation"] = self.conversation_state.get_conversation_summary()
+        
+        return summary
+    
+    def export_state(self, include_debug: bool = False) -> Dict[str, Any]:
+        """
+        Export complete state for debugging or persistence.
+        
+        Args:
+            include_debug: Whether to include debug logs
+            
+        Returns:
+            Complete state dictionary
+        """
+        state = {
+            "protocol_type": self.protocol_type.value,
+            "current_round": self.current_round,
+            "max_rounds": self.max_rounds,
+            "user_query": self.user_query,
+            "final_answer": self.final_answer,
+            "execution_complete": self.execution_complete,
+            "summary": self.get_execution_summary()
+        }
+        
+        if include_debug:
+            state["debug_log"] = self.debug_log
+            state["conversation_log"] = self.conversation_log
+        
+        return state
+    
+    def reset(self) -> None:
+        """Reset state for new execution."""
+        self.current_round = 0
+        self.rounds.clear()
+        self.metrics = ProtocolMetrics(self.protocol_type)
+        self.conversation_state = ConversationState() if self.protocol_type == ProtocolType.MINION else None
+        self.final_answer = ""
+        self.execution_complete = False
+        self.debug_log.clear()
+        self.conversation_log.clear()
+
+
+# Utility functions for creating state objects
+def create_task_result(
+    task_id: str,
+    content: Any,
+    confidence: float,
+    execution_time: float,
+    status: TaskStatus = TaskStatus.SUCCESS,
+    chunk_indices: Optional[List[int]] = None,
+    error_message: Optional[str] = None,
+    **metadata
+) -> TaskResult:
+    """
+    Convenience function to create a TaskResult.
+    
+    Args:
+        task_id: Unique identifier for the task
+        content: Task result content
+        confidence: Confidence score (0.0 to 1.0)
+        execution_time: Execution time in seconds
+        status: Task status
+        chunk_indices: List of chunk indices processed
+        error_message: Optional error message
+        **metadata: Additional metadata
+        
+    Returns:
+        TaskResult object
+    """
+    return TaskResult(
+        task_id=task_id,
+        status=status,
+        content=content,
+        confidence=confidence,
+        execution_time=execution_time,
+        chunk_indices=chunk_indices or [],
+        error_message=error_message,
+        metadata=metadata
+    )
+
+
+def create_protocol_state(
+    protocol_type: str,
+    max_rounds: int = 2,
+    debug_mode: bool = False
+) -> ProtocolState:
+    """
+    Convenience function to create a ProtocolState.
+    
+    Args:
+        protocol_type: Type of protocol ("minion" or "minions")
+        max_rounds: Maximum number of rounds
+        debug_mode: Whether debug mode is enabled
+        
+    Returns:
+        ProtocolState object
+    """
+    ptype = ProtocolType.MINION if protocol_type.lower() == "minion" else ProtocolType.MINIONS
+    return ProtocolState(ptype, max_rounds, debug_mode)
+
+# Partials File: partials/model_capabilities.py
+
+MODEL_CAPABILITIES = {
+    # OpenAI Models
+    "gpt-4o": {
+        "max_tokens": 128000,
+        "supports_json": True,
+        "supports_functions": True,
+        "cost_per_1k_input": 0.005,
+        "cost_per_1k_output": 0.015,
+        "provider": "openai"
+    },
+    "gpt-4-turbo": {
+        "max_tokens": 128000,
+        "supports_json": True,
+        "supports_functions": True,
+        "cost_per_1k_input": 0.01,
+        "cost_per_1k_output": 0.03,
+        "provider": "openai"
+    },
+    "gpt-4": {
+        "max_tokens": 8192,
+        "supports_json": True,
+        "supports_functions": True,
+        "cost_per_1k_input": 0.03,
+        "cost_per_1k_output": 0.06,
+        "provider": "openai"
+    },
+    
+    # Anthropic Models
+    "claude-3-5-sonnet-20241022": {
+        "max_tokens": 200000,
+        "supports_json": True,
+        "supports_functions": False,
+        "cost_per_1k_input": 0.003,
+        "cost_per_1k_output": 0.015,
+        "provider": "anthropic"
+    },
+    "claude-3-5-haiku-20241022": {
+        "max_tokens": 200000,
+        "supports_json": True,
+        "supports_functions": False,
+        "cost_per_1k_input": 0.001,
+        "cost_per_1k_output": 0.005,
+        "provider": "anthropic"
+    },
+    "claude-3-opus-20240229": {
+        "max_tokens": 200000,
+        "supports_json": True,
+        "supports_functions": False,
+        "cost_per_1k_input": 0.015,
+        "cost_per_1k_output": 0.075,
+        "provider": "anthropic"
+    },
+}
+
+def get_model_capabilities(model_name: str) -> Dict[str, Any]:
+    """Get capabilities for a specific model"""
+    if model_name in MODEL_CAPABILITIES:
+        return MODEL_CAPABILITIES[model_name].copy()
+    
+    # Fallback defaults for unknown models
+    return {
+        "max_tokens": 4096,
+        "supports_json": False,
+        "supports_functions": False,
+        "cost_per_1k_input": 0.01,
+        "cost_per_1k_output": 0.03,
+        "provider": "unknown"
+    }
+
+def detect_ollama_capabilities(model_name: str) -> Dict[str, Any]:
+    """Detect Ollama model capabilities based on model family"""
+    model_lower = model_name.lower()
+    
+    # Base capabilities for Ollama models
+    capabilities = {
+        "max_tokens": 4096,
+        "supports_json": False,
+        "supports_functions": False,
+        "cost_per_1k_input": 0.0,  # Local models are free
+        "cost_per_1k_output": 0.0,
+        "provider": "ollama"
+    }
+    
+    # Detect context length based on model family
+    if "llama3.2" in model_lower:
+        capabilities["max_tokens"] = 128000 if ":1b" in model_lower or ":3b" in model_lower else 4096
+        capabilities["supports_json"] = True
+    elif "llama3.1" in model_lower:
+        capabilities["max_tokens"] = 128000
+        capabilities["supports_json"] = True
+    elif "llama3" in model_lower:
+        capabilities["max_tokens"] = 8192
+        capabilities["supports_json"] = True
+    elif "qwen2.5" in model_lower:
+        capabilities["max_tokens"] = 32768
+        capabilities["supports_json"] = True
+    elif "qwen2" in model_lower:
+        capabilities["max_tokens"] = 32768
+        capabilities["supports_json"] = True
+    elif "gemma2" in model_lower:
+        capabilities["max_tokens"] = 8192
+        capabilities["supports_json"] = True
+    elif "mistral" in model_lower or "mixtral" in model_lower:
+        capabilities["max_tokens"] = 32768
+        capabilities["supports_json"] = True
+    elif "phi3" in model_lower:
+        capabilities["max_tokens"] = 4096
+        capabilities["supports_json"] = True
+    
+    return capabilities
+
+def get_effective_model_capabilities(valves: Any) -> Dict[str, Any]:
+    """Get effective capabilities for the configured models"""
+    supervisor_provider = getattr(valves, 'supervisor_provider', 'anthropic')
+    
+    if supervisor_provider == 'openai':
+        supervisor_model = getattr(valves, 'openai_model', 'gpt-4o')
+    else:
+        supervisor_model = getattr(valves, 'remote_model', 'claude-3-5-haiku-20241022')
+    
+    local_model = getattr(valves, 'local_model', 'llama3.2')
+    
+    supervisor_caps = get_model_capabilities(supervisor_model)
+    local_caps = detect_ollama_capabilities(local_model)
+    
+    return {
+        "supervisor": supervisor_caps,
+        "local": local_caps
+    }
+
+def adjust_parameters_for_capabilities(valves: Any, capabilities: Dict[str, Any]) -> Dict[str, Any]:
+    """Adjust parameters based on model capabilities"""
+    adjustments = {}
+    
+    supervisor_caps = capabilities["supervisor"]
+    local_caps = capabilities["local"]
+    
+    # Adjust max tokens for supervisor based on capabilities
+    current_max_tokens = getattr(valves, 'max_tokens_claude', 4096)
+    if current_max_tokens > supervisor_caps["max_tokens"]:
+        adjustments["max_tokens_claude"] = supervisor_caps["max_tokens"]
+    
+    # Adjust local model context if available
+    current_local_context = getattr(valves, 'local_model_context_length', 4096)
+    if current_local_context > local_caps["max_tokens"]:
+        adjustments["local_model_context_length"] = local_caps["max_tokens"]
+    
+    # Adjust structured output usage based on support
+    if hasattr(valves, 'use_structured_output') and valves.use_structured_output:
+        if not local_caps["supports_json"]:
+            adjustments["use_structured_output"] = False
+    
+    return adjustments
 
 # Partials File: partials/minions_models.py
-from typing import Optional, Dict # Add Dict
-from pydantic import BaseModel, Field
+from enum import Enum
+from dataclasses import dataclass
 
 class TaskResult(BaseModel):
     """
@@ -97,9 +2824,57 @@ class RoundMetrics(BaseModel):
     class Config:
         extra = "ignore"
 
+# New models for v0.3.8 scaling strategies and adaptive round control
+
+class ScalingStrategy(Enum):
+    """Scaling strategies from the MinionS paper"""
+    NONE = "none"
+    REPEATED_SAMPLING = "repeated_sampling"  # Run tasks multiple times
+    FINER_DECOMPOSITION = "finer_decomposition"  # Break into smaller subtasks
+    CONTEXT_CHUNKING = "context_chunking"  # Use smaller, overlapping chunks
+
+@dataclass
+class RoundAnalysis:
+    """Analysis of round results for adaptive round control"""
+    information_gain: float  # 0.0-1.0, comparing new vs previous info
+    average_confidence: float  # 0.0-1.0, based on HIGH/MEDIUM/LOW
+    coverage_ratio: float  # 0.0-1.0, how much of query is addressed
+    should_continue: bool
+    reason: str
+
+class RepeatedSamplingResult(BaseModel):
+    """Result from repeated sampling strategy"""
+    original_result: TaskResult
+    sample_results: List[TaskResult]
+    aggregated_result: TaskResult
+    confidence_boost: float = 0.0
+    consistency_score: float = 0.0  # How consistent were the samples
+    
+    class Config:
+        extra = "ignore"
+
+class DecomposedTask(BaseModel):
+    """A task that has been further decomposed"""
+    original_task: str
+    subtasks: List[str]
+    subtask_results: List[TaskResult] = []
+    synthesized_result: Optional[TaskResult] = None
+    
+    class Config:
+        extra = "ignore"
+
+class ChunkingStrategy(BaseModel):
+    """Configuration for context chunking strategy"""
+    chunk_size: int
+    overlap_ratio: float  # 0.0-0.5
+    chunks_created: int = 0
+    overlap_chars: int = 0
+    
+    class Config:
+        extra = "ignore"
+
 
 # Partials File: partials/minions_valves.py
-from pydantic import BaseModel, Field
 
 class MinionsValves(BaseModel):
     """
@@ -108,12 +2883,23 @@ class MinionsValves(BaseModel):
     model selections, timeouts, task decomposition parameters, operational parameters,
     extraction instructions, expected output format, and confidence threshold.
     """
+    supervisor_provider: str = Field(
+        default="anthropic", 
+        description="Provider for supervisor model: 'anthropic' or 'openai'"
+    )
     anthropic_api_key: str = Field(
         default="", description="Anthropic API key for the remote model (e.g., Claude)."
     )
+    openai_api_key: str = Field(
+        default="", description="OpenAI API key"
+    )
     remote_model: str = Field(
         default="claude-3-5-haiku-20241022",
-        description="Remote model (e.g., Claude) for task decomposition and synthesis. claude-3-5-haiku-20241022 for cost efficiency, claude-3-5-sonnet-20241022 for quality.",
+        description="Remote model (e.g., Claude) for task decomposition and synthesis. claude-3-5-haiku-20241022 for cost efficiency, claude-3-5-sonnet-20241022 for quality; for OpenAI: gpt-4o, gpt-4-turbo, gpt-4.",
+    )
+    openai_model: str = Field(
+        default="gpt-4o", 
+        description="OpenAI model to use when supervisor_provider is 'openai'"
     )
     ollama_base_url: str = Field(
         default="http://localhost:11434", description="Ollama server URL for local model execution."
@@ -198,6 +2984,49 @@ class MinionsValves(BaseModel):
         title="Performance Profile",
         description="Overall performance profile: 'high_quality', 'balanced', 'fastest_results'. Affects base thresholds and max_rounds before other adaptive modifiers.",
         json_schema_extra={"enum": ["high_quality", "balanced", "fastest_results"]}
+    )
+
+    # --- Scaling Strategies (v0.3.8) ---
+    scaling_strategy: str = Field(
+        default="none", 
+        description="Scaling strategy: none, repeated_sampling, finer_decomposition, context_chunking"
+    )
+    repeated_samples: int = Field(
+        default=3, 
+        description="Number of samples for repeated_sampling strategy"
+    )
+    fine_decomposition_factor: int = Field(
+        default=2, 
+        description="Factor for breaking tasks into subtasks"
+    )
+    chunk_overlap: float = Field(
+        default=0.1, 
+        description="Overlap ratio for context_chunking (0.0-0.5)",
+        ge=0.0,
+        le=0.5
+    )
+
+    # --- Adaptive Round Control (v0.3.8) ---
+    adaptive_rounds: bool = Field(
+        default=True, 
+        description="Use adaptive round control"
+    )
+    min_info_gain: float = Field(
+        default=0.1, 
+        description="Minimum information gain to continue (0.0-1.0)",
+        ge=0.0,
+        le=1.0
+    )
+    confidence_threshold_adaptive: float = Field(
+        default=0.8, 
+        description="Confidence threshold to stop early (0.0-1.0)",
+        ge=0.0,
+        le=1.0
+    )
+    min_rounds: int = Field(
+        default=1, 
+        description="Minimum rounds before adaptive control",
+        ge=1
     )
 
     # New fields for Iteration 5: Static Early Stopping Rules
@@ -313,10 +3142,6 @@ class MinionsValves(BaseModel):
 
 
 # Partials File: partials/common_api_calls.py
-import aiohttp
-import json
-from typing import Optional, Dict, Set
-from pydantic import BaseModel
 
 # Known models that support JSON/structured output
 STRUCTURED_OUTPUT_CAPABLE_MODELS: Set[str] = {
@@ -352,6 +3177,46 @@ def model_supports_structured_output(model_name: str) -> bool:
             return True
     
     return False
+
+async def call_openai_api(
+    prompt: str, 
+    api_key: str, 
+    model: str = "gpt-4o", 
+    temperature: float = 0.1, 
+    max_tokens: int = 4096,
+    timeout: int = 60
+) -> str:
+    """Call OpenAI's API with error handling and retry logic"""
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+
+    payload = {
+        "model": model,
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": temperature,
+        "max_tokens": max_tokens,
+    }
+
+    async with aiohttp.ClientSession() as session:
+        async with session.post(
+            "https://api.openai.com/v1/chat/completions", 
+            headers=headers, 
+            json=payload, 
+            timeout=timeout
+        ) as response:
+            if response.status != 200:
+                error_text = await response.text()
+                raise Exception(
+                    f"OpenAI API error: {response.status} - {error_text}"
+                )
+            result = await response.json()
+            
+            if result.get("choices") and len(result["choices"]) > 0:
+                return result["choices"][0]["message"]["content"]
+            else:
+                raise Exception("Unexpected response format from OpenAI API or empty content.")
 
 async def call_claude(
     valves: BaseModel,  # Or a more specific type if Valves is shareable
@@ -431,7 +3296,6 @@ async def call_ollama(
             schema_for_prompt = schema.schema_json() # For Pydantic v1
         except AttributeError: # Basic fallback for Pydantic v2 or other schema objects
              # This part might need refinement based on actual schema object type if not Pydantic v1 BaseModel
-            import inspect
             if hasattr(schema, 'model_json_schema'): # Pydantic v2
                  schema_for_prompt = json.dumps(schema.model_json_schema())
             elif inspect.isclass(schema) and issubclass(schema, BaseModel): # Pydantic v1/v2 class
@@ -468,9 +3332,39 @@ async def call_ollama(
                     print(f"Unexpected Ollama API response format: {result}")
                 raise Exception("Unexpected response format from Ollama API or no response field.")
 
+async def call_supervisor_model(valves: BaseModel, prompt: str) -> str:
+    """Call the configured supervisor model (Claude or OpenAI)"""
+    provider = getattr(valves, 'supervisor_provider', 'anthropic')
+    
+    if provider == 'openai':
+        api_key = valves.openai_api_key
+        model = getattr(valves, 'openai_model', 'gpt-4o')
+        max_tokens = getattr(valves, 'max_tokens_claude', 4096)
+        timeout = getattr(valves, 'timeout_claude', 60)
+        
+        if not api_key:
+            raise Exception("OpenAI API key is required when using OpenAI as supervisor provider")
+        
+        return await call_openai_api(
+            prompt=prompt,
+            api_key=api_key,
+            model=model,
+            temperature=0.1,
+            max_tokens=max_tokens,
+            timeout=timeout
+        )
+    
+    elif provider == 'anthropic':
+        if not valves.anthropic_api_key:
+            raise Exception("Anthropic API key is required when using Anthropic as supervisor provider")
+        
+        return await call_claude(valves, prompt)
+    
+    else:
+        raise Exception(f"Unsupported supervisor provider: {provider}. Use 'anthropic' or 'openai'")
+
 
 # Partials File: partials/common_context_utils.py
-from typing import List, Dict, Any # Added for type hints used in functions
 
 def extract_context_from_messages(messages: List[Dict[str, Any]]) -> str:
     """Extract context from conversation history"""
@@ -541,7 +3435,6 @@ async def extract_context_from_files(valves, files: List[Dict[str, Any]]) -> str
         return ""
 
 # Partials File: partials/common_file_processing.py
-from typing import List
 
 def create_chunks(context: str, chunk_size: int, max_chunks: int) -> List[str]:
     """Create chunks from context"""
@@ -556,7 +3449,6 @@ def create_chunks(context: str, chunk_size: int, max_chunks: int) -> List[str]:
 
 
 # Partials File: partials/minions_prompts.py
-from typing import List, Any, Optional
 
 # This file will store prompt generation functions for the MinionS (multi-turn, multi-task) protocol.
 
@@ -728,8 +3620,6 @@ Here is my response:
     return "\n".join(prompt_lines)
 
 # Partials File: partials/minions_decomposition_logic.py
-from typing import List, Callable, Any, Dict, Awaitable, Tuple # Added Dict, Awaitable, Tuple
-import asyncio # Added asyncio as call_claude_func is async
 
 # This helper will be based on the current parse_tasks from minions_protocol_logic.py
 def _parse_tasks_helper(claude_response: str, max_tasks: int, debug_log: List[str], valves: Any) -> List[str]:
@@ -761,7 +3651,6 @@ def _parse_tasks_helper(claude_response: str, max_tasks: int, debug_log: List[st
 
 async def decompose_task(
     valves: Any,
-    call_claude_func: Callable[..., Awaitable[str]],
     query: str,
     scratchpad_content: str,
     num_chunks: int,
@@ -796,7 +3685,7 @@ Format tasks as a simple list (e.g., 1. Task A, 2. Task B).'''
         debug_log.append(f"   [Debug] Sending decomposition prompt to Claude (Round {current_round}):\n{decomposition_prompt}")
 
     try:
-        claude_response = await call_claude_func(valves, decomposition_prompt)
+        claude_response = await call_supervisor_model(valves, decomposition_prompt)
         
         if valves.debug_mode:
             end_time_claude_decomp = asyncio.get_event_loop().time()
@@ -849,11 +3738,453 @@ Remember: The local assistant will return text strings, not structured data.'''
     return base_prompt + task_formulation_guidance
 
 
+# Partials File: partials/minions_scaling_strategies.py
+
+async def apply_repeated_sampling_strategy(
+    valves: Any,
+    task: str,
+    chunks: List[str],
+    call_ollama_func: Callable,
+    TaskResultModel: Any,
+    num_samples: int = 3
+) -> RepeatedSamplingResult:
+    """
+    Apply repeated sampling strategy: execute the same task multiple times
+    with slight variations and aggregate results
+    """
+    original_result = None
+    sample_results = []
+    
+    # Execute the task multiple times with different temperatures
+    base_temp = getattr(valves, 'local_model_temperature', 0.7)
+    temperatures = [base_temp, base_temp + 0.1, base_temp - 0.1] if num_samples == 3 else [base_temp + i * 0.1 for i in range(num_samples)]
+    
+    for i, temp in enumerate(temperatures[:num_samples]):
+        # Modify valves temperature temporarily
+        original_temp = valves.local_model_temperature if hasattr(valves, 'local_model_temperature') else 0.7
+        valves.local_model_temperature = max(0.1, min(2.0, temp))  # Clamp between 0.1 and 2.0
+        
+        try:
+            # Execute task on first chunk (or combined chunks if small)
+            chunk_content = chunks[0] if chunks else ""
+            
+            task_prompt = f"""Task: {task}
+
+Content to analyze:
+{chunk_content}
+
+Provide your analysis in the required format."""
+            
+            response = await call_ollama_func(
+                valves,
+                task_prompt,
+                use_json=True,
+                schema=TaskResultModel
+            )
+            
+            # Parse the response
+            parsed_result = parse_local_response(
+                response, 
+                is_structured=True, 
+                use_structured_output=valves.use_structured_output,
+                debug_mode=valves.debug_mode,
+                TaskResultModel=TaskResultModel
+            )
+            
+            task_result = TaskResultModel(**parsed_result)
+            
+            if i == 0:
+                original_result = task_result
+            else:
+                sample_results.append(task_result)
+                
+        except Exception as e:
+            if valves.debug_mode:
+                print(f"DEBUG: Repeated sampling attempt {i+1} failed: {e}")
+            # Create a fallback result
+            fallback_result = TaskResultModel(
+                explanation=f"Sampling attempt {i+1} failed: {str(e)}",
+                answer=None,
+                confidence="LOW"
+            )
+            if i == 0:
+                original_result = fallback_result
+            else:
+                sample_results.append(fallback_result)
+        finally:
+            # Restore original temperature
+            valves.local_model_temperature = original_temp
+    
+    # Aggregate results
+    aggregated_result = _aggregate_sampling_results(original_result, sample_results, valves)
+    
+    # Calculate consistency score
+    consistency_score = _calculate_consistency_score(original_result, sample_results)
+    
+    return RepeatedSamplingResult(
+        original_result=original_result,
+        sample_results=sample_results,
+        aggregated_result=aggregated_result,
+        confidence_boost=0.1 if consistency_score > 0.7 else 0.0,
+        consistency_score=consistency_score
+    )
+
+async def apply_finer_decomposition_strategy(
+    valves: Any,
+    task: str,
+    factor: int = 2
+) -> DecomposedTask:
+    """
+    Apply finer decomposition strategy: break task into smaller subtasks
+    """
+    decomposition_prompt = f"""Break down the following task into {factor} smaller, more specific subtasks:
+
+Original task: {task}
+
+Create {factor} subtasks that together would fully address the original task. Each subtask should be:
+1. More specific and focused than the original
+2. Independent enough to be executed separately
+3. Together they should cover all aspects of the original task
+
+Respond with just the subtasks, one per line, numbered:"""
+
+    try:
+        # Use supervisor model to decompose the task
+        response = await call_supervisor_model(valves, decomposition_prompt)
+        
+        # Parse subtasks from response
+        subtasks = []
+        lines = response.strip().split('\n')
+        for line in lines:
+            line = line.strip()
+            if line and (line[0].isdigit() or line.startswith('-') or line.startswith('•')):
+                # Remove numbering/bullets
+                cleaned_task = line.split('.', 1)[-1].strip() if '.' in line else line.strip()
+                if cleaned_task:
+                    subtasks.append(cleaned_task)
+        
+        # Fallback if parsing failed
+        if not subtasks:
+            subtasks = [f"{task} (Part {i+1})" for i in range(factor)]
+        
+        return DecomposedTask(
+            original_task=task,
+            subtasks=subtasks[:factor]  # Ensure we don't exceed the requested factor
+        )
+        
+    except Exception as e:
+        if valves.debug_mode:
+            print(f"DEBUG: Task decomposition failed: {e}")
+        
+        # Fallback decomposition
+        return DecomposedTask(
+            original_task=task,
+            subtasks=[f"{task} (Part {i+1})" for i in range(factor)]
+        )
+
+def apply_context_chunking_strategy(
+    context: str,
+    chunk_size_reduction_factor: float = 0.5,
+    overlap_ratio: float = 0.1
+) -> ChunkingStrategy:
+    """
+    Apply context chunking strategy: create smaller chunks with overlap
+    """
+    
+    # Calculate smaller chunk size
+    original_chunk_size = len(context) // 3  # Rough estimate
+    new_chunk_size = max(1000, int(original_chunk_size * chunk_size_reduction_factor))
+    
+    # Create overlapping chunks
+    chunks = []
+    overlap_chars = int(new_chunk_size * overlap_ratio)
+    start = 0
+    
+    while start < len(context):
+        end = min(start + new_chunk_size, len(context))
+        chunk = context[start:end]
+        chunks.append(chunk)
+        
+        if end >= len(context):
+            break
+            
+        # Move start position accounting for overlap
+        start = end - overlap_chars
+    
+    return ChunkingStrategy(
+        chunk_size=new_chunk_size,
+        overlap_ratio=overlap_ratio,
+        chunks_created=len(chunks),
+        overlap_chars=overlap_chars
+    )
+
+def _aggregate_sampling_results(original: TaskResult, samples: List[TaskResult], valves: Any) -> TaskResult:
+    """Aggregate results from repeated sampling"""
+    if not samples:
+        return original
+    
+    # Count confidence levels
+    all_results = [original] + samples
+    confidence_counts = {"HIGH": 0, "MEDIUM": 0, "LOW": 0}
+    
+    answers = []
+    explanations = []
+    
+    for result in all_results:
+        conf = result.confidence.upper() if result.confidence else "LOW"
+        confidence_counts[conf] = confidence_counts.get(conf, 0) + 1
+        
+        if result.answer:
+            answers.append(result.answer)
+        if result.explanation:
+            explanations.append(result.explanation)
+    
+    # Determine aggregate confidence
+    total_results = len(all_results)
+    if confidence_counts["HIGH"] >= total_results * 0.6:
+        aggregate_confidence = "HIGH"
+    elif confidence_counts["HIGH"] + confidence_counts["MEDIUM"] >= total_results * 0.6:
+        aggregate_confidence = "MEDIUM"
+    else:
+        aggregate_confidence = "LOW"
+    
+    # Aggregate answer (take most common or combine)
+    if answers:
+        # Simple approach: take the original if it exists, otherwise first answer
+        aggregate_answer = original.answer if original.answer else (answers[0] if answers else None)
+    else:
+        aggregate_answer = None
+    
+    # Aggregate explanation
+    if explanations:
+        aggregate_explanation = f"Aggregated from {len(all_results)} samples: {explanations[0]}"
+        if len(explanations) > 1 and valves.debug_mode:
+            aggregate_explanation += f" (Additional perspectives: {len(explanations)-1})"
+    else:
+        aggregate_explanation = "No explanations provided in sampling"
+    
+    return TaskResult(
+        explanation=aggregate_explanation,
+        answer=aggregate_answer,
+        confidence=aggregate_confidence,
+        citation=original.citation if hasattr(original, 'citation') else None
+    )
+
+def _calculate_consistency_score(original: TaskResult, samples: List[TaskResult]) -> float:
+    """Calculate how consistent the sampling results are"""
+    if not samples:
+        return 1.0
+    
+    all_results = [original] + samples
+    
+    # Compare confidence levels
+    confidences = [r.confidence.upper() if r.confidence else "LOW" for r in all_results]
+    confidence_consistency = len(set(confidences)) == 1
+    
+    # Compare answer presence
+    answers = [bool(r.answer and r.answer.strip()) for r in all_results]
+    answer_consistency = len(set(answers)) <= 1
+    
+    # Simple consistency score
+    consistency_score = 0.0
+    if confidence_consistency:
+        consistency_score += 0.5
+    if answer_consistency:
+        consistency_score += 0.5
+    
+    return consistency_score
+
+# Partials File: partials/minions_adaptive_rounds.py
+
+def analyze_round_results(
+    current_results: List[TaskResult], 
+    previous_results: List[TaskResult], 
+    query: str,
+    valves: Any
+) -> RoundAnalysis:
+    """Analyze if another round would be beneficial"""
+    
+    # Calculate information gain
+    information_gain = _calculate_information_gain(current_results, previous_results)
+    
+    # Calculate average confidence
+    average_confidence = _calculate_average_confidence(current_results)
+    
+    # Calculate coverage ratio (simplified heuristic)
+    coverage_ratio = _estimate_coverage_ratio(current_results, query)
+    
+    # Decision logic
+    should_continue = _should_continue_rounds(
+        information_gain, 
+        average_confidence, 
+        coverage_ratio, 
+        valves
+    )
+    
+    # Generate reason
+    reason = _generate_stopping_reason(
+        information_gain, 
+        average_confidence, 
+        coverage_ratio, 
+        should_continue,
+        valves
+    )
+    
+    return RoundAnalysis(
+        information_gain=information_gain,
+        average_confidence=average_confidence,
+        coverage_ratio=coverage_ratio,
+        should_continue=should_continue,
+        reason=reason
+    )
+
+def _calculate_information_gain(current_results: List[TaskResult], previous_results: List[TaskResult]) -> float:
+    """Calculate information gain between rounds"""
+    if not previous_results:
+        return 1.0  # First round always has maximum gain
+    
+    if not current_results:
+        return 0.0
+    
+    # Simple heuristic: compare unique content
+    current_content = set()
+    previous_content = set()
+    
+    for result in current_results:
+        if result.answer:
+            current_content.add(result.answer.lower().strip())
+        if result.explanation:
+            current_content.add(result.explanation.lower().strip())
+    
+    for result in previous_results:
+        if result.answer:
+            previous_content.add(result.answer.lower().strip())
+        if result.explanation:
+            previous_content.add(result.explanation.lower().strip())
+    
+    # Calculate ratio of new content
+    if not current_content:
+        return 0.0
+    
+    new_content = current_content - previous_content
+    return len(new_content) / len(current_content) if current_content else 0.0
+
+def _calculate_average_confidence(results: List[TaskResult]) -> float:
+    """Calculate average confidence from results"""
+    if not results:
+        return 0.0
+    
+    confidence_map = {"HIGH": 0.9, "MEDIUM": 0.6, "LOW": 0.3}
+    total_confidence = 0.0
+    
+    for result in results:
+        conf = result.confidence.upper() if result.confidence else "LOW"
+        total_confidence += confidence_map.get(conf, 0.3)
+    
+    return total_confidence / len(results)
+
+def _estimate_coverage_ratio(results: List[TaskResult], query: str) -> float:
+    """Estimate how well the results cover the query"""
+    if not results:
+        return 0.0
+    
+    # Simple heuristic: count results with substantive answers
+    substantive_results = 0
+    for result in results:
+        if result.answer and len(result.answer.strip()) > 10:
+            substantive_results += 1
+        elif result.explanation and len(result.explanation.strip()) > 20:
+            substantive_results += 1
+    
+    # Estimate coverage based on ratio of substantive results
+    # This is a simplified heuristic
+    coverage = min(1.0, substantive_results / max(1, len(results)))
+    
+    # Boost coverage if we have high confidence results
+    high_conf_count = sum(1 for r in results if r.confidence and r.confidence.upper() == "HIGH")
+    if high_conf_count > 0:
+        coverage = min(1.0, coverage + (high_conf_count * 0.1))
+    
+    return coverage
+
+def _should_continue_rounds(
+    information_gain: float, 
+    average_confidence: float, 
+    coverage_ratio: float, 
+    valves: Any
+) -> bool:
+    """Determine if we should continue with more rounds"""
+    
+    min_info_gain = getattr(valves, 'min_info_gain', 0.1)
+    confidence_threshold = getattr(valves, 'confidence_threshold_adaptive', 0.8)
+    
+    # Stop if information gain is too low
+    if information_gain < min_info_gain:
+        return False
+    
+    # Stop if we have high confidence and good coverage
+    if average_confidence >= confidence_threshold and coverage_ratio >= 0.7:
+        return False
+    
+    # Continue if we're still learning and not at maximum confidence
+    return True
+
+def _generate_stopping_reason(
+    information_gain: float,
+    average_confidence: float, 
+    coverage_ratio: float,
+    should_continue: bool,
+    valves: Any
+) -> str:
+    """Generate a human-readable reason for the decision"""
+    
+    if not should_continue:
+        if information_gain < getattr(valves, 'min_info_gain', 0.1):
+            return f"Low information gain ({information_gain:.2f}) - diminishing returns detected"
+        elif average_confidence >= getattr(valves, 'confidence_threshold_adaptive', 0.8):
+            return f"High confidence threshold reached ({average_confidence:.2f}) with good coverage ({coverage_ratio:.2f})"
+        else:
+            return "Multiple stopping criteria met"
+    else:
+        reasons = []
+        if information_gain >= getattr(valves, 'min_info_gain', 0.1):
+            reasons.append(f"good information gain ({information_gain:.2f})")
+        if average_confidence < getattr(valves, 'confidence_threshold_adaptive', 0.8):
+            reasons.append(f"confidence can be improved ({average_confidence:.2f})")
+        if coverage_ratio < 0.7:
+            reasons.append(f"coverage can be improved ({coverage_ratio:.2f})")
+        
+        return f"Continue: {', '.join(reasons) if reasons else 'standard criteria met'}"
+
+def should_stop_early(
+    round_num: int,
+    all_round_results: List[List[TaskResult]],
+    query: str,
+    valves: Any
+) -> tuple[bool, str]:
+    """
+    Determine if we should stop early based on adaptive round control
+    Returns (should_stop, reason)
+    """
+    
+    if not getattr(valves, 'adaptive_rounds', True):
+        return False, "Adaptive rounds disabled"
+    
+    min_rounds = getattr(valves, 'min_rounds', 1)
+    if round_num < min_rounds:
+        return False, f"Minimum rounds not reached ({round_num + 1}/{min_rounds})"
+    
+    if len(all_round_results) < 2:
+        return False, "Need at least 2 rounds for analysis"
+    
+    current_results = all_round_results[-1]
+    previous_results = all_round_results[-2] if len(all_round_results) > 1 else []
+    
+    analysis = analyze_round_results(current_results, previous_results, query, valves)
+    
+    return not analysis.should_continue, analysis.reason
+
 # Partials File: partials/minions_protocol_logic.py
-import asyncio
-import json
-import hashlib # Import hashlib
-from typing import List, Dict, Any, Callable # Removed Optional, Awaitable
 
 # parse_tasks function removed, will be part of minions_decomposition_logic.py
 
@@ -924,7 +4255,6 @@ def parse_local_response(response: str, is_structured: bool, use_structured_outp
                 raise e
             
             # Try regex fallback to extract key information
-            import re
             answer_match = re.search(r'"answer"\s*:\s*"([^"]*)"', response)
             confidence_match = re.search(r'"confidence"\s*:\s*"(HIGH|MEDIUM|LOW)"', response, re.IGNORECASE)
             
@@ -1261,8 +4591,6 @@ def calculate_token_savings(
     }
 
 # Partials File: partials/minion_sufficiency_analyzer.py
-import re
-from typing import Dict, List, Tuple, Any
 
 class InformationSufficiencyAnalyzer:
     """
@@ -1426,7 +4754,6 @@ class InformationSufficiencyAnalyzer:
 
 
 # Partials File: partials/minion_convergence_detector.py
-from typing import Optional, List, Dict, Any, Tuple
 
 # Attempt to import RoundMetrics and Valves type hints for clarity,
 # but handle potential circular dependency or generation-time issues
@@ -1569,11 +4896,7 @@ class ConvergenceDetector:
 
 
 # Partials File: partials/minions_pipe_method.py
-import asyncio
-import re # Added re
 from enum import Enum # Ensured Enum is present
-from typing import Any, List, Callable, Dict
-from fastapi import Request
 
 # Removed: from .common_query_utils import QueryComplexityClassifier, QueryComplexity
 
@@ -1655,9 +4978,9 @@ class QueryComplexityClassifier:
 # --- Content from common_query_utils.py END ---
 
 
-async def _call_claude_directly(valves: Any, query: str, call_claude_func: Callable) -> str:
-    """Fallback to direct Claude call when no context is available"""
-    return await call_claude_func(valves, f"Please answer this question: {query}")
+async def _call_supervisor_directly(valves: Any, query: str) -> str:
+    """Fallback to direct supervisor call when no context is available"""
+    return await call_supervisor_model(valves, f"Please answer this question: {query}")
 
 async def _execute_minions_protocol(
     valves: Any,
@@ -1790,7 +5113,7 @@ async def _execute_minions_protocol(
         if valves.debug_mode: 
             start_time_claude = asyncio.get_event_loop().time()
         try:
-            final_response = await _call_claude_directly(valves, query, call_claude_func=call_claude)
+            final_response = await _call_supervisor_directly(valves, query)
             if valves.debug_mode:
                 end_time_claude = asyncio.get_event_loop().time()
                 time_taken_claude = end_time_claude - start_time_claude
@@ -1826,7 +5149,6 @@ async def _execute_minions_protocol(
         # Note: now returns three values instead of two
         tasks, claude_response_for_decomposition, decomposition_prompt = await decompose_task(
             valves=valves,
-            call_claude_func=call_claude,
             query=query,
             scratchpad_content=scratchpad_content,
             num_chunks=len(chunks),
@@ -2359,8 +5681,11 @@ async def minions_pipe_method(
     """Execute the MinionS protocol with Claude"""
     try:
         # Validate configuration
-        if not pipe_self.valves.anthropic_api_key:
-            return "❌ **Error:** Please configure your Anthropic API key (and Ollama settings if applicable) in the function settings."
+        provider = getattr(pipe_self.valves, 'supervisor_provider', 'anthropic')
+        if provider == 'anthropic' and not pipe_self.valves.anthropic_api_key:
+            return "❌ **Error:** Please configure your Anthropic API key in the function settings."
+        elif provider == 'openai' and not pipe_self.valves.openai_api_key:
+            return "❌ **Error:** Please configure your OpenAI API key in the function settings."
 
         # Extract user message and context
         messages: List[Dict[str, Any]] = body.get("messages", [])
@@ -2382,11 +5707,12 @@ async def minions_pipe_method(
 
         context: str = "\n\n".join(all_context_parts) if all_context_parts else ""
 
-        # If no context, make a direct call to Claude
+        # If no context, make a direct call to supervisor
         if not context:
-            direct_response = await _call_claude_directly(pipe_self.valves, user_query, call_claude_func=call_claude)
+            direct_response = await _call_supervisor_directly(pipe_self.valves, user_query)
+            provider_name = getattr(pipe_self.valves, 'supervisor_provider', 'anthropic').title()
             return (
-                "ℹ️ **Note:** No significant context detected. Using standard Claude response.\n\n"
+                f"ℹ️ **Note:** No significant context detected. Using standard {provider_name} response.\n\n"
                 + direct_response
             )
 
@@ -2402,7 +5728,6 @@ async def minions_pipe_method(
         return result
 
     except Exception as e:
-        import traceback
         error_details: str = traceback.format_exc() if pipe_self.valves.debug_mode else str(e)
         return f"❌ **Error in MinionS protocol:** {error_details}"
 
@@ -2413,7 +5738,7 @@ class Pipe:
 
     def __init__(self):
         self.valves = self.Valves()
-        self.name = "MinionS v0.3.5b (Task Decomposition)"
+        self.name = "MinionS v0.3.8 (OpenAI + Scaling)"
 
     def pipes(self):
         """Define the available models"""
