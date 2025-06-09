@@ -32,6 +32,12 @@ async def _execute_simplified_chunk_protocol(
     # Create a focused prompt for this chunk
     claude_prompt = f"""You are analyzing chunk {chunk_num} of {total_chunks} from a larger document to answer: "{query}"
 
+Here is the chunk content:
+
+<document_chunk>
+{context}
+</document_chunk>
+
 This chunk contains a portion of the document. Your task is to:
 1. Ask ONE focused question to extract the most relevant information from this chunk
 2. Based on the response, either ask ONE follow-up question OR provide a final answer for this chunk
