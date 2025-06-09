@@ -58,9 +58,13 @@ Once Open WebUI is running:
 2.  Click the **Import Functions** button.
 3.  **Paste Function Code**:
     *   In this repository (`SunkThought/minions-openwebui`), navigate to the `generated_functions/` directory.
-    *   Open the desired default function file:
-        *   For the Minion protocol: `minion_default_function.py`
-        *   For the MinionS protocol: `minions_default_function.py`
+    *   Choose the function file based on your preference:
+        *   **Default v0.3.7 (Enhanced)**:
+            *   For Minion protocol: `minion_default_function.py`
+            *   For MinionS protocol: `minions_default_function.py`
+        *   **Legacy v0.3.6 (Stable)**:
+            *   For Minion protocol: `minion_default_old_function.py`
+            *   For MinionS protocol: `minions_default_old_function.py`
     *   Copy the **entire content** of this file.
     *   Paste it into the import dialog in Open WebUI.
 4.  Click **Import** to add the function.
@@ -254,6 +258,25 @@ Both Minion and MinionS are designed for collaborative AI, but they employ diffe
 
 By understanding these differences, you can choose the protocol that best fits the complexity and nature of your task when using these functions in Open WebUI.
 
+### Choosing Between v0.3.7 and v0.3.6
+
+#### v0.3.7 (Default/Recommended)
+- **Enhanced architecture** with modular design for better maintainability
+- **Improved error handling** with context-aware messages and troubleshooting hints
+- **Structured debugging** with hierarchical logging and performance metrics
+- **Centralized constants** for easier customization
+- **Better code organization** for future development and modifications
+- Use profiles: `minion_default` and `minions_default` (default)
+
+#### v0.3.6 (Legacy/Stable)
+- **Proven stability** with extensive testing in production environments
+- **Simpler architecture** for users who prefer the traditional approach
+- **Smaller file sizes** due to less comprehensive utility modules
+- **Established workflows** for users already familiar with the codebase
+- Use profiles: `minion_default_old` and `minions_default_old`
+
+**Recommendation**: v0.3.7 is now the default for all new function generation. Use v0.3.6 only if you need compatibility with existing deployments or prefer the simpler architecture.
+
 ### What's New in Version 0.3.6b
 
 Version 0.3.6b introduces four major improvements to the Minion protocol:
@@ -276,6 +299,14 @@ The Minion and MinionS functions in this repository are not static; they are dyn
 
 *   **`partials/` Directory**:
     This directory is the heart of the modular system. It contains numerous Python files (`.py`), each representing a "partial" piece of the final function's code (e.g., API call logic, prompt construction, protocol execution steps, valve definitions). Advanced users can modify these partials or even create new ones to alter functionality.
+    
+    **v0.3.7 Enhancement**: The partials directory now includes centralized utility modules:
+    - `imports_registry.py`: Manages all imports and dependencies
+    - `constants.py`: Centralizes configuration values and magic numbers
+    - `error_handling.py`: Provides consistent error handling across protocols
+    - `debug_utils.py`: Offers structured debugging and logging utilities
+    - `protocol_base.py`: Contains shared patterns between Minion and MinionS
+    - `protocol_state.py`: Manages execution state and metrics tracking
 
 *   **`generation_config.json`**:
     This JSON file defines "profiles" for generating functions. Each profile acts as a blueprint for a specific function variant. Key fields in a profile include:
@@ -287,17 +318,28 @@ The Minion and MinionS functions in this repository are not static; they are dyn
 *   **`generator_script.py`**:
     This Python script is the tool that builds the functions. It takes a function type (`minion` or `minions`) and an optional profile name (e.g., `--profile my_custom_profile`) as input. It then reads the specified profile from `generation_config.json` and assembles the partials in the defined order, outputting a single, runnable Python file compatible with Open WebUI's function system into the `generated_functions/` directory.
 
-### Generating Default Functions
+### Generating Functions
 
-As mentioned in the Quick Start, you can generate the standard versions of Minion and MinionS using:
+You can generate different versions of Minion and MinionS functions:
 
+#### Default Functions (v0.3.7 Enhanced)
 ```bash
-# Generates minion_default_function.py using the 'minion_default' profile
+# Generates minion_default_function.py using the enhanced v0.3.7 modular architecture
 python generator_script.py minion
 
-# Generates minions_default_function.py using the 'minions_default' profile
+# Generates minions_default_function.py using the enhanced v0.3.7 modular architecture
 python generator_script.py minions
 ```
+
+#### Legacy Functions (v0.3.6 Stable)
+```bash
+# Generates minion_default_old_function.py with legacy architecture
+python generator_script.py minion --profile minion_default_old
+
+# Generates minions_default_old_function.py with legacy architecture
+python generator_script.py minions --profile minions_default_old
+```
+
 The output files will be placed in the `generated_functions/` directory.
 
 ### Creating Custom Function Versions
@@ -346,6 +388,20 @@ Let's say you want a version of the Minion function that uses a slightly differe
 This modular approach provides a powerful way to adapt and evolve the Minion/MinionS functions to fit a wide variety of use cases and preferences.
 
 ## Version History
+
+### v0.3.7 - Modular Architecture & Code Quality Improvements
+- **🏗️ Modular Architecture**: Complete redesign using centralized utility modules for better maintainability and consistency
+  - **Centralized Import Management**: `imports_registry.py` eliminates duplicate imports and organizes dependencies
+  - **Constants Extraction**: `constants.py` centralizes 200+ magic numbers, timeouts, model names, and configuration values
+  - **Unified Error Handling**: `error_handling.py` provides consistent error formatting, context-aware messages, and troubleshooting hints
+  - **Structured Debug Logging**: `debug_utils.py` offers hierarchical context management, timing utilities, and multiple debug levels
+  - **Protocol Base Classes**: `protocol_base.py` extracts common patterns between Minion and MinionS for code reuse
+  - **State Management**: `protocol_state.py` centralizes round tracking, metrics collection, and execution context
+- **🔧 Enhanced Generator Script**: Updated to support both legacy and modular architectures with backward compatibility
+- **📊 New v0.3.7 Profiles**: Added `minion_v037` and `minions_v037` profiles leveraging the new modular structure
+- **🛠️ Developer Experience**: Improved code organization, consistent patterns, and easier customization through modular design
+- **🔄 Backward Compatibility**: Legacy profiles (`minion_default`, `minions_default`) continue to work unchanged
+- **📈 Performance Benefits**: Better error recovery, consistent debugging, and reduced code duplication across protocols
 
 ### v0.3.6 - Enhanced Minion Protocol
 - **Structured Output by Default**: Minion protocol now enables structured output by default for improved reliability and consistency

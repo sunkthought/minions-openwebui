@@ -32,6 +32,12 @@ async def _execute_simplified_chunk_protocol(
     # Create a focused prompt for this chunk
     claude_prompt = f"""You are analyzing chunk {chunk_num} of {total_chunks} from a larger document to answer: "{query}"
 
+Here is the chunk content:
+
+<document_chunk>
+{context}
+</document_chunk>
+
 This chunk contains a portion of the document. Your task is to:
 1. Ask ONE focused question to extract the most relevant information from this chunk
 2. Based on the response, either ask ONE follow-up question OR provide a final answer for this chunk
@@ -193,15 +199,78 @@ async def minion_pipe(
                 except Exception as e:
                     chunk_results.append(f"{chunk_header}❌ **Error processing chunk {i+1}:** {str(e)}")
             
+            # Generate final synthesis from all chunk results
+            synthesis_prompt = f"""You have analyzed a document in {len(chunks)} chunks to answer: "{user_query}"
+
+Here are the results from each chunk:
+
+{chr(10).join(chunk_results)}
+
+Based on all the information gathered from these chunks, provide a comprehensive final answer to the user's original question: "{user_query}"
+
+Your response should:
+1. Synthesize the key information from all chunks
+2. Address the specific question asked
+3. Be well-organized and coherent
+4. Include the most important findings and insights
+
+Provide your final comprehensive answer:"""
+
+            # Try final synthesis with retry logic
+            final_answer = ""
+            max_retries = 2
+            
+            for attempt in range(max_retries + 1):
+                try:
+                    if pipe_self.valves.debug_mode:
+                        print(f"DEBUG [Minion]: Attempting final synthesis (attempt {attempt + 1}/{max_retries + 1})")
+                    
+                    final_answer = await call_claude(valves=pipe_self.valves, prompt=synthesis_prompt)
+                    break  # Success, exit retry loop
+                    
+                except Exception as e:
+                    if attempt < max_retries:
+                        if pipe_self.valves.debug_mode:
+                            print(f"DEBUG [Minion]: Synthesis attempt {attempt + 1} failed: {str(e)}. Retrying...")
+                        await asyncio.sleep(1)  # Brief delay before retry
+                        continue
+                    else:
+                        # All retries failed, provide fallback
+                        if pipe_self.valves.debug_mode:
+                            print(f"DEBUG [Minion]: All synthesis attempts failed: {str(e)}")
+                        
+                        # Create a basic synthesis from chunk summaries as fallback
+                        chunk_summaries = []
+                        for i, result in enumerate(chunk_results):
+                            # Extract the "Result:" section from each chunk
+                            if "**Result:**" in result:
+                                summary = result.split("**Result:**")[1].strip()
+                                chunk_summaries.append(f"Chunk {i+1}: {summary}")
+                        
+                        if chunk_summaries:
+                            final_answer = f"""Based on the analysis of {len(chunks)} document chunks, here are the key findings for: "{user_query}"
+
+{chr(10).join(chunk_summaries)}
+
+Note: This synthesis was generated locally due to a temporary API connectivity issue. The individual chunk analyses above contain the detailed information extracted from the document."""
+                        else:
+                            final_answer = f"❌ Unable to generate final synthesis due to API connectivity issues: {str(e)}. Please refer to the individual chunk analyses above for the extracted information."
+            
             # Combine all chunk results with final synthesis
             combined_result = "\n\n---\n\n".join(chunk_results)
             
-            # Add summary header
+            # Add summary header with final answer
             summary_header = f"""# 🔗 Multi-Chunk Analysis Results
             
 **Document processed in {len(chunks)} chunks** (max {pipe_self.valves.chunk_size:,} characters each)
 
 {combined_result}
+
+---
+
+## 🎯 Final Answer
+
+{final_answer}
 
 ---
 

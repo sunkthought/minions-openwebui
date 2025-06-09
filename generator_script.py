@@ -1,13 +1,14 @@
 """
 Generator script for Minion/MinionS Open WebUI functions.
 Assembles partial files into complete function files based on profiles in generation_config.json.
+Supports the new modular architecture with improved imports, constants, error handling, and debugging.
 """
 
 import argparse
 import json
 import os
 from pathlib import Path
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Set
 
 def load_config(config_file: str) -> Dict[str, Any]:
     """Load the generation configuration."""
@@ -20,15 +21,36 @@ def load_partial(partials_dir: str, filename: str) -> str:
     with open(filepath, 'r') as f:
         return f.read()
 
-def process_partial_content(content: str, filename: str, all_partials: List[str]) -> str:
+def get_new_utility_modules() -> Set[str]:
+    """Get the set of new utility modules that should be handled specially."""
+    return {
+        "imports_registry",
+        "constants", 
+        "error_handling",
+        "debug_utils",
+        "protocol_base",
+        "protocol_state"
+    }
+
+def should_use_centralized_imports(partials: List[str]) -> bool:
+    """Check if profile should use centralized import management."""
+    # If imports_registry is in partials, use centralized imports
+    return "imports_registry.py" in partials
+
+def process_partial_content(content: str, filename: str, all_partials: List[str], use_centralized_imports: bool = False) -> str:
     """Process partial content to handle imports correctly."""
     lines = content.split('\n')
     processed_lines = []
     
     # Get list of partial modules (without .py extension)
     partial_modules = [p.replace('.py', '') for p in all_partials if p.endswith('.py')]
+    new_utility_modules = get_new_utility_modules()
     
     skip_until_close = False
+    
+    # Special handling for imports_registry - skip its content since imports will be handled centrally
+    if filename == "imports_registry.py" and use_centralized_imports:
+        return ""  # Skip this file's content, imports will be added separately
     
     for line in lines:
         # Check if we're in a multi-line import that should be skipped
@@ -48,6 +70,13 @@ def process_partial_content(content: str, filename: str, all_partials: List[str]
                         skip_until_close = True
                     continue
         
+        # If using centralized imports, skip standard import statements from non-utility files
+        if use_centralized_imports and filename not in [f"{mod}.py" for mod in new_utility_modules]:
+            if line.strip().startswith(('import ', 'from typing import', 'from pydantic import', 'from fastapi import')):
+                # Skip standard imports that are handled centrally
+                if not any(util_mod in line for util_mod in new_utility_modules):
+                    continue
+        
         processed_lines.append(line)
     
     return '\n'.join(processed_lines)
@@ -57,6 +86,37 @@ def replace_placeholders(content: str, placeholders: Dict[str, str]) -> str:
     for key, value in placeholders.items():
         content = content.replace(f"{{{key}}}", value)
     return content
+
+def generate_centralized_imports(partials_dir: str, partials: List[str]) -> str:
+    """Generate centralized imports for the new modular structure."""
+    # For now, use a comprehensive set of imports that covers all needs
+    # This can be enhanced later to be more selective based on partials used
+    return """# Centralized imports for v0.3.7 modular architecture
+
+# Standard library imports
+import asyncio
+import json
+import re
+import hashlib
+import traceback
+import inspect
+import time
+from abc import ABC, abstractmethod
+from contextlib import contextmanager
+from dataclasses import dataclass, field
+from enum import Enum
+from pathlib import Path
+
+# Typing imports
+from typing import (
+    List, Dict, Any, Optional, Tuple, Callable, Awaitable, 
+    Union, Set, TypedDict, Protocol
+)
+
+# Third-party imports
+import aiohttp
+from pydantic import BaseModel, Field, ValidationError
+from fastapi import Request"""
 
 def generate_pipe_class(profile: Dict[str, Any], function_type: str) -> str:
     """Generate the final Pipe class definition."""
@@ -106,25 +166,43 @@ def generate_function(profile: Dict[str, Any], partials_dir: str, function_type:
     
     # Get all partials for processing
     all_partials = profile["partials_concat_order"]
+    use_centralized_imports = should_use_centralized_imports(all_partials)
+    
+    print(f"Using centralized imports: {use_centralized_imports}")
     
     # 1. Process header
     header_content = load_partial(partials_dir, "common_header.py")
     header_content = replace_placeholders(header_content, profile["header_placeholders"])
     output_parts.append(header_content)
     
-    # 2. Load all partials in order
+    # 2. Add centralized imports if using new structure
+    if use_centralized_imports:
+        centralized_imports = generate_centralized_imports(partials_dir, all_partials)
+        output_parts.append(centralized_imports)
+    
+    # 3. Load all partials in order
     for partial_file in all_partials:
         if partial_file == "common_header.py":
             continue  # Already processed
         
-        content = load_partial(partials_dir, partial_file)
+        # Skip common_imports.py if using centralized imports
+        if use_centralized_imports and partial_file == "common_imports.py":
+            continue
+        
+        try:
+            content = load_partial(partials_dir, partial_file)
+        except FileNotFoundError:
+            print(f"Warning: Partial file '{partial_file}' not found, skipping...")
+            continue
         
         # Process content to remove inter-partial imports
-        processed_content = process_partial_content(content, partial_file, all_partials)
+        processed_content = process_partial_content(content, partial_file, all_partials, use_centralized_imports)
         
-        output_parts.append(processed_content)
+        # Only add non-empty content
+        if processed_content.strip():
+            output_parts.append(processed_content)
     
-    # 3. Generate the final Pipe class
+    # 4. Generate the final Pipe class
     pipe_class = generate_pipe_class(profile, function_type)
     output_parts.append(pipe_class)
     
