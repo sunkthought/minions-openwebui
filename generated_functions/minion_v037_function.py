@@ -4391,15 +4391,43 @@ async def minion_pipe(
                 except Exception as e:
                     chunk_results.append(f"{chunk_header}❌ **Error processing chunk {i+1}:** {str(e)}")
             
+            # Generate final synthesis from all chunk results
+            synthesis_prompt = f"""You have analyzed a document in {len(chunks)} chunks to answer: "{user_query}"
+
+Here are the results from each chunk:
+
+{chr(10).join(chunk_results)}
+
+Based on all the information gathered from these chunks, provide a comprehensive final answer to the user's original question: "{user_query}"
+
+Your response should:
+1. Synthesize the key information from all chunks
+2. Address the specific question asked
+3. Be well-organized and coherent
+4. Include the most important findings and insights
+
+Provide your final comprehensive answer:"""
+
+            try:
+                final_answer = await call_claude(valves=pipe_self.valves, prompt=synthesis_prompt)
+            except Exception as e:
+                final_answer = f"❌ Error generating final synthesis: {str(e)}"
+            
             # Combine all chunk results with final synthesis
             combined_result = "\n\n---\n\n".join(chunk_results)
             
-            # Add summary header
+            # Add summary header with final answer
             summary_header = f"""# 🔗 Multi-Chunk Analysis Results
             
 **Document processed in {len(chunks)} chunks** (max {pipe_self.valves.chunk_size:,} characters each)
 
 {combined_result}
+
+---
+
+## 🎯 Final Answer
+
+{final_answer}
 
 ---
 
