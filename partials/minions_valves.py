@@ -203,6 +203,61 @@ class MinionsValves(BaseModel):
     # For now, ConvergenceDetector uses its own default or relies on min_rounds_before_stopping implicitly
     # if min_rounds_before_convergence_check is not explicitly set in valves.
 
+    # --- v0.3.9 Open WebUI Integration Features ---
+    
+    # Web Search Integration
+    enable_web_search: bool = Field(
+        default=False,
+        title="Enable Web Search",
+        description="Enable web search integration for tasks that require external information."
+    )
+    
+    # Native RAG Pipeline Integration
+    use_native_rag: bool = Field(
+        default=True,
+        title="Use Native RAG",
+        description="Use Open WebUI's RAG infrastructure for intelligent retrieval instead of naive chunking."
+    )
+    rag_top_k: int = Field(
+        default=5,
+        title="RAG Top-K Results",
+        description="Number of top relevant chunks to retrieve from RAG pipeline.",
+        ge=1, le=20
+    )
+    rag_relevance_threshold: float = Field(
+        default=0.7,
+        title="RAG Relevance Threshold",
+        description="Minimum relevance score for RAG retrieved chunks (0.0-1.0).",
+        ge=0.0, le=1.0
+    )
+    
+    # Streaming Response Support
+    enable_streaming_responses: bool = Field(
+        default=True,
+        title="Enable Streaming Responses",
+        description="Provide real-time updates during long-running operations."
+    )
+    
+    # Visual Task Decomposition
+    show_task_visualization: bool = Field(
+        default=True,
+        title="Show Task Visualization",
+        description="Display task decomposition process using Mermaid diagrams."
+    )
+    
+    # Advanced Citation System
+    enable_advanced_citations: bool = Field(
+        default=True,
+        title="Enable Advanced Citations",
+        description="Use Open WebUI's inline citation format for traceable responses."
+    )
+    citation_max_length: int = Field(
+        default=100,
+        title="Citation Max Length",
+        description="Maximum length for citation text before truncation.",
+        ge=50, le=500
+    )
+
     # --- Adaptive Threshold Valves ---
     enable_adaptive_thresholds: bool = Field(
         default=True,
