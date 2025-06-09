@@ -8,12 +8,23 @@ class MinionsValves(BaseModel):
     model selections, timeouts, task decomposition parameters, operational parameters,
     extraction instructions, expected output format, and confidence threshold.
     """
+    supervisor_provider: str = Field(
+        default="anthropic", 
+        description="Provider for supervisor model: 'anthropic' or 'openai'"
+    )
     anthropic_api_key: str = Field(
         default="", description="Anthropic API key for the remote model (e.g., Claude)."
     )
+    openai_api_key: str = Field(
+        default="", description="OpenAI API key"
+    )
     remote_model: str = Field(
         default="claude-3-5-haiku-20241022",
-        description="Remote model (e.g., Claude) for task decomposition and synthesis. claude-3-5-haiku-20241022 for cost efficiency, claude-3-5-sonnet-20241022 for quality.",
+        description="Remote model (e.g., Claude) for task decomposition and synthesis. claude-3-5-haiku-20241022 for cost efficiency, claude-3-5-sonnet-20241022 for quality; for OpenAI: gpt-4o, gpt-4-turbo, gpt-4.",
+    )
+    openai_model: str = Field(
+        default="gpt-4o", 
+        description="OpenAI model to use when supervisor_provider is 'openai'"
     )
     ollama_base_url: str = Field(
         default="http://localhost:11434", description="Ollama server URL for local model execution."
@@ -98,6 +109,49 @@ class MinionsValves(BaseModel):
         title="Performance Profile",
         description="Overall performance profile: 'high_quality', 'balanced', 'fastest_results'. Affects base thresholds and max_rounds before other adaptive modifiers.",
         json_schema_extra={"enum": ["high_quality", "balanced", "fastest_results"]}
+    )
+
+    # --- Scaling Strategies (v0.3.8) ---
+    scaling_strategy: str = Field(
+        default="none", 
+        description="Scaling strategy: none, repeated_sampling, finer_decomposition, context_chunking"
+    )
+    repeated_samples: int = Field(
+        default=3, 
+        description="Number of samples for repeated_sampling strategy"
+    )
+    fine_decomposition_factor: int = Field(
+        default=2, 
+        description="Factor for breaking tasks into subtasks"
+    )
+    chunk_overlap: float = Field(
+        default=0.1, 
+        description="Overlap ratio for context_chunking (0.0-0.5)",
+        ge=0.0,
+        le=0.5
+    )
+
+    # --- Adaptive Round Control (v0.3.8) ---
+    adaptive_rounds: bool = Field(
+        default=True, 
+        description="Use adaptive round control"
+    )
+    min_info_gain: float = Field(
+        default=0.1, 
+        description="Minimum information gain to continue (0.0-1.0)",
+        ge=0.0,
+        le=1.0
+    )
+    confidence_threshold_adaptive: float = Field(
+        default=0.8, 
+        description="Confidence threshold to stop early (0.0-1.0)",
+        ge=0.0,
+        le=1.0
+    )
+    min_rounds: int = Field(
+        default=1, 
+        description="Minimum rounds before adaptive control",
+        ge=1
     )
 
     # New fields for Iteration 5: Static Early Stopping Rules

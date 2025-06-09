@@ -1,6 +1,8 @@
 # Partials File: partials/minions_models.py
-from typing import Optional, Dict # Add Dict
+from typing import Optional, Dict, List # Add Dict
 from pydantic import BaseModel, Field
+from enum import Enum
+from dataclasses import dataclass
 
 class TaskResult(BaseModel):
     """
@@ -72,5 +74,54 @@ class RoundMetrics(BaseModel):
     convergence_detected_this_round: bool = Field(default=False, description="Flag indicating if convergence criteria were met based on this round's analysis.")
     predicted_value_of_next_round: str = Field(default="N/A", description="Qualitative prediction of the potential value of executing another round (e.g., 'low', 'medium', 'high').")
 
+    class Config:
+        extra = "ignore"
+
+# New models for v0.3.8 scaling strategies and adaptive round control
+
+class ScalingStrategy(Enum):
+    """Scaling strategies from the MinionS paper"""
+    NONE = "none"
+    REPEATED_SAMPLING = "repeated_sampling"  # Run tasks multiple times
+    FINER_DECOMPOSITION = "finer_decomposition"  # Break into smaller subtasks
+    CONTEXT_CHUNKING = "context_chunking"  # Use smaller, overlapping chunks
+
+@dataclass
+class RoundAnalysis:
+    """Analysis of round results for adaptive round control"""
+    information_gain: float  # 0.0-1.0, comparing new vs previous info
+    average_confidence: float  # 0.0-1.0, based on HIGH/MEDIUM/LOW
+    coverage_ratio: float  # 0.0-1.0, how much of query is addressed
+    should_continue: bool
+    reason: str
+
+class RepeatedSamplingResult(BaseModel):
+    """Result from repeated sampling strategy"""
+    original_result: TaskResult
+    sample_results: List[TaskResult]
+    aggregated_result: TaskResult
+    confidence_boost: float = 0.0
+    consistency_score: float = 0.0  # How consistent were the samples
+    
+    class Config:
+        extra = "ignore"
+
+class DecomposedTask(BaseModel):
+    """A task that has been further decomposed"""
+    original_task: str
+    subtasks: List[str]
+    subtask_results: List[TaskResult] = []
+    synthesized_result: Optional[TaskResult] = None
+    
+    class Config:
+        extra = "ignore"
+
+class ChunkingStrategy(BaseModel):
+    """Configuration for context chunking strategy"""
+    chunk_size: int
+    overlap_ratio: float  # 0.0-0.5
+    chunks_created: int = 0
+    overlap_chars: int = 0
+    
     class Config:
         extra = "ignore"

@@ -39,6 +39,46 @@ def model_supports_structured_output(model_name: str) -> bool:
     
     return False
 
+async def call_openai_api(
+    prompt: str, 
+    api_key: str, 
+    model: str = "gpt-4o", 
+    temperature: float = 0.1, 
+    max_tokens: int = 4096,
+    timeout: int = 60
+) -> str:
+    """Call OpenAI's API with error handling and retry logic"""
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+
+    payload = {
+        "model": model,
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": temperature,
+        "max_tokens": max_tokens,
+    }
+
+    async with aiohttp.ClientSession() as session:
+        async with session.post(
+            "https://api.openai.com/v1/chat/completions", 
+            headers=headers, 
+            json=payload, 
+            timeout=timeout
+        ) as response:
+            if response.status != 200:
+                error_text = await response.text()
+                raise Exception(
+                    f"OpenAI API error: {response.status} - {error_text}"
+                )
+            result = await response.json()
+            
+            if result.get("choices") and len(result["choices"]) > 0:
+                return result["choices"][0]["message"]["content"]
+            else:
+                raise Exception("Unexpected response format from OpenAI API or empty content.")
+
 async def call_claude(
     valves: BaseModel,  # Or a more specific type if Valves is shareable
     prompt: str
@@ -153,3 +193,34 @@ async def call_ollama(
                 if hasattr(valves, 'debug_mode') and valves.debug_mode:
                     print(f"Unexpected Ollama API response format: {result}")
                 raise Exception("Unexpected response format from Ollama API or no response field.")
+
+async def call_supervisor_model(valves: BaseModel, prompt: str) -> str:
+    """Call the configured supervisor model (Claude or OpenAI)"""
+    provider = getattr(valves, 'supervisor_provider', 'anthropic')
+    
+    if provider == 'openai':
+        api_key = valves.openai_api_key
+        model = getattr(valves, 'openai_model', 'gpt-4o')
+        max_tokens = getattr(valves, 'max_tokens_claude', 4096)
+        timeout = getattr(valves, 'timeout_claude', 60)
+        
+        if not api_key:
+            raise Exception("OpenAI API key is required when using OpenAI as supervisor provider")
+        
+        return await call_openai_api(
+            prompt=prompt,
+            api_key=api_key,
+            model=model,
+            temperature=0.1,
+            max_tokens=max_tokens,
+            timeout=timeout
+        )
+    
+    elif provider == 'anthropic':
+        if not valves.anthropic_api_key:
+            raise Exception("Anthropic API key is required when using Anthropic as supervisor provider")
+        
+        return await call_claude(valves, prompt)
+    
+    else:
+        raise Exception(f"Unsupported supervisor provider: {provider}. Use 'anthropic' or 'openai'")

@@ -32,7 +32,6 @@ def _parse_tasks_helper(claude_response: str, max_tasks: int, debug_log: List[st
 
 async def decompose_task(
     valves: Any,
-    call_claude_func: Callable[..., Awaitable[str]],
     query: str,
     scratchpad_content: str,
     num_chunks: int,
@@ -67,7 +66,7 @@ Format tasks as a simple list (e.g., 1. Task A, 2. Task B).'''
         debug_log.append(f"   [Debug] Sending decomposition prompt to Claude (Round {current_round}):\n{decomposition_prompt}")
 
     try:
-        claude_response = await call_claude_func(valves, decomposition_prompt)
+        claude_response = await call_supervisor_model(valves, decomposition_prompt)
         
         if valves.debug_mode:
             end_time_claude_decomp = asyncio.get_event_loop().time()

@@ -91,7 +91,7 @@ def generate_centralized_imports(partials_dir: str, partials: List[str]) -> str:
     """Generate centralized imports for the new modular structure."""
     # For now, use a comprehensive set of imports that covers all needs
     # This can be enhanced later to be more selective based on partials used
-    return """# Centralized imports for v0.3.7 modular architecture
+    return """# Centralized imports for v0.3.8 modular architecture
 
 # Standard library imports
 import asyncio

@@ -1,18 +1,18 @@
 """
-title: Minion Protocol Integration for Open WebUI v0.3.7
+title: Minion Protocol Integration for Open WebUI v0.3.8
 author: Wil Everts and the @SunkThought team
 author_url: https://github.com/SunkThought/minions-openwebui
 original_author: Copyright (c) 2025 Sabri Eyuboglu, Avanika Narayan, Dan Biderman, and the rest of the Minions team (@HazyResearch wrote the original MinionS Protocol paper and code examples on github that spawned this)
 original_author_url: https://github.com/HazyResearch/
 funding_url: https://github.com/HazyResearch/minions
-version: 0.3.7
-description: Enhanced Minion protocol with modular architecture, improved error handling, and structured debugging
+version: 0.3.8
+description: Enhanced Minion protocol with OpenAI API support, scaling strategies, and adaptive round control
 required_open_webui_version: 0.5.0
 license: MIT License
 """
 
 
-# Centralized imports for v0.3.7 modular architecture
+# Centralized imports for v0.3.8 modular architecture
 
 # Standard library imports
 import asyncio
@@ -2591,6 +2591,162 @@ def create_protocol_state(
     ptype = ProtocolType.MINION if protocol_type.lower() == "minion" else ProtocolType.MINIONS
     return ProtocolState(ptype, max_rounds, debug_mode)
 
+# Partials File: partials/model_capabilities.py
+
+MODEL_CAPABILITIES = {
+    # OpenAI Models
+    "gpt-4o": {
+        "max_tokens": 128000,
+        "supports_json": True,
+        "supports_functions": True,
+        "cost_per_1k_input": 0.005,
+        "cost_per_1k_output": 0.015,
+        "provider": "openai"
+    },
+    "gpt-4-turbo": {
+        "max_tokens": 128000,
+        "supports_json": True,
+        "supports_functions": True,
+        "cost_per_1k_input": 0.01,
+        "cost_per_1k_output": 0.03,
+        "provider": "openai"
+    },
+    "gpt-4": {
+        "max_tokens": 8192,
+        "supports_json": True,
+        "supports_functions": True,
+        "cost_per_1k_input": 0.03,
+        "cost_per_1k_output": 0.06,
+        "provider": "openai"
+    },
+    
+    # Anthropic Models
+    "claude-3-5-sonnet-20241022": {
+        "max_tokens": 200000,
+        "supports_json": True,
+        "supports_functions": False,
+        "cost_per_1k_input": 0.003,
+        "cost_per_1k_output": 0.015,
+        "provider": "anthropic"
+    },
+    "claude-3-5-haiku-20241022": {
+        "max_tokens": 200000,
+        "supports_json": True,
+        "supports_functions": False,
+        "cost_per_1k_input": 0.001,
+        "cost_per_1k_output": 0.005,
+        "provider": "anthropic"
+    },
+    "claude-3-opus-20240229": {
+        "max_tokens": 200000,
+        "supports_json": True,
+        "supports_functions": False,
+        "cost_per_1k_input": 0.015,
+        "cost_per_1k_output": 0.075,
+        "provider": "anthropic"
+    },
+}
+
+def get_model_capabilities(model_name: str) -> Dict[str, Any]:
+    """Get capabilities for a specific model"""
+    if model_name in MODEL_CAPABILITIES:
+        return MODEL_CAPABILITIES[model_name].copy()
+    
+    # Fallback defaults for unknown models
+    return {
+        "max_tokens": 4096,
+        "supports_json": False,
+        "supports_functions": False,
+        "cost_per_1k_input": 0.01,
+        "cost_per_1k_output": 0.03,
+        "provider": "unknown"
+    }
+
+def detect_ollama_capabilities(model_name: str) -> Dict[str, Any]:
+    """Detect Ollama model capabilities based on model family"""
+    model_lower = model_name.lower()
+    
+    # Base capabilities for Ollama models
+    capabilities = {
+        "max_tokens": 4096,
+        "supports_json": False,
+        "supports_functions": False,
+        "cost_per_1k_input": 0.0,  # Local models are free
+        "cost_per_1k_output": 0.0,
+        "provider": "ollama"
+    }
+    
+    # Detect context length based on model family
+    if "llama3.2" in model_lower:
+        capabilities["max_tokens"] = 128000 if ":1b" in model_lower or ":3b" in model_lower else 4096
+        capabilities["supports_json"] = True
+    elif "llama3.1" in model_lower:
+        capabilities["max_tokens"] = 128000
+        capabilities["supports_json"] = True
+    elif "llama3" in model_lower:
+        capabilities["max_tokens"] = 8192
+        capabilities["supports_json"] = True
+    elif "qwen2.5" in model_lower:
+        capabilities["max_tokens"] = 32768
+        capabilities["supports_json"] = True
+    elif "qwen2" in model_lower:
+        capabilities["max_tokens"] = 32768
+        capabilities["supports_json"] = True
+    elif "gemma2" in model_lower:
+        capabilities["max_tokens"] = 8192
+        capabilities["supports_json"] = True
+    elif "mistral" in model_lower or "mixtral" in model_lower:
+        capabilities["max_tokens"] = 32768
+        capabilities["supports_json"] = True
+    elif "phi3" in model_lower:
+        capabilities["max_tokens"] = 4096
+        capabilities["supports_json"] = True
+    
+    return capabilities
+
+def get_effective_model_capabilities(valves: Any) -> Dict[str, Any]:
+    """Get effective capabilities for the configured models"""
+    supervisor_provider = getattr(valves, 'supervisor_provider', 'anthropic')
+    
+    if supervisor_provider == 'openai':
+        supervisor_model = getattr(valves, 'openai_model', 'gpt-4o')
+    else:
+        supervisor_model = getattr(valves, 'remote_model', 'claude-3-5-haiku-20241022')
+    
+    local_model = getattr(valves, 'local_model', 'llama3.2')
+    
+    supervisor_caps = get_model_capabilities(supervisor_model)
+    local_caps = detect_ollama_capabilities(local_model)
+    
+    return {
+        "supervisor": supervisor_caps,
+        "local": local_caps
+    }
+
+def adjust_parameters_for_capabilities(valves: Any, capabilities: Dict[str, Any]) -> Dict[str, Any]:
+    """Adjust parameters based on model capabilities"""
+    adjustments = {}
+    
+    supervisor_caps = capabilities["supervisor"]
+    local_caps = capabilities["local"]
+    
+    # Adjust max tokens for supervisor based on capabilities
+    current_max_tokens = getattr(valves, 'max_tokens_claude', 4096)
+    if current_max_tokens > supervisor_caps["max_tokens"]:
+        adjustments["max_tokens_claude"] = supervisor_caps["max_tokens"]
+    
+    # Adjust local model context if available
+    current_local_context = getattr(valves, 'local_model_context_length', 4096)
+    if current_local_context > local_caps["max_tokens"]:
+        adjustments["local_model_context_length"] = local_caps["max_tokens"]
+    
+    # Adjust structured output usage based on support
+    if hasattr(valves, 'use_structured_output') and valves.use_structured_output:
+        if not local_caps["supports_json"]:
+            adjustments["use_structured_output"] = False
+    
+    return adjustments
+
 # Partials File: partials/minion_models.py
 from enum import Enum
 
@@ -2919,12 +3075,23 @@ class MinionValves(BaseModel):
     expected output format, and confidence threshold.
     """
     # Essential configuration only
+    supervisor_provider: str = Field(
+        default="anthropic", 
+        description="Provider for supervisor model: 'anthropic' or 'openai'"
+    )
     anthropic_api_key: str = Field(
         default="", description="Anthropic API key for the remote model (e.g., Claude)"
     )
+    openai_api_key: str = Field(
+        default="", description="OpenAI API key"
+    )
     remote_model: str = Field(
         default="claude-3-5-haiku-20241022",
-        description="Remote model identifier (e.g., for Anthropic: claude-3-5-haiku-20241022 for cost efficiency, claude-3-5-sonnet-20241022 for quality)",
+        description="Remote model identifier (e.g., for Anthropic: claude-3-5-haiku-20241022 for cost efficiency, claude-3-5-sonnet-20241022 for quality; for OpenAI: gpt-4o, gpt-4-turbo, gpt-4)",
+    )
+    openai_model: str = Field(
+        default="gpt-4o", 
+        description="OpenAI model to use when supervisor_provider is 'openai'"
     )
     ollama_base_url: str = Field(
         default="http://localhost:11434", description="Ollama server URL"
@@ -3109,6 +3276,46 @@ def model_supports_structured_output(model_name: str) -> bool:
     
     return False
 
+async def call_openai_api(
+    prompt: str, 
+    api_key: str, 
+    model: str = "gpt-4o", 
+    temperature: float = 0.1, 
+    max_tokens: int = 4096,
+    timeout: int = 60
+) -> str:
+    """Call OpenAI's API with error handling and retry logic"""
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+
+    payload = {
+        "model": model,
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": temperature,
+        "max_tokens": max_tokens,
+    }
+
+    async with aiohttp.ClientSession() as session:
+        async with session.post(
+            "https://api.openai.com/v1/chat/completions", 
+            headers=headers, 
+            json=payload, 
+            timeout=timeout
+        ) as response:
+            if response.status != 200:
+                error_text = await response.text()
+                raise Exception(
+                    f"OpenAI API error: {response.status} - {error_text}"
+                )
+            result = await response.json()
+            
+            if result.get("choices") and len(result["choices"]) > 0:
+                return result["choices"][0]["message"]["content"]
+            else:
+                raise Exception("Unexpected response format from OpenAI API or empty content.")
+
 async def call_claude(
     valves: BaseModel,  # Or a more specific type if Valves is shareable
     prompt: str
@@ -3222,6 +3429,37 @@ async def call_ollama(
                 if hasattr(valves, 'debug_mode') and valves.debug_mode:
                     print(f"Unexpected Ollama API response format: {result}")
                 raise Exception("Unexpected response format from Ollama API or no response field.")
+
+async def call_supervisor_model(valves: BaseModel, prompt: str) -> str:
+    """Call the configured supervisor model (Claude or OpenAI)"""
+    provider = getattr(valves, 'supervisor_provider', 'anthropic')
+    
+    if provider == 'openai':
+        api_key = valves.openai_api_key
+        model = getattr(valves, 'openai_model', 'gpt-4o')
+        max_tokens = getattr(valves, 'max_tokens_claude', 4096)
+        timeout = getattr(valves, 'timeout_claude', 60)
+        
+        if not api_key:
+            raise Exception("OpenAI API key is required when using OpenAI as supervisor provider")
+        
+        return await call_openai_api(
+            prompt=prompt,
+            api_key=api_key,
+            model=model,
+            temperature=0.1,
+            max_tokens=max_tokens,
+            timeout=timeout
+        )
+    
+    elif provider == 'anthropic':
+        if not valves.anthropic_api_key:
+            raise Exception("Anthropic API key is required when using Anthropic as supervisor provider")
+        
+        return await call_claude(valves, prompt)
+    
+    else:
+        raise Exception(f"Unsupported supervisor provider: {provider}. Use 'anthropic' or 'openai'")
 
 
 # Partials File: partials/common_context_utils.py
@@ -3712,7 +3950,6 @@ async def _execute_minion_protocol(
     valves: Any,
     query: str,
     context: str,
-    call_claude_func: Callable,
     call_ollama_func: Callable,
     LocalAssistantResponseModel: Any,
     ConversationStateModel: Any = None,
@@ -3838,7 +4075,7 @@ Respond with "FINAL ANSWER READY." followed by your synthesized answer. Do NOT a
         try:
             if valves.debug_mode: 
                 start_time_claude = asyncio.get_event_loop().time()
-            claude_response = await call_claude_func(valves, claude_prompt_for_this_round)
+            claude_response = await call_supervisor_model(valves, claude_prompt_for_this_round)
             if valves.debug_mode:
                 end_time_claude = asyncio.get_event_loop().time()
                 time_taken_claude = end_time_claude - start_time_claude
@@ -4203,9 +4440,9 @@ Focus on areas not yet covered in our conversation."""
 # Partials File: partials/minion_pipe_method.py
 
 
-async def _call_claude_directly(valves: Any, query: str, call_claude_func: Callable) -> str: # Renamed for clarity
-    """Fallback to direct Claude call when no context is available"""
-    return await call_claude_func(valves, f"Please answer this question: {query}")
+async def _call_supervisor_directly(valves: Any, query: str) -> str:
+    """Fallback to direct supervisor call when no context is available"""
+    return await call_supervisor_model(valves, f"Please answer this question: {query}")
 
 async def _execute_simplified_chunk_protocol(
     valves: Any,
@@ -4213,7 +4450,6 @@ async def _execute_simplified_chunk_protocol(
     context: str,
     chunk_num: int,
     total_chunks: int,
-    call_claude_func: Callable,
     call_ollama_func: Callable,
     LocalAssistantResponseModel: Any,
     shared_state: Any = None,
@@ -4241,14 +4477,14 @@ Be concise and focused since this is one chunk of a larger analysis.
 Ask your first question about this chunk:"""
 
     try:
-        # Round 1: Get Claude's question
-        claude_response = await call_claude_func(valves, claude_prompt)
+        # Round 1: Get supervisor's question
+        supervisor_response = await call_supervisor_model(valves, claude_prompt)
         
         if valves.show_conversation:
-            conversation_log.append(f"**🤖 Remote Model (Chunk {chunk_num}):** {claude_response}")
+            conversation_log.append(f"**🤖 Remote Model (Chunk {chunk_num}):** {supervisor_response}")
         
         # Get local response
-        local_prompt = get_minion_local_prompt(context, query, claude_response, valves)
+        local_prompt = get_minion_local_prompt(context, query, supervisor_response, valves)
         
         local_response_str = await call_ollama_func(
             valves,
@@ -4278,7 +4514,7 @@ Provide a brief summary of what this chunk (#{chunk_num} of {total_chunks}) cont
 
 Keep it concise since this is just one part of a larger document analysis."""
 
-        final_response = await call_claude_func(valves, synthesis_prompt)
+        final_response = await call_supervisor_model(valves, synthesis_prompt)
         
         if valves.show_conversation:
             conversation_log.append(f"**🎯 Chunk Summary:** {final_response}")
@@ -4305,8 +4541,11 @@ async def minion_pipe(
     """Execute the Minion protocol with Claude"""
     try:
         # Validate configuration
-        if not pipe_self.valves.anthropic_api_key: # Add ollama key check if necessary
+        provider = getattr(pipe_self.valves, 'supervisor_provider', 'anthropic')
+        if provider == 'anthropic' and not pipe_self.valves.anthropic_api_key:
             return "❌ **Error:** Please configure your Anthropic API key in the function settings."
+        elif provider == 'openai' and not pipe_self.valves.openai_api_key:
+            return "❌ **Error:** Please configure your OpenAI API key in the function settings."
 
         # Extract user message and context
         messages: List[Dict[str, Any]] = body.get("messages", [])
@@ -4329,10 +4568,10 @@ async def minion_pipe(
         context: str = "\n\n".join(all_context_parts) if all_context_parts else ""
 
         if not context:
-            # Pass the imported call_claude to _call_claude_directly
-            direct_response = await _call_claude_directly(pipe_self.valves, user_query, call_claude_func=call_claude)
+            direct_response = await _call_supervisor_directly(pipe_self.valves, user_query)
+            provider_name = getattr(pipe_self.valves, 'supervisor_provider', 'anthropic').title()
             return (
-                "ℹ️ **Note:** No significant context detected. Using standard Claude response.\n\n"
+                f"ℹ️ **Note:** No significant context detected. Using standard {provider_name} response.\n\n"
                 + direct_response
             )
 
@@ -4349,7 +4588,6 @@ async def minion_pipe(
                 valves=pipe_self.valves, 
                 query=user_query, 
                 context=combined_context, 
-                call_claude_func=call_claude,
                 call_ollama_func=call_ollama,
                 LocalAssistantResponseModel=LocalAssistantResponse,
                 ConversationStateModel=ConversationState,
@@ -4381,7 +4619,6 @@ async def minion_pipe(
                         context=chunk,
                         chunk_num=i+1,
                         total_chunks=len(chunks),
-                        call_claude_func=call_claude,
                         call_ollama_func=call_ollama,
                         LocalAssistantResponseModel=LocalAssistantResponse,
                         shared_state=conversation_state,
@@ -4417,7 +4654,7 @@ Provide your final comprehensive answer:"""
                     if pipe_self.valves.debug_mode:
                         print(f"DEBUG [Minion]: Attempting final synthesis (attempt {attempt + 1}/{max_retries + 1})")
                     
-                    final_answer = await call_claude(valves=pipe_self.valves, prompt=synthesis_prompt)
+                    final_answer = await call_supervisor_model(valves=pipe_self.valves, prompt=synthesis_prompt)
                     break  # Success, exit retry loop
                     
                 except Exception as e:
@@ -4482,13 +4719,13 @@ class Pipe:
 
     def __init__(self):
         self.valves = self.Valves()
-        self.name = "Minion v0.3.7 (Modular)"
+        self.name = "Minion v0.3.8 (Conversational)"
 
     def pipes(self):
         """Define the available models"""
         return [
             {
-                "id": "minion-claude-v037",
+                "id": "minion-claude",
                 "name": f" ({self.valves.local_model} + {self.valves.remote_model})",
             }
         ]
@@ -4499,7 +4736,7 @@ class Pipe:
         __user__: dict,
         __request__: Request,
         __files__: List[dict] = [],
-        __pipe_id__: str = "minion-claude-v037",
+        __pipe_id__: str = "minion-claude",
     ) -> str:
         """Execute the Minion protocol with Claude"""
         return await minion_pipe(self, body, __user__, __request__, __files__, __pipe_id__)
