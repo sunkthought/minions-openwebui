@@ -8039,11 +8039,13 @@ async def _execute_minions_protocol_with_streaming_generator(
     
     try:
         while not main_task.done():
-            await asyncio.sleep(2)  # Update every 2 seconds
+            await asyncio.sleep(30)  # Update every 30 seconds
             if not main_task.done():
-                indicator = indicators[update_count % len(indicators)]
-                yield f"🔄 **{indicator}...** (Step {update_count + 1})\n"
                 update_count += 1
+                if update_count == 1:
+                    yield "🔄 **Still working...** ⏳\n"
+                else:
+                    yield f"🔄 **Still working...** (⏱️ {update_count * 30}s)\n"
                 
         # Get the result
         result = await main_task
