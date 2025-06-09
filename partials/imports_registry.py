@@ -14,6 +14,12 @@ STANDARD_LIBRARY = {
         'import re',
         'import hashlib',
     ],
+    'url_handling': [
+        'from urllib.parse import urlparse',
+    ],
+    'dataclasses': [
+        'from dataclasses import dataclass',
+    ],
     'error_handling': [
         'import traceback',
     ],
@@ -24,7 +30,7 @@ STANDARD_LIBRARY = {
 
 # Typing imports - commonly used across all files
 TYPING_IMPORTS = [
-    'from typing import List, Dict, Any, Optional, Tuple, Callable, Awaitable',
+    'from typing import List, Dict, Any, Optional, Tuple, Callable, Awaitable, AsyncGenerator',
 ]
 
 # Third-party imports
@@ -60,6 +66,7 @@ IMPORT_GROUPS = {
         *THIRD_PARTY['data_validation'],
         *THIRD_PARTY['enum'],
         *STANDARD_LIBRARY['async'],
+        *STANDARD_LIBRARY['dataclasses'],
     ],
     
     'valves': [
@@ -93,6 +100,35 @@ IMPORT_GROUPS = {
         *TYPING_IMPORTS,
         *STANDARD_LIBRARY['data_handling'],
         'import hashlib',
+    ],
+    
+    # v0.3.9 Open WebUI Integration partials
+    'web_search_integration': [
+        *TYPING_IMPORTS,
+        *STANDARD_LIBRARY['async'],
+        *STANDARD_LIBRARY['data_handling'],
+    ],
+    
+    'rag_retriever': [
+        *TYPING_IMPORTS,
+        *STANDARD_LIBRARY['data_handling'],
+    ],
+    
+    'citation_manager': [
+        *TYPING_IMPORTS,
+        *STANDARD_LIBRARY['data_handling'],
+        *STANDARD_LIBRARY['url_handling'],
+    ],
+    
+    'task_visualizer': [
+        *TYPING_IMPORTS,
+        *THIRD_PARTY['enum'],
+    ],
+    
+    'streaming_support': [
+        *TYPING_IMPORTS,
+        *STANDARD_LIBRARY['async'],
+        *STANDARD_LIBRARY['data_handling'],
     ],
 }
 
@@ -157,6 +193,17 @@ def get_imports_for_partial(partial_name: str) -> List[str]:
         category = 'utils'
     elif partial_name == 'common_imports':
         category = 'common_imports'
+    # v0.3.9 Open WebUI Integration partials
+    elif partial_name == 'web_search_integration':
+        category = 'web_search_integration'
+    elif partial_name == 'rag_retriever':
+        category = 'rag_retriever'
+    elif partial_name == 'citation_manager':
+        category = 'citation_manager'
+    elif partial_name == 'task_visualizer':
+        category = 'task_visualizer'
+    elif partial_name == 'streaming_support':
+        category = 'streaming_support'
     else:
         category = 'common_imports'  # Default fallback
     

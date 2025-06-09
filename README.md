@@ -62,7 +62,10 @@ Once Open WebUI is running:
 3.  **Paste Function Code**:
     *   In this repository (`SunkThought/minions-openwebui`), navigate to the `generated_functions/` directory.
     *   Choose the function file based on your preference:
-        *   **Latest v0.3.8 (Current)**:
+        *   **Latest v0.3.9 (Recommended) - Open WebUI Integration Suite**:
+            *   For Minion protocol: `minion_default_function.py` 
+            *   For MinionS protocol: `minions_default_function.py`
+        *   **Previous v0.3.8 (Stable)**:
             *   For Minion protocol: `minion_function_038.py` 
             *   For MinionS protocol: `minions_function_038.py`
     *   Copy the **entire content** of this file.
@@ -136,6 +139,17 @@ Key valves to configure:
 *   `novelty_modifier_complex_query`: Value added to the base novelty threshold for complex queries. (default: 0.0)
 *   `first_round_high_novelty_threshold`: If first round's novel findings percentage is above this (e.g., 0.75 for 75%), it's a high novelty first round. (default: 0.75)
 *   `sufficiency_modifier_high_first_round_novelty`: Value added to sufficiency thresholds if first round novelty is high (e.g., -0.05 to relax sufficiency requirement). (default: -0.05)
+
+#### v0.3.9 Open WebUI Integration Settings
+*   `enable_web_search`: Enable web search integration for queries requiring external information (default: false).
+*   `use_native_rag`: Use Open WebUI's RAG infrastructure instead of naive chunking (default: true).
+*   `rag_top_k`: Number of top relevant chunks to retrieve from RAG pipeline (default: 5, range: 1-20).
+*   `rag_relevance_threshold`: Minimum relevance score for RAG retrieved chunks (default: 0.7, range: 0.0-1.0).
+*   `enable_streaming_responses`: Provide real-time updates during operations (default: true).
+*   `enable_advanced_citations`: Use Open WebUI's inline citation format (default: true).
+*   `citation_max_length`: Maximum length for citation text before truncation (default: 100, range: 50-500).
+*   `show_task_visualization`: Display task decomposition using Mermaid diagrams - MinionS only (default: true).
+*   `enable_multi_document_context`: Enable conversations across multiple documents - Minion only (default: true).
 
 #### Advanced Settings
 *   `debug_mode`: Enable verbose logging and technical details (default: false).
@@ -286,6 +300,63 @@ By understanding these differences, you can choose the protocol that best fits t
 
 **Recommendation**: v0.3.7 is now the default for all new function generation. Use v0.3.6 only if you need compatibility with existing deployments or prefer the simpler architecture.
 
+### What's New in Version 0.3.9 - Open WebUI Integration Suite
+
+Version 0.3.9 introduces comprehensive Open WebUI platform integrations that transform both Minion and MinionS into native Open WebUI powerhouses:
+
+#### 🌐 **Full Open WebUI Search Integration**
+- **Smart Web Search Detection**: Automatically detects when queries require external information (current events, latest data, fact-checking)
+- **Native Search Tool Format**: Uses Open WebUI's `__TOOL_CALL__` format for seamless web search integration
+- **Task Type Classification**: Intelligently categorizes tasks as document_analysis, web_search, or hybrid approaches
+- **Context Enhancement**: Enriches conversational and task-based responses with real-time web information
+
+#### 🔍 **Native RAG Pipeline Integration** 
+- **Document Reference Syntax**: Full support for Open WebUI's `#document_name` reference system
+- **Intelligent Retrieval**: Leverages Open WebUI's RAG infrastructure instead of naive chunking
+- **Relevance Scoring**: Advanced filtering with configurable relevance thresholds (rag_relevance_threshold)
+- **Multi-Document Support**: Seamless operation across multiple documents in knowledge bases
+- **Smart Fallback**: Graceful degradation to chunking when RAG is unavailable
+
+#### 📚 **Advanced Citation System**
+- **Open WebUI Inline Format**: Native support for `<cite title="source">text</cite>` citation tags
+- **Comprehensive Source Tracking**: Citations from documents, web searches, and RAG retrievals
+- **Automatic Citation Generation**: Smart matching of responses to source materials
+- **Traceability**: Full source attribution with relevance scores and metadata
+
+#### 🔄 **Streaming Response Support**
+- **Real-Time Updates**: Live progress indicators during long-running operations
+- **Phase-by-Phase Streaming**: 
+  - 🔍 Query analysis progress
+  - 📋 Task decomposition updates (MinionS)
+  - ⚙️ Round-by-round progress (Minion)
+  - 🌐 Search operation status
+  - ✅ Completion indicators
+- **Async Generator Architecture**: Built on AsyncGenerator for efficient streaming
+- **Error-Aware Streaming**: Graceful error handling within streaming context
+
+#### 📊 **Visual Task Decomposition (MinionS)**
+- **Mermaid Diagram Generation**: Real-time task flow visualization using Mermaid syntax
+- **Interactive Task Status**: Color-coded status updates (pending, running, completed, failed)
+- **Dependency Mapping**: Visual representation of task relationships and data flow
+- **Progress Tracking**: Live updates as tasks complete during execution
+
+#### 🗄️ **Multi-Document Knowledge Base Support**
+- **Cross-Document Analysis**: Intelligent analysis across multiple documents simultaneously
+- **Document Registry**: Automatic tracking of available documents with metadata
+- **Relationship Mapping**: Detection and utilization of cross-document relationships
+- **Conversation Context**: Multi-document awareness in conversational flows (Minion)
+
+#### ⚙️ **Universal Configuration**
+All v0.3.9 features include toggle valves for backward compatibility:
+- `enable_web_search`: Web search integration (default: false)
+- `use_native_rag`: RAG vs naive chunking (default: true)  
+- `enable_streaming_responses`: Real-time updates (default: true)
+- `show_task_visualization`: Mermaid diagrams (default: true, MinionS only)
+- `enable_advanced_citations`: Citation system (default: true)
+- `enable_multi_document_context`: Multi-doc support (default: true, Minion only)
+
+Version 0.3.9 represents the most significant integration with Open WebUI to date, making both protocols native citizens of the Open WebUI ecosystem while maintaining full backward compatibility.
+
 ### What's New in Version 0.3.8
 
 Version 0.3.8 represents a major advancement in collaborative AI capabilities:
@@ -345,7 +416,16 @@ The Minion and MinionS functions in this repository are not static; they are dyn
 
 You can generate different versions of Minion and MinionS functions:
 
-#### Latest Functions (v0.3.8 with OpenAI Support)
+#### Latest Functions (v0.3.9 with Open WebUI Integrations - Recommended)
+```bash
+# Generates minion_default_function.py with full Open WebUI integration suite
+python generator_script.py minion --profile minion_default
+
+# Generates minions_default_function.py with Open WebUI integrations and task visualization
+python generator_script.py minions --profile minions_default
+```
+
+#### Previous Functions (v0.3.8 with OpenAI Support)
 ```bash
 # Generates minion_v037_function.py using v0.3.8 features including OpenAI API support
 python generator_script.py minion --profile minion_v037
@@ -421,108 +501,9 @@ This modular approach provides a powerful way to adapt and evolve the Minion/Min
 
 ## Version History
 
-### v0.3.8 - Multi-Provider API Support & Intelligent Scaling (Latest)
-- **🔄 Multi-Provider API Support**: Added OpenAI API support as an alternative to Anthropic Claude
-  - **Provider Selection**: Choose between 'anthropic' or 'openai' for the supervisor model via `supervisor_provider` valve
-  - **Unified API Interface**: `call_supervisor_model()` function provides seamless switching between providers
-  - **Provider-Specific Configuration**: Separate API keys and model selection for each provider
-  - **Model Support**: Compatible with GPT-4o, GPT-4-turbo, Claude-3.5-Sonnet, and other models
-- **📈 Scaling Strategies (MinionS)**: Implemented three scaling strategies from the HazyResearch paper
-  - **Repeated Sampling**: Execute tasks multiple times and aggregate results for higher confidence
-  - **Finer Decomposition**: Break down complex tasks into smaller, more focused sub-tasks
-  - **Context Chunking**: Process large documents by intelligently splitting content across chunks
-  - **Strategy Selection**: Configure via `scaling_strategy` valve with options: none, repeated_sampling, finer_decomposition, context_chunking
-- **🧠 Adaptive Round Control**: Intelligent stopping based on information gain analysis
-  - **Information Gain Tracking**: Monitor the novelty and value of information gathered each round
-  - **Dynamic Convergence**: Automatically detect when additional rounds provide diminishing returns
-  - **Configurable Thresholds**: Fine-tune sensitivity with `min_info_gain` setting (0.0-1.0)
-  - **Smart Termination**: Balance thoroughness with efficiency by stopping when sufficient information is gathered
-- **🔍 Model Capability Detection**: Automatic parameter adjustment based on model capabilities
-  - **Capability Database**: Comprehensive database of model capabilities (context limits, JSON support, function calling)
-  - **Automatic Detection**: Detect model capabilities for both supervisor and worker models
-  - **Dynamic Adjustment**: Automatically adjust chunk sizes, token limits, and processing strategies
-  - **Performance Optimization**: Optimize processing based on each model's strengths and limitations
-- **🐛 Critical Bug Fixes**: Resolved JSON parsing errors that prevented local model execution
-  - **Escape Sequence Handling**: Fixed invalid JSON escape sequences generated by local models (e.g., `\a`, `\c`)
-  - **Robust Parsing**: Improved JSON parsing with better error recovery and fallback mechanisms
-  - **Preventive Fixes**: Applied fixes to both Minion and MinionS protocols for consistency
+For detailed version history and release notes, see **[VERSIONS.md](VERSIONS.md)**.
 
-### v0.3.7 - Modular Architecture & Code Quality Improvements
-- **🏗️ Modular Architecture**: Complete redesign using centralized utility modules for better maintainability and consistency
-  - **Centralized Import Management**: `imports_registry.py` eliminates duplicate imports and organizes dependencies
-  - **Constants Extraction**: `constants.py` centralizes 200+ magic numbers, timeouts, model names, and configuration values
-  - **Unified Error Handling**: `error_handling.py` provides consistent error formatting, context-aware messages, and troubleshooting hints
-  - **Structured Debug Logging**: `debug_utils.py` offers hierarchical context management, timing utilities, and multiple debug levels
-  - **Protocol Base Classes**: `protocol_base.py` extracts common patterns between Minion and MinionS for code reuse
-  - **State Management**: `protocol_state.py` centralizes round tracking, metrics collection, and execution context
-- **🔧 Enhanced Generator Script**: Updated to support both legacy and modular architectures with backward compatibility
-- **📊 New v0.3.7 Profiles**: Added `minion_v037` and `minions_v037` profiles leveraging the new modular structure
-- **🛠️ Developer Experience**: Improved code organization, consistent patterns, and easier customization through modular design
-- **🔄 Backward Compatibility**: Legacy profiles (`minion_default`, `minions_default`) continue to work unchanged
-- **📈 Performance Benefits**: Better error recovery, consistent debugging, and reduced code duplication across protocols
-
-### v0.3.6 - Enhanced Minion Protocol
-- **Structured Output by Default**: Minion protocol now enables structured output by default for improved reliability and consistency
-- **Intelligent Completion Detection**: Added detection of when the remote model has sufficient information using natural language cues like "I now have sufficient information" or "I can now answer"
-- **Enhanced Question Generation**: Improved remote model prompting with strategic question guidelines, examples of good vs poor questions, and context-aware tips
-- **Better Local Model Prompting**: Enhanced local assistant prompts with clearer role definition, citation guidance, and confidence level criteria
-- **Comprehensive Conversation Metrics**: New metrics tracking including round usage, confidence distribution, completion method, duration, and token estimates
-- **Document Chunking Support**: Mirrored MinionS chunking capabilities for handling large documents efficiently
-  - Automatic document splitting for large files
-  - Individual chunk processing with combined results
-  - Configurable chunk size and maximum chunks
-  - Clear multi-chunk result presentation
-
-### v0.3.5 - Robust Structured Output Support
-- **JSON Mode by Default**: Structured output is now enabled by default for improved reliability with compatible local models
-- **Model Capability Detection**: Automatically detects if local models support JSON mode (includes llama3.2, mistral, mixtral, qwen2, gemma2, and many others)
-- **Enhanced Prompt Engineering**: Clear JSON schema with comprehensive examples of correct and incorrect formats
-- **Robust Parsing**: Handles markdown-wrapped JSON, extracts JSON from responses with explanatory text, and includes regex fallback for malformed responses
-- **Configurable Fallback**: New `structured_output_fallback_enabled` valve allows control over fallback behavior
-- **Success Metrics**: Tracks structured output success rate for monitoring and debugging
-- **Better Confidence Scoring**: Consistent confidence values (HIGH/MEDIUM/LOW) mapped to numeric scores for better decision making
-
-### v0.3.4 - Advanced Adaptive Round Management & Performance Insights
-- **Smart Information Sufficiency**: Implemented information sufficiency scoring that considers query component coverage and confidence of addressed components, moving beyond simple confidence metrics.
-- **Dynamic Convergence Detection**: MinionS can now detect diminishing returns by tracking per-round information gain, novelty of findings, and task failure trends. This allows the system to stop early if further rounds are unlikely to yield significant new information, especially when sufficiency is met.
-- **Adaptive Thresholds**: Key decision thresholds (for confidence-based early stopping, sufficiency requirements, and novelty sensitivity in convergence) are now dynamically adjusted based on:
-    - Document size (small, medium, large).
-    - Query complexity (simple, medium, complex).
-    - First-round performance (high novelty can relax subsequent sufficiency needs).
-- **Performance Profiles**: Introduced 'high_quality', 'balanced', and 'fastest_results' profiles to allow users to easily tune the base operational parameters (max rounds, base thresholds) before adaptive adjustments.
-- **Comprehensive Performance Report**: The final output now includes a detailed report summarizing total rounds, stopping reasons, final sufficiency and convergence scores, and the effective thresholds used during the run.
-- **Numerous new valves** added to configure these adaptive behaviors, convergence criteria, and performance profiles.
-
-### v0.3.3 - Adaptive Round Management
-- **Smart iteration control**: The system now dynamically adjusts the number of rounds based on task complexity and progress
-- **Early termination logic**: Automatically stops when sufficient information is gathered, saving costs
-- **Improved efficiency**: Reduces unnecessary API calls while maintaining answer quality
-
-### v0.3.2 - Custom Prompts
-- **User-defined prompts**: Added support for custom task instructions and synthesis prompts
-- **Enhanced flexibility**: Users can now fine-tune how the supervisor decomposes tasks and synthesizes results
-- **Better domain adaptation**: Custom prompts allow optimization for specific document types or query patterns
-
-### v0.3.1 - Task-Specific Instructions and Advanced Prompts
-- **Context-aware task generation**: Tasks now include specific instructions based on document content
-- **Improved local model guidance**: Better prompting strategies for local models to extract relevant information
-- **Enhanced accuracy**: More precise task execution leads to better overall results
-
-### v0.3.0 - Code-Based Task Decomposition
-- **Dynamic task generation**: The supervisor now generates Python code to create tasks programmatically
-- **Document-aware decomposition**: Tasks are created based on actual document structure and content
-- **Scalable approach**: Can handle documents of varying sizes and structures more effectively
-- **Improved Minion protocol**: Enhanced conversation flow and better final answer detection
-
-### v0.2.1 - Refactored Architecture
-- **Modular design**: Separated concerns into dedicated partials for better maintainability
-- **Enhanced error handling**: Improved timeout management and error recovery
-- **Better token savings calculation**: More accurate cost estimation
-
-### v0.2.0 - Initial Release
-- Basic Minion and MinionS protocol implementation
-- Support for Claude and Ollama integration
-- Token savings analysis
+**Current Version: v0.3.9** - Open WebUI Integration Suite featuring native search integration, RAG pipeline support, advanced citations, streaming responses, visual task decomposition, and multi-document knowledge base capabilities.
 
 ## License
 

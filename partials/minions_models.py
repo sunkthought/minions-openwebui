@@ -125,3 +125,140 @@ class ChunkingStrategy(BaseModel):
     
     class Config:
         extra = "ignore"
+
+# --- v0.3.9 Open WebUI Integration Models ---
+
+class TaskType(Enum):
+    """Types of tasks for v0.3.9 Open WebUI integrations"""
+    DOCUMENT_ANALYSIS = "document_analysis"
+    WEB_SEARCH = "web_search"
+    HYBRID = "hybrid"
+    SYNTHESIS = "synthesis"
+
+class WebSearchResult(BaseModel):
+    """Result from web search integration"""
+    query: str
+    title: str = ""
+    url: str = ""
+    snippet: str = ""
+    relevance_score: float = 0.0
+    source_domain: str = ""
+    
+    class Config:
+        extra = "ignore"
+
+class RAGChunk(BaseModel):
+    """RAG retrieved chunk with metadata"""
+    content: str
+    document_id: str
+    document_name: str
+    chunk_id: str
+    relevance_score: float
+    start_position: int = 0
+    end_position: int = 0
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+    
+    class Config:
+        extra = "ignore"
+
+class Citation(BaseModel):
+    """Citation with Open WebUI inline format support"""
+    citation_id: str
+    source_type: str  # "document", "web", "rag"
+    cited_text: str
+    formatted_citation: str
+    relevance_score: Optional[float] = None
+    source_metadata: Dict[str, Any] = Field(default_factory=dict)
+    
+    class Config:
+        extra = "ignore"
+
+class EnhancedTaskResult(BaseModel):
+    """Enhanced task result with v0.3.9 features"""
+    explanation: str = Field(
+        description="Brief explanation of the findings or the process taken to answer the task."
+    )
+    citation: Optional[str] = Field(
+        default=None, 
+        description="Direct quote from the analyzed text (chunk) that supports the answer."
+    )
+    answer: Optional[str] = Field(
+        default=None, 
+        description="The specific information extracted or the answer to the sub-task."
+    )
+    confidence: str = Field(
+        default="LOW", 
+        description="Confidence level in the provided answer/explanation (e.g., HIGH, MEDIUM, LOW)."
+    )
+    
+    # v0.3.9 enhancements
+    task_type: TaskType = Field(default=TaskType.DOCUMENT_ANALYSIS)
+    citations: List[Citation] = Field(default_factory=list)
+    web_search_results: List[WebSearchResult] = Field(default_factory=list)
+    rag_chunks_used: List[RAGChunk] = Field(default_factory=list)
+    source_documents: List[str] = Field(default_factory=list)
+    
+    class Config:
+        extra = "ignore"
+
+class TaskVisualization(BaseModel):
+    """Task visualization data for Mermaid diagrams"""
+    task_id: str
+    description: str
+    task_type: TaskType
+    status: str  # pending, running, completed, failed
+    document_refs: List[str] = Field(default_factory=list)
+    web_query: Optional[str] = None
+    created_at: Optional[str] = None
+    completed_at: Optional[str] = None
+    
+    class Config:
+        extra = "ignore"
+
+class StreamingUpdate(BaseModel):
+    """Streaming update message"""
+    update_type: str  # phase, task_progress, search, error, metrics
+    message: str
+    timestamp: Optional[str] = None
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+    
+    class Config:
+        extra = "ignore"
+
+class DocumentReference(BaseModel):
+    """Document reference for multi-document support"""
+    document_id: str
+    document_name: str
+    document_type: str = "unknown"
+    size_bytes: int = 0
+    chunk_count: int = 0
+    upload_date: Optional[str] = None
+    last_accessed: Optional[str] = None
+    
+    class Config:
+        extra = "ignore"
+
+class KnowledgeBaseContext(BaseModel):
+    """Context for multi-document knowledge base operations"""
+    available_documents: List[DocumentReference] = Field(default_factory=list)
+    referenced_documents: List[str] = Field(default_factory=list)
+    cross_document_relationships: Dict[str, List[str]] = Field(default_factory=dict)
+    
+    class Config:
+        extra = "ignore"
+
+class PipelineMetrics(BaseModel):
+    """Enhanced metrics for v0.3.9 pipeline execution"""
+    execution_time_ms: float = 0.0
+    total_tasks: int = 0
+    completed_tasks: int = 0
+    failed_tasks: int = 0
+    web_searches_performed: int = 0
+    rag_retrievals_performed: int = 0
+    citations_generated: int = 0
+    documents_processed: int = 0
+    streaming_updates_sent: int = 0
+    tokens_saved_vs_naive: int = 0
+    
+    class Config:
+        extra = "ignore"
