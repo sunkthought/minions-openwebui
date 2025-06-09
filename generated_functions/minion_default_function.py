@@ -1702,60 +1702,29 @@ async def minion_pipe(
         if not chunks and context:
             return "❌ **Error:** Context provided, but failed to create any processable chunks. Check chunk_size setting."
         
+        # Process all chunks together in one protocol execution (like MinionS)
+        # This prevents the performance issue of running full protocol per chunk
+        combined_context = "\n\n".join([f"=== CHUNK {i+1} OF {len(chunks)} ===\n{chunk}" for i, chunk in enumerate(chunks)])
+        
+        result: str = await _execute_minion_protocol(
+            valves=pipe_self.valves, 
+            query=user_query, 
+            context=combined_context, 
+            call_claude_func=call_claude,
+            call_ollama_func=call_ollama,
+            LocalAssistantResponseModel=LocalAssistantResponse,
+            ConversationStateModel=ConversationState,
+            QuestionDeduplicatorModel=QuestionDeduplicator,
+            ConversationFlowControllerModel=ConversationFlowController,
+            AnswerValidatorModel=AnswerValidator
+        )
+        
         if len(chunks) > 1:
-            # Multiple chunks - need to process each chunk and combine results
-            chunk_results = []
-            for i, chunk in enumerate(chunks):
-                chunk_header = f"## 📄 Chunk {i+1} of {len(chunks)}\n"
-                
-                try:
-                    chunk_result = await _execute_minion_protocol(
-                        valves=pipe_self.valves, 
-                        query=user_query, 
-                        context=chunk, 
-                        call_claude_func=call_claude,
-                        call_ollama_func=call_ollama,
-                        LocalAssistantResponseModel=LocalAssistantResponse,
-                        ConversationStateModel=ConversationState,
-                        QuestionDeduplicatorModel=QuestionDeduplicator,
-                        ConversationFlowControllerModel=ConversationFlowController,
-                        AnswerValidatorModel=AnswerValidator
-                    )
-                    chunk_results.append(chunk_header + chunk_result)
-                except Exception as e:
-                    chunk_results.append(f"{chunk_header}❌ **Error processing chunk {i+1}:** {str(e)}")
-            
-            # Combine all chunk results
-            combined_result = "\n\n---\n\n".join(chunk_results)
-            
-            # Add summary header
-            summary_header = f"""# 🔗 Multi-Chunk Analysis Results
-            
-**Document processed in {len(chunks)} chunks** (max {pipe_self.valves.chunk_size:,} characters each)
-
-{combined_result}
-
----
-
-## 📋 Summary
-The document was automatically divided into {len(chunks)} chunks for processing. Each chunk was analyzed independently using the Minion protocol. Review the individual chunk results above for comprehensive coverage of the document."""
-            
-            return summary_header
-        else:
-            # Single chunk or no chunking needed
-            result: str = await _execute_minion_protocol(
-                valves=pipe_self.valves, 
-                query=user_query, 
-                context=chunks[0] if chunks else context, 
-                call_claude_func=call_claude,  # Pass imported function
-                call_ollama_func=call_ollama,  # Pass imported function
-                LocalAssistantResponseModel=LocalAssistantResponse, # Pass imported class
-                ConversationStateModel=ConversationState,
-                QuestionDeduplicatorModel=QuestionDeduplicator,
-                ConversationFlowControllerModel=ConversationFlowController,
-                AnswerValidatorModel=AnswerValidator
-            )
-            return result
+            # Add multi-chunk processing note to the result
+            chunk_info = f"\n\n---\n\n## 📄 Multi-Chunk Processing Info\n**Document processed as {len(chunks)} chunks** (max {pipe_self.valves.chunk_size:,} characters each) in a single conversation session for optimal performance."
+            result += chunk_info
+        
+        return result
 
     except Exception as e:
         import traceback # Keep import here as it's conditional
