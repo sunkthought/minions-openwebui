@@ -4719,7 +4719,7 @@ class Pipe:
 
     def __init__(self):
         self.valves = self.Valves()
-        self.name = "Minion v0.3.8 (OpenAI + Scaling)"
+        self.name = "Minion v0.3.8 (Conversational)"
 
     def pipes(self):
         """Define the available models"""

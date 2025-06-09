@@ -3,7 +3,7 @@
     "description": "Default Minion function with enhanced modular architecture and improved error handling.",
     "output_filename_template": "{profile_name}_function.py",
     "target_pipe_class_name": "Pipe",
-    "target_pipe_name_in_init": "Minion v0.3.8 (OpenAI + Scaling)",
+    "target_pipe_name_in_init": "Minion v0.3.8 (Conversational)",
     "target_pipe_id_in_init": "minion-claude",
     "header_placeholders": {
       "TITLE": "Minion Protocol Integration for Open WebUI v0.3.8",
@@ -35,7 +35,7 @@
     "description": "Default MinionS function with enhanced modular architecture and improved error handling.",
     "output_filename_template": "{profile_name}_function.py",
     "target_pipe_class_name": "Pipe",
-    "target_pipe_name_in_init": "MinionS v0.3.8 (OpenAI + Scaling)",
+    "target_pipe_name_in_init": "MinionS v0.3.8 (Decomposition)",
     "target_pipe_id_in_init": "minions-claude",
     "header_placeholders": {
       "TITLE": "MinionS Protocol Integration for Open WebUI v0.3.8",
@@ -72,7 +72,7 @@
     "description": "Legacy Minion function (v0.3.6b) - use only for compatibility with existing deployments.",
     "output_filename_template": "{profile_name}_function.py",
     "target_pipe_class_name": "Pipe",
-    "target_pipe_name_in_init": "Minion v0.3.6b (Legacy)",
+    "target_pipe_name_in_init": "Minion v0.3.6b (Conversational)",
     "target_pipe_id_in_init": "minion-claude-legacy",
     "header_placeholders": {
       "TITLE": "Minion Protocol Integration for Open WebUI (Legacy)",
@@ -100,7 +100,7 @@
     "description": "Legacy MinionS function (v0.3.5b) - use only for compatibility with existing deployments.",
     "output_filename_template": "{profile_name}_function.py",
     "target_pipe_class_name": "Pipe",
-    "target_pipe_name_in_init": "MinionS v0.3.5b (Legacy)",
+    "target_pipe_name_in_init": "MinionS v0.3.5b (Decomposition)",
     "target_pipe_id_in_init": "minions-claude-legacy",
     "header_placeholders": {
       "TITLE": "MinionS Protocol Integration for Open WebUI (Legacy)",
