@@ -290,11 +290,21 @@ async def _execute_minions_protocol(
 
         # Check for "FINAL ANSWER READY."
         if "FINAL ANSWER READY." in claude_response_for_decomposition:
-            final_response = claude_response_for_decomposition.split("FINAL ANSWER READY.", 1)[1].strip()
+            # Extract content after "FINAL ANSWER READY."
+            answer_parts = claude_response_for_decomposition.split("FINAL ANSWER READY.", 1)
+            if len(answer_parts) > 1:
+                final_response = answer_parts[1].strip()
+                # Clean up any remaining formatting
+                if final_response.startswith('"') and final_response.endswith('"'):
+                    final_response = final_response[1:-1]
+            else:
+                final_response = "Final answer was indicated but content could not be extracted."
+            
             claude_provided_final_answer = True
             early_stopping_reason_for_output = "Claude provided FINAL ANSWER READY." # Explicitly set reason
             if valves.show_conversation: # This log already exists
                 conversation_log.append(f"**🤖 Claude indicates final answer is ready in round {current_round + 1}.**")
+                conversation_log.append(f"**🤖 Claude (Final Answer):**\n{final_response}")
             scratchpad_content += f"\n\n**Round {current_round + 1}:** Claude provided final answer. Stopping." # Added "Stopping."
             break
 
@@ -565,6 +575,32 @@ async def _execute_minions_protocol(
                      debug_log.append(f"**🏁 Breaking loop due to convergence in Round {current_round + 1}. (Debug Mode)**")
                 break # Exit the round loop
 
+        # v0.3.8 Adaptive Round Control
+        if hasattr(valves, 'adaptive_rounds') and valves.adaptive_rounds and len(all_round_results_aggregated) >= 2:
+            try:
+                # Get current and previous round results for analysis
+                current_round_results = [r for r in all_round_results_aggregated if r.get('round') == current_round + 1]
+                previous_round_results = [r for r in all_round_results_aggregated if r.get('round') == current_round]
+                
+                # Simple adaptive analysis based on confidence and information gain
+                if current_round_results and previous_round_results:
+                    current_avg_conf = sum(1 for r in current_round_results if r.get('status') == 'success') / len(current_round_results) if current_round_results else 0.0
+                    should_stop_adaptive = (current_avg_conf >= getattr(valves, 'confidence_threshold_adaptive', 0.8) and 
+                                          len(current_round_results) > 0)
+                    
+                    if should_stop_adaptive and (current_round + 1) >= getattr(valves, 'min_rounds', 1):
+                        early_stopping_reason_for_output = f"Adaptive round control: High confidence ({current_avg_conf:.2f}) reached"
+                        if valves.show_conversation:
+                            conversation_log.append(f"**⚠️ Adaptive Early Stopping:** {early_stopping_reason_for_output}")
+                        if valves.debug_mode:
+                            debug_log.append(f"**⚠️ Adaptive Early Stopping:** {early_stopping_reason_for_output} (Debug Mode)")
+                        scratchpad_content += f"\n\n**ADAPTIVE STOPPING (Round {current_round + 1}):** {early_stopping_reason_for_output}"
+                        break
+                        
+            except Exception as e:
+                if valves.debug_mode:
+                    debug_log.append(f"**⚠️ Adaptive round control error:** {e} (Debug Mode)")
+
         # Original Early Stopping Logic (Confidence-based)
         # This will only be reached if convergence was NOT met and we didn't break above.
         # Note: 'round_metric' is the original metric object from raw_metrics_data,
@@ -665,7 +701,7 @@ async def _execute_minions_protocol(
             if valves.debug_mode:
                 start_time_claude_synth = asyncio.get_event_loop().time()
             try:
-                final_response = await call_claude(valves, synthesis_prompt)
+                final_response = await call_supervisor_model(valves, synthesis_prompt)
                 if valves.debug_mode:
                     end_time_claude_synth = asyncio.get_event_loop().time()
                     time_taken_claude_synth = end_time_claude_synth - start_time_claude_synth
