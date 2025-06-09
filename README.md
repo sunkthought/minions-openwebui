@@ -1,6 +1,8 @@
 # Warning: THIS SOFTWARE WAS HEAVILY AI GENERATED
 Use at your own risk. Any voluntary testing, reporting of issues and successed, and submissions by humans greatly accepted. Currently there are a LOT of user valves you can tweak in your testing, this is because I still need to do a ton of testing to find the baseline "good" zones, after which I think some of these can be put into the function generation config for power users. Feel free to tweak with these to your content.
 
+## v0.3.9 with Open WebUI Native RAG, Search, and Streaming Results is still highly experimental and in need of a lot of testing. No new features will be pushed for a while, only tweaks based on heavy testing for a while. 0.3.8 is available in the older versions folder.
+
 # Collaborative AI with Minion and MinionS for Open WebUI
 
 This repository provides an implementation of the Minion and MinionS protocols, designed by HazyResearch, tailored for use as **Functions** within the [Open WebUI](https://github.com/open-webui/open-webui) platform. These protocols enable sophisticated collaboration between local AI models (e.g., Ollama) and powerful remote AI models (e.g., Anthropic's Claude) to tackle complex tasks.
