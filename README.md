@@ -62,7 +62,10 @@ Once Open WebUI is running:
 3.  **Paste Function Code**:
     *   In this repository (`SunkThought/minions-openwebui`), navigate to the `generated_functions/` directory.
     *   Choose the function file based on your preference:
-        *   **Latest v0.3.8 (Current)**:
+        *   **Latest v0.3.9 (Recommended) - Open WebUI Integration Suite**:
+            *   For Minion protocol: `minion_default_function.py` 
+            *   For MinionS protocol: `minions_default_function.py`
+        *   **Previous v0.3.8 (Stable)**:
             *   For Minion protocol: `minion_function_038.py` 
             *   For MinionS protocol: `minions_function_038.py`
     *   Copy the **entire content** of this file.
@@ -136,6 +139,17 @@ Key valves to configure:
 *   `novelty_modifier_complex_query`: Value added to the base novelty threshold for complex queries. (default: 0.0)
 *   `first_round_high_novelty_threshold`: If first round's novel findings percentage is above this (e.g., 0.75 for 75%), it's a high novelty first round. (default: 0.75)
 *   `sufficiency_modifier_high_first_round_novelty`: Value added to sufficiency thresholds if first round novelty is high (e.g., -0.05 to relax sufficiency requirement). (default: -0.05)
+
+#### v0.3.9 Open WebUI Integration Settings
+*   `enable_web_search`: Enable web search integration for queries requiring external information (default: false).
+*   `use_native_rag`: Use Open WebUI's RAG infrastructure instead of naive chunking (default: true).
+*   `rag_top_k`: Number of top relevant chunks to retrieve from RAG pipeline (default: 5, range: 1-20).
+*   `rag_relevance_threshold`: Minimum relevance score for RAG retrieved chunks (default: 0.7, range: 0.0-1.0).
+*   `enable_streaming_responses`: Provide real-time updates during operations (default: true).
+*   `enable_advanced_citations`: Use Open WebUI's inline citation format (default: true).
+*   `citation_max_length`: Maximum length for citation text before truncation (default: 100, range: 50-500).
+*   `show_task_visualization`: Display task decomposition using Mermaid diagrams - MinionS only (default: true).
+*   `enable_multi_document_context`: Enable conversations across multiple documents - Minion only (default: true).
 
 #### Advanced Settings
 *   `debug_mode`: Enable verbose logging and technical details (default: false).
@@ -286,6 +300,63 @@ By understanding these differences, you can choose the protocol that best fits t
 
 **Recommendation**: v0.3.7 is now the default for all new function generation. Use v0.3.6 only if you need compatibility with existing deployments or prefer the simpler architecture.
 
+### What's New in Version 0.3.9 - Open WebUI Integration Suite
+
+Version 0.3.9 introduces comprehensive Open WebUI platform integrations that transform both Minion and MinionS into native Open WebUI powerhouses:
+
+#### 🌐 **Full Open WebUI Search Integration**
+- **Smart Web Search Detection**: Automatically detects when queries require external information (current events, latest data, fact-checking)
+- **Native Search Tool Format**: Uses Open WebUI's `__TOOL_CALL__` format for seamless web search integration
+- **Task Type Classification**: Intelligently categorizes tasks as document_analysis, web_search, or hybrid approaches
+- **Context Enhancement**: Enriches conversational and task-based responses with real-time web information
+
+#### 🔍 **Native RAG Pipeline Integration** 
+- **Document Reference Syntax**: Full support for Open WebUI's `#document_name` reference system
+- **Intelligent Retrieval**: Leverages Open WebUI's RAG infrastructure instead of naive chunking
+- **Relevance Scoring**: Advanced filtering with configurable relevance thresholds (rag_relevance_threshold)
+- **Multi-Document Support**: Seamless operation across multiple documents in knowledge bases
+- **Smart Fallback**: Graceful degradation to chunking when RAG is unavailable
+
+#### 📚 **Advanced Citation System**
+- **Open WebUI Inline Format**: Native support for `<cite title="source">text</cite>` citation tags
+- **Comprehensive Source Tracking**: Citations from documents, web searches, and RAG retrievals
+- **Automatic Citation Generation**: Smart matching of responses to source materials
+- **Traceability**: Full source attribution with relevance scores and metadata
+
+#### 🔄 **Streaming Response Support**
+- **Real-Time Updates**: Live progress indicators during long-running operations
+- **Phase-by-Phase Streaming**: 
+  - 🔍 Query analysis progress
+  - 📋 Task decomposition updates (MinionS)
+  - ⚙️ Round-by-round progress (Minion)
+  - 🌐 Search operation status
+  - ✅ Completion indicators
+- **Async Generator Architecture**: Built on AsyncGenerator for efficient streaming
+- **Error-Aware Streaming**: Graceful error handling within streaming context
+
+#### 📊 **Visual Task Decomposition (MinionS)**
+- **Mermaid Diagram Generation**: Real-time task flow visualization using Mermaid syntax
+- **Interactive Task Status**: Color-coded status updates (pending, running, completed, failed)
+- **Dependency Mapping**: Visual representation of task relationships and data flow
+- **Progress Tracking**: Live updates as tasks complete during execution
+
+#### 🗄️ **Multi-Document Knowledge Base Support**
+- **Cross-Document Analysis**: Intelligent analysis across multiple documents simultaneously
+- **Document Registry**: Automatic tracking of available documents with metadata
+- **Relationship Mapping**: Detection and utilization of cross-document relationships
+- **Conversation Context**: Multi-document awareness in conversational flows (Minion)
+
+#### ⚙️ **Universal Configuration**
+All v0.3.9 features include toggle valves for backward compatibility:
+- `enable_web_search`: Web search integration (default: false)
+- `use_native_rag`: RAG vs naive chunking (default: true)  
+- `enable_streaming_responses`: Real-time updates (default: true)
+- `show_task_visualization`: Mermaid diagrams (default: true, MinionS only)
+- `enable_advanced_citations`: Citation system (default: true)
+- `enable_multi_document_context`: Multi-doc support (default: true, Minion only)
+
+Version 0.3.9 represents the most significant integration with Open WebUI to date, making both protocols native citizens of the Open WebUI ecosystem while maintaining full backward compatibility.
+
 ### What's New in Version 0.3.8
 
 Version 0.3.8 represents a major advancement in collaborative AI capabilities:
@@ -345,7 +416,16 @@ The Minion and MinionS functions in this repository are not static; they are dyn
 
 You can generate different versions of Minion and MinionS functions:
 
-#### Latest Functions (v0.3.8 with OpenAI Support)
+#### Latest Functions (v0.3.9 with Open WebUI Integrations - Recommended)
+```bash
+# Generates minion_default_function.py with full Open WebUI integration suite
+python generator_script.py minion --profile minion_default
+
+# Generates minions_default_function.py with Open WebUI integrations and task visualization
+python generator_script.py minions --profile minions_default
+```
+
+#### Previous Functions (v0.3.8 with OpenAI Support)
 ```bash
 # Generates minion_v037_function.py using v0.3.8 features including OpenAI API support
 python generator_script.py minion --profile minion_v037
@@ -421,7 +501,43 @@ This modular approach provides a powerful way to adapt and evolve the Minion/Min
 
 ## Version History
 
-### v0.3.8 - Multi-Provider API Support & Intelligent Scaling (Latest)
+### v0.3.9 - Open WebUI Integration Suite (Latest)
+- **🌐 Full Open WebUI Search Integration**: Native web search capabilities using Open WebUI's search tool format
+  - **Smart Detection**: Automatic identification of queries requiring external information (current events, fact-checking, latest data)
+  - **Tool Format Compliance**: Uses `__TOOL_CALL__` format for seamless integration with Open WebUI's search infrastructure
+  - **Task Type Classification**: Intelligent categorization as document_analysis, web_search, or hybrid approaches
+  - **Context Enhancement**: Real-time web information enriches both conversational and task-based responses
+- **🔍 Native RAG Pipeline Integration**: Full leverage of Open WebUI's RAG infrastructure instead of naive chunking
+  - **Document Reference Support**: Complete implementation of `#document_name` syntax for targeted retrieval
+  - **Intelligent Retrieval**: Advanced relevance scoring with configurable thresholds (rag_relevance_threshold)
+  - **Multi-Document Operations**: Seamless cross-document analysis in knowledge base environments
+  - **Smart Fallback**: Graceful degradation to chunking when RAG infrastructure is unavailable
+- **📚 Advanced Citation System**: Native Open WebUI inline citation format with comprehensive source tracking
+  - **Inline Citation Tags**: Full support for `<cite title="source">text</cite>` format
+  - **Multi-Source Citations**: Unified citation handling for documents, web searches, and RAG retrievals
+  - **Automatic Attribution**: Intelligent matching of responses to source materials with relevance scoring
+  - **Source Traceability**: Complete audit trail from response text back to original sources
+- **🔄 Streaming Response Support**: Real-time progress updates during long-running operations
+  - **AsyncGenerator Architecture**: Built on Python's AsyncGenerator for efficient streaming implementation
+  - **Phase-by-Phase Updates**: Live progress for query analysis, task decomposition, execution, and synthesis
+  - **Error-Aware Streaming**: Graceful error handling within streaming context with user-friendly messages
+  - **Protocol-Specific Streaming**: Tailored streaming for both conversational (Minion) and task-based (MinionS) flows
+- **📊 Visual Task Decomposition (MinionS)**: Real-time task visualization using Mermaid diagrams
+  - **Dynamic Diagram Generation**: Live Mermaid syntax generation showing task relationships and data flow
+  - **Status-Aware Visualization**: Color-coded task status (pending, running, completed, failed) with real-time updates
+  - **Dependency Mapping**: Clear visual representation of task dependencies and execution order
+  - **Progress Integration**: Synchronized updates between streaming progress and visual representation
+- **🗄️ Multi-Document Knowledge Base Support**: Advanced cross-document analysis and conversation capabilities
+  - **Document Registry**: Automatic tracking of available documents with comprehensive metadata
+  - **Cross-Document Relationships**: Detection and utilization of relationships between documents
+  - **Conversation Context**: Multi-document awareness in conversational flows (Minion protocol)
+  - **Knowledge Base Operations**: Intelligent analysis across multiple documents simultaneously
+- **⚙️ Universal Backward Compatibility**: All features include toggle valves with sensible defaults
+  - **Feature Toggles**: Individual control over each v0.3.9 feature for gradual adoption
+  - **Default Settings**: Conservative defaults ensure compatibility with existing deployments
+  - **Protocol-Specific Features**: Tailored feature sets for Minion (conversational) vs MinionS (task-based) protocols
+
+### v0.3.8 - Multi-Provider API Support & Intelligent Scaling
 - **🔄 Multi-Provider API Support**: Added OpenAI API support as an alternative to Anthropic Claude
   - **Provider Selection**: Choose between 'anthropic' or 'openai' for the supervisor model via `supervisor_provider` valve
   - **Unified API Interface**: `call_supervisor_model()` function provides seamless switching between providers
