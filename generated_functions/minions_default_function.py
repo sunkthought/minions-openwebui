@@ -27,10 +27,11 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
+from urllib.parse import urlparse
 
 # Typing imports
 from typing import (
-    List, Dict, Any, Optional, Tuple, Callable, Awaitable, 
+    List, Dict, Any, Optional, Tuple, Callable, Awaitable, AsyncGenerator,
     Union, Set, TypedDict, Protocol
 )
 
