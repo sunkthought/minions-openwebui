@@ -1,6 +1,8 @@
 # Partials File: partials/minion_models.py
-from typing import List, Optional, Dict
+from typing import List, Optional, Dict, Set, Any, Tuple
 from pydantic import BaseModel, Field
+from enum import Enum
+import asyncio
 
 class LocalAssistantResponse(BaseModel):
     """
@@ -70,3 +72,248 @@ class ConversationMetrics(BaseModel):
     
     class Config:
         extra = "ignore"
+
+class ConversationState(BaseModel):
+    """Tracks the evolving state of a Minion conversation"""
+    qa_pairs: List[Dict[str, Any]] = Field(default_factory=list)
+    topics_covered: Set[str] = Field(default_factory=set)
+    key_findings: Dict[str, str] = Field(default_factory=dict)
+    information_gaps: List[str] = Field(default_factory=list)
+    current_phase: str = Field(default="exploration")
+    knowledge_graph: Dict[str, List[str]] = Field(default_factory=dict)  # topic -> related facts
+    phase_transitions: List[Dict[str, str]] = Field(default_factory=list)  # Track phase transitions
+    
+    def add_qa_pair(self, question: str, answer: str, confidence: str, key_points: List[str] = None):
+        """Add a Q&A pair and update derived state"""
+        self.qa_pairs.append({
+            "round": len(self.qa_pairs) + 1,
+            "question": question,
+            "answer": answer,
+            "confidence": confidence,
+            "key_points": key_points or [],
+            "timestamp": asyncio.get_event_loop().time() if asyncio.get_event_loop().is_running() else 0
+        })
+        
+    def get_state_summary(self) -> str:
+        """Generate a summary of current conversation state for the remote model"""
+        summary = f"Conversation Phase: {self.current_phase}\n"
+        summary += f"Questions Asked: {len(self.qa_pairs)}\n"
+        
+        if self.key_findings:
+            summary += "\nKey Findings:\n"
+            for topic, finding in self.key_findings.items():
+                summary += f"- {topic}: {finding}\n"
+                
+        if self.information_gaps:
+            summary += "\nInformation Gaps:\n"
+            for gap in self.information_gaps:
+                summary += f"- {gap}\n"
+                
+        return summary
+
+class QuestionDeduplicator:
+    """Handles detection and prevention of duplicate questions in conversations"""
+    def __init__(self, similarity_threshold: float = 0.8):
+        self.asked_questions: List[str] = []
+        self.question_embeddings: List[str] = []  # Simplified: store normalized forms
+        self.similarity_threshold = similarity_threshold
+        
+    def is_duplicate(self, question: str) -> Tuple[bool, Optional[str]]:
+        """Check if question is semantically similar to a previous question"""
+        # Normalize the question
+        normalized = self._normalize_question(question)
+        
+        # Check for semantic similarity (simplified approach)
+        for idx, prev_normalized in enumerate(self.question_embeddings):
+            # Safety check to prevent IndexError
+            if idx < len(self.asked_questions):
+                if self._calculate_similarity(normalized, prev_normalized) > self.similarity_threshold:
+                    return True, self.asked_questions[idx]
+                
+        return False, None
+        
+    def add_question(self, question: str):
+        """Add question to the deduplication store"""
+        self.asked_questions.append(question)
+        self.question_embeddings.append(self._normalize_question(question))
+        
+    def _normalize_question(self, question: str) -> str:
+        """Simple normalization - in production, use embeddings"""
+        # Remove common words, lowercase, extract key terms
+        stop_words = {"what", "is", "the", "are", "how", "does", "can", "you", "tell", "me", "about", 
+                      "please", "could", "would", "explain", "describe", "provide", "give", "any",
+                      "there", "which", "when", "where", "who", "why", "do", "have", "has", "been",
+                      "was", "were", "will", "be", "being", "a", "an", "and", "or", "but", "in",
+                      "on", "at", "to", "for", "of", "with", "by", "from", "as", "this", "that"}
+        
+        # Extract words and filter
+        words = question.lower().replace("?", "").replace(".", "").replace(",", "").split()
+        key_words = [w for w in words if w not in stop_words and len(w) > 2]
+        return " ".join(sorted(key_words))
+        
+    def _calculate_similarity(self, q1: str, q2: str) -> float:
+        """Calculate similarity between normalized questions using Jaccard similarity"""
+        words1 = set(q1.split())
+        words2 = set(q2.split())
+        if not words1 or not words2:
+            return 0.0
+        intersection = words1.intersection(words2)
+        union = words1.union(words2)
+        return len(intersection) / len(union) if union else 0.0
+        
+    def get_all_questions(self) -> List[str]:
+        """Return all previously asked questions"""
+        return self.asked_questions.copy()
+
+class ConversationPhase(str, Enum):
+    """Phases of a structured conversation"""
+    EXPLORATION = "exploration"
+    DEEP_DIVE = "deep_dive"
+    GAP_FILLING = "gap_filling"
+    SYNTHESIS = "synthesis"
+
+class ConversationFlowController:
+    """Controls the flow of conversation through different phases"""
+    def __init__(self):
+        self.current_phase = ConversationPhase.EXPLORATION
+        self.phase_question_count = {phase: 0 for phase in ConversationPhase}
+        self.phase_transitions = {
+            ConversationPhase.EXPLORATION: ConversationPhase.DEEP_DIVE,
+            ConversationPhase.DEEP_DIVE: ConversationPhase.GAP_FILLING,
+            ConversationPhase.GAP_FILLING: ConversationPhase.SYNTHESIS,
+            ConversationPhase.SYNTHESIS: ConversationPhase.SYNTHESIS
+        }
+        
+    def should_transition(self, state: ConversationState, valves: Any = None) -> bool:
+        """Determine if conversation should move to next phase"""
+        current_count = self.phase_question_count[self.current_phase]
+        
+        if self.current_phase == ConversationPhase.EXPLORATION:
+            # Move on after configured questions or when main topics identified
+            max_questions = valves.max_exploration_questions if valves else 3
+            return current_count >= max_questions or (current_count >= 2 and len(state.topics_covered) >= 3)
+            
+        elif self.current_phase == ConversationPhase.DEEP_DIVE:
+            # Move on after exploring key topics in detail
+            max_questions = valves.max_deep_dive_questions if valves else 4
+            return current_count >= max_questions or len(state.key_findings) >= 5
+            
+        elif self.current_phase == ConversationPhase.GAP_FILLING:
+            # Move to synthesis when gaps are addressed
+            max_questions = valves.max_gap_filling_questions if valves else 2
+            return current_count >= max_questions or len(state.information_gaps) == 0
+            
+        return False
+        
+    def get_phase_guidance(self) -> str:
+        """Get prompting guidance for current phase"""
+        guidance = {
+            ConversationPhase.EXPLORATION: 
+                "You are in the EXPLORATION phase. Ask broad questions to understand the document's main topics and structure.",
+            ConversationPhase.DEEP_DIVE:
+                "You are in the DEEP DIVE phase. Focus on specific topics that are most relevant to the user's query.",
+            ConversationPhase.GAP_FILLING:
+                "You are in the GAP FILLING phase. Address specific information gaps identified in previous rounds.",
+            ConversationPhase.SYNTHESIS:
+                "You are in the SYNTHESIS phase. You should now have enough information. Prepare your final answer."
+        }
+        return guidance.get(self.current_phase, "")
+        
+    def transition_to_next_phase(self):
+        """Move to the next conversation phase"""
+        self.current_phase = self.phase_transitions[self.current_phase]
+        self.phase_question_count[self.current_phase] = 0
+        
+    def increment_question_count(self):
+        """Increment the question count for the current phase"""
+        self.phase_question_count[self.current_phase] += 1
+        
+    def get_phase_status(self) -> Dict[str, Any]:
+        """Get current phase status for debugging"""
+        return {
+            "current_phase": self.current_phase.value,
+            "questions_in_phase": self.phase_question_count[self.current_phase],
+            "total_questions_by_phase": {
+                phase.value: count for phase, count in self.phase_question_count.items()
+            }
+        }
+
+class AnswerValidator:
+    """Validates answer quality and generates clarification requests"""
+    
+    @staticmethod
+    def validate_answer(answer: str, confidence: str, question: str) -> Dict[str, Any]:
+        """Validate answer quality and completeness"""
+        issues = []
+        
+        # Check for non-answers
+        non_answer_phrases = [
+            "i don't know",
+            "not sure",
+            "unclear",
+            "cannot determine",
+            "no information",
+            "not available",
+            "not found",
+            "not mentioned",
+            "not specified"
+        ]
+        
+        answer_lower = answer.lower()
+        
+        # Check if answer is too vague for low confidence
+        if len(answer.split()) < 10 and confidence == "LOW":
+            issues.append("Answer seems too brief for a low-confidence response")
+            
+        # Check for non-answers without clear indication
+        non_answer_found = any(phrase in answer_lower for phrase in non_answer_phrases)
+        if non_answer_found and "not found" not in answer_lower and "not available" not in answer_lower:
+            issues.append("Answer indicates uncertainty without clearly stating if information is missing")
+            
+        # Check if answer addresses the question keywords
+        question_keywords = set(question.lower().split()) - {
+            "what", "how", "when", "where", "who", "why", "is", "are", "the", "does", "can", "could", "would", "should"
+        }
+        answer_keywords = set(answer_lower.split())
+        
+        if question_keywords:
+            keyword_overlap = len(question_keywords.intersection(answer_keywords)) / len(question_keywords)
+            if keyword_overlap < 0.2:
+                issues.append("Answer may not directly address the question asked")
+        
+        # Check for extremely short answers to complex questions
+        if len(question.split()) > 10 and len(answer.split()) < 5:
+            issues.append("Answer seems too brief for a complex question")
+            
+        return {
+            "is_valid": len(issues) == 0,
+            "issues": issues,
+            "needs_clarification": len(issues) > 0 and confidence != "HIGH",
+            "severity": "high" if len(issues) >= 2 else "low" if len(issues) == 1 else "none"
+        }
+        
+    @staticmethod
+    def generate_clarification_request(validation_result: Dict[str, Any], original_question: str, answer: str) -> str:
+        """Generate a clarification request based on validation issues"""
+        if not validation_result["issues"]:
+            return ""
+            
+        clarification = "I need clarification on your previous answer. "
+        
+        for issue in validation_result["issues"]:
+            if "too brief" in issue:
+                clarification += "Could you provide more detail or explanation? "
+            elif "uncertainty" in issue:
+                clarification += "Is this information not available in the document, or is it unclear? Please be explicit about what information is missing. "
+            elif "not directly address" in issue:
+                clarification += f"Let me rephrase the question: {original_question} "
+            elif "complex question" in issue:
+                clarification += "This seems like a complex topic that might need a more comprehensive answer. "
+                
+        # Add specific guidance based on the answer content
+        if len(answer.split()) < 5:
+            clarification += "If the information isn't in the document, please say so explicitly. If it is available, please provide the specific details."
+        else:
+            clarification += "Please provide more specific information from the document to fully address my question."
+                
+        return clarification.strip()

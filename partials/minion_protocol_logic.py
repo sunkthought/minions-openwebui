@@ -1,6 +1,7 @@
 # Partials File: partials/minion_protocol_logic.py
 import asyncio
 import json
+import re
 from typing import List, Dict, Any, Tuple, Callable
 
 def _calculate_token_savings(conversation_history: List[Tuple[str, str]], context: str, query: str) -> dict:
@@ -31,7 +32,7 @@ def _calculate_token_savings(conversation_history: List[Tuple[str, str]], contex
 
 def _is_final_answer(response: str) -> bool:
     """Check if response contains the specific final answer marker."""
-    return "FINAL ANSWER READY." in response
+    return "FINAL ANSWER READY." in response or "FINAL ANSWER READY:" in response
 
 def detect_completion(response: str) -> bool:
     """Check if remote model indicates it has sufficient information"""
@@ -159,7 +160,11 @@ async def _execute_minion_protocol(
     context: str,
     call_claude_func: Callable,
     call_ollama_func: Callable,
-    LocalAssistantResponseModel: Any
+    LocalAssistantResponseModel: Any,
+    ConversationStateModel: Any = None,
+    QuestionDeduplicatorModel: Any = None,
+    ConversationFlowControllerModel: Any = None,
+    AnswerValidatorModel: Any = None
 ) -> str:
     """Execute the Minion protocol"""
     conversation_log = []
@@ -167,6 +172,31 @@ async def _execute_minion_protocol(
     conversation_history = []
     actual_final_answer = "No final answer was explicitly provided by the remote model."
     claude_declared_final = False
+    
+    # Initialize conversation state if enabled
+    conversation_state = None
+    if valves.track_conversation_state and ConversationStateModel:
+        conversation_state = ConversationStateModel()
+    
+    # Initialize question deduplicator if enabled
+    deduplicator = None
+    if valves.enable_deduplication and QuestionDeduplicatorModel:
+        deduplicator = QuestionDeduplicatorModel(
+            similarity_threshold=valves.deduplication_threshold
+        )
+    
+    # Initialize flow controller if enabled
+    flow_controller = None
+    if valves.enable_flow_control and ConversationFlowControllerModel:
+        flow_controller = ConversationFlowControllerModel()
+    
+    # Initialize answer validator if enabled
+    validator = None
+    if valves.enable_answer_validation and AnswerValidatorModel:
+        validator = AnswerValidatorModel()
+    
+    # Track clarification attempts per question
+    clarification_attempts = {}
     
     # Initialize metrics tracking
     overall_start_time = asyncio.get_event_loop().time()
@@ -181,7 +211,7 @@ async def _execute_minion_protocol(
     }
 
     if valves.debug_mode:
-        debug_log.append(f"🔍 **Debug Info (Minion v0.3.6):**")
+        debug_log.append(f"🔍 **Debug Info (Minion v0.3.6b):**")
         debug_log.append(f"  - Query: {query[:100]}...")
         debug_log.append(f"  - Context length: {len(context)} chars")
         debug_log.append(f"  - Max rounds: {valves.max_rounds}")
@@ -197,9 +227,23 @@ async def _execute_minion_protocol(
         if valves.show_conversation:
             conversation_log.append(f"### 🔄 Round {round_num + 1}")
 
+        # Get phase guidance if flow control is enabled
+        phase_guidance = None
+        if flow_controller and valves.enable_flow_control:
+            phase_guidance = flow_controller.get_phase_guidance()
+            if valves.debug_mode:
+                phase_status = flow_controller.get_phase_status()
+                debug_log.append(f"  📍 Phase: {phase_status['current_phase']} (Question {phase_status['questions_in_phase'] + 1} in phase)")
+        
         claude_prompt_for_this_round = ""
         if round_num == 0:
-            claude_prompt_for_this_round = get_minion_initial_claude_prompt(query, len(context), valves)
+            # Use state-aware prompt if state tracking is enabled
+            if conversation_state and valves.track_conversation_state:
+                claude_prompt_for_this_round = get_minion_initial_claude_prompt_with_state(
+                    query, len(context), valves, conversation_state, phase_guidance
+                )
+            else:
+                claude_prompt_for_this_round = get_minion_initial_claude_prompt(query, len(context), valves)
         else:
             # Check if this is the last round and force a final answer
             is_last_round = (round_num == valves.max_rounds - 1)
@@ -225,9 +269,16 @@ Based on ALL the information provided by the local assistant, you MUST now provi
 
 Respond with "FINAL ANSWER READY." followed by your synthesized answer. Do NOT ask any more questions."""
             else:
-                claude_prompt_for_this_round = get_minion_conversation_claude_prompt(
-                    conversation_history, query, valves
-                )
+                # Use state-aware prompt if state tracking is enabled
+                if conversation_state and valves.track_conversation_state:
+                    previous_questions = deduplicator.get_all_questions() if deduplicator else None
+                    claude_prompt_for_this_round = get_minion_conversation_claude_prompt_with_state(
+                        conversation_history, query, valves, conversation_state, previous_questions, phase_guidance
+                    )
+                else:
+                    claude_prompt_for_this_round = get_minion_conversation_claude_prompt(
+                        conversation_history, query, valves
+                    )
         
         claude_response = ""
         try:
@@ -275,12 +326,58 @@ Respond with "FINAL ANSWER READY." followed by your synthesized answer. Do NOT a
         if round_num == valves.max_rounds - 1:
             continue
 
+        # Extract question from Claude's response for deduplication check
+        question_to_check = claude_response.strip()
+        
+        # Check for duplicate questions if deduplication is enabled
+        if deduplicator and valves.enable_deduplication:
+            is_dup, original_question = deduplicator.is_duplicate(question_to_check)
+            
+            if is_dup:
+                # Log the duplicate detection
+                if valves.show_conversation:
+                    conversation_log.append(f"⚠️ **Duplicate question detected! Similar to: '{original_question[:100]}...'**")
+                    conversation_log.append(f"**Requesting a different question...**\n")
+                
+                if valves.debug_mode:
+                    debug_log.append(f"  ⚠️ Duplicate question detected in round {round_num + 1}. (Debug Mode)")
+                
+                # Create a prompt asking for a different question
+                dedup_prompt = f"""The question you just asked is too similar to a previous question: "{original_question}"
+
+Please ask a DIFFERENT question that explores new aspects of the information needed to answer: "{query}"
+
+Focus on areas not yet covered in our conversation."""
+                
+                # Request a new question
+                try:
+                    new_claude_response = await call_claude_func(valves, dedup_prompt)
+                    claude_response = new_claude_response
+                    question_to_check = claude_response.strip()
+                    
+                    # Update conversation history with the new question
+                    conversation_history[-1] = ("assistant", claude_response)
+                    
+                    if valves.show_conversation:
+                        conversation_log.append(f"**🤖 Remote Model (New Question):**")
+                        conversation_log.append(f"{claude_response}\n")
+                except Exception as e:
+                    # If we can't get a new question, continue with the duplicate
+                    if valves.debug_mode:
+                        debug_log.append(f"  ❌ Failed to get alternative question: {e} (Debug Mode)")
+        
+        # Add the question to deduplicator after checks
+        if deduplicator:
+            deduplicator.add_question(question_to_check)
+
         local_prompt = get_minion_local_prompt(context, query, claude_response, valves)
         
         local_response_str = ""
         try:
             if valves.debug_mode: 
                 start_time_ollama = asyncio.get_event_loop().time()
+                debug_log.append(f"  🔄 Calling local model {valves.local_model} at {valves.ollama_base_url} (timeout: {valves.timeout_local}s) (Debug Mode)")
+            
             local_response_str = await call_ollama_func(
                 valves,
                 local_prompt,
@@ -308,11 +405,30 @@ Respond with "FINAL ANSWER READY." followed by your synthesized answer. Do NOT a
                 time_taken_ollama = end_time_ollama - start_time_ollama
                 debug_log.append(f"  ⏱️ Local LLM call in round {round_num + 1} took {time_taken_ollama:.2f}s. (Debug Mode)")
         except Exception as e:
-            error_message = f"❌ Error calling Local LLM in round {round_num + 1}: {e}"
+            # Enhanced error reporting
+            error_type = type(e).__name__
+            error_msg = str(e) if str(e) else "Unknown error (empty exception message)"
+            
+            if valves.debug_mode and hasattr(e, '__traceback__'):
+                import traceback
+                error_details = traceback.format_exc()
+                debug_log.append(f"  ❌ Local LLM call failed with full traceback: {error_details} (Debug Mode)")
+            
+            if "timeout" in error_msg.lower() or error_type == "TimeoutError":
+                error_message = f"❌ Error calling Local LLM in round {round_num + 1}: Timeout after {valves.timeout_local}s - Local model may be overloaded or unavailable"
+            elif "connection" in error_msg.lower() or "connect" in error_msg.lower():
+                error_message = f"❌ Error calling Local LLM in round {round_num + 1}: Connection failed - Check if Ollama is running at {valves.ollama_base_url}"
+            elif error_msg == "Unknown error (empty exception message)":
+                error_message = f"❌ Error calling Local LLM in round {round_num + 1}: {error_type} with empty message - likely timeout or connection issue"
+            else:
+                error_message = f"❌ Error calling Local LLM in round {round_num + 1}: {error_type}: {error_msg}"
+            
             conversation_log.append(error_message)
             if valves.debug_mode: 
                 debug_log.append(f"  {error_message} (Debug Mode)")
-            actual_final_answer = "Minion protocol failed due to Local LLM API error."
+                debug_log.append(f"  🔧 Troubleshooting: Check Ollama status, model availability ({valves.local_model}), and network connectivity (Debug Mode)")
+            
+            actual_final_answer = f"Minion protocol failed due to Local LLM API error: {error_type}"
             break
 
         response_for_claude = local_response_data.get("answer", "Error: Could not extract answer from local LLM.")
@@ -321,7 +437,138 @@ Respond with "FINAL ANSWER READY." followed by your synthesized answer. Do NOT a
         elif not local_response_data.get("answer") and not local_response_data.get("parse_error"):
             response_for_claude = "Local LLM provided no answer."
 
+        # Validate answer quality if validation is enabled
+        original_response = response_for_claude
+        validation_passed = True
+        
+        if validator and valves.enable_answer_validation:
+            question_for_validation = claude_response.strip()
+            answer_confidence = local_response_data.get('confidence', 'MEDIUM')
+            
+            # Check if we've already tried clarification for this question
+            question_key = f"round_{round_num}_{hash(question_for_validation)}"
+            attempts = clarification_attempts.get(question_key, 0)
+            
+            if attempts < valves.max_clarification_attempts:
+                validation_result = validator.validate_answer(
+                    response_for_claude, 
+                    answer_confidence, 
+                    question_for_validation
+                )
+                
+                if validation_result["needs_clarification"]:
+                    validation_passed = False
+                    clarification_attempts[question_key] = attempts + 1
+                    
+                    if valves.show_conversation:
+                        conversation_log.append(f"🔍 **Answer validation detected issues:** {', '.join(validation_result['issues'])}")
+                        conversation_log.append(f"**Requesting clarification (attempt {attempts + 1}/{valves.max_clarification_attempts})...**\n")
+                    
+                    if valves.debug_mode:
+                        debug_log.append(f"  🔍 Answer validation failed: {validation_result['issues']} (Debug Mode)")
+                    
+                    # Generate clarification request
+                    clarification_request = validator.generate_clarification_request(
+                        validation_result, 
+                        question_for_validation,
+                        response_for_claude
+                    )
+                    
+                    # Get clarified response
+                    try:
+                        clarified_prompt = get_minion_local_prompt(context, query, clarification_request, valves)
+                        
+                        if valves.debug_mode:
+                            debug_log.append(f"  🔄 Requesting clarification for round {round_num + 1} (Debug Mode)")
+                        
+                        clarified_response = await call_ollama_func(
+                            valves,
+                            clarified_prompt,
+                            use_json=True,
+                            schema=LocalAssistantResponseModel
+                        )
+                        
+                        clarified_data = _parse_local_response(
+                            clarified_response,
+                            is_structured=True,
+                            use_structured_output=valves.use_structured_output,
+                            debug_mode=valves.debug_mode,
+                            LocalAssistantResponseModel=LocalAssistantResponseModel
+                        )
+                        
+                        # Use clarified response
+                        response_for_claude = clarified_data.get("answer", response_for_claude)
+                        local_response_data = clarified_data  # Update for metrics
+                        
+                        if valves.show_conversation:
+                            conversation_log.append(f"**💻 Local Model (Clarified):**")
+                            if valves.use_structured_output and clarified_data.get("parse_error") is None:
+                                conversation_log.append(f"```json\n{json.dumps(clarified_data, indent=2)}\n```")
+                            else:
+                                conversation_log.append(f"{response_for_claude}")
+                            conversation_log.append("\n")
+                            
+                    except Exception as e:
+                        if valves.debug_mode:
+                            debug_log.append(f"  ❌ Clarification request failed: {e} (Debug Mode)")
+                        # Continue with original response
+                        response_for_claude = original_response
+
         conversation_history.append(("user", response_for_claude))
+        
+        # Update conversation state if enabled
+        if conversation_state and valves.track_conversation_state:
+            # Extract the question from Claude's response
+            question = claude_response.strip()
+            
+            # Add Q&A pair to state
+            conversation_state.add_qa_pair(
+                question=question,
+                answer=response_for_claude,
+                confidence=local_response_data.get('confidence', 'MEDIUM'),
+                key_points=local_response_data.get('key_points')
+            )
+            
+            # Extract topics from the question (simple keyword extraction)
+            keywords = re.findall(r'\b[A-Z][a-z]+\b|\b\w{5,}\b', question)
+            for keyword in keywords[:3]:  # Add up to 3 keywords as topics
+                conversation_state.topics_covered.add(keyword.lower())
+            
+            # Update key findings if high confidence answer
+            if local_response_data.get('confidence') == 'HIGH' and local_response_data.get('key_points'):
+                for idx, point in enumerate(local_response_data['key_points'][:2]):
+                    conversation_state.key_findings[f"round_{round_num+1}_finding_{idx+1}"] = point
+        
+        # Update flow controller if enabled
+        if flow_controller and valves.enable_flow_control:
+            # Increment question count for current phase
+            flow_controller.increment_question_count()
+            
+            # Check if we should transition to next phase
+            if conversation_state and flow_controller.should_transition(conversation_state, valves):
+                old_phase = flow_controller.current_phase.value
+                flow_controller.transition_to_next_phase()
+                new_phase = flow_controller.current_phase.value
+                
+                # Update conversation state phase
+                conversation_state.current_phase = new_phase
+                conversation_state.phase_transitions.append({
+                    "round": round_num + 1,
+                    "from": old_phase,
+                    "to": new_phase
+                })
+                
+                if valves.show_conversation:
+                    conversation_log.append(f"📊 **Phase Transition: {old_phase} → {new_phase}**\n")
+                
+                if valves.debug_mode:
+                    debug_log.append(f"  📊 Phase transition: {old_phase} → {new_phase} (Round {round_num + 1})")
+            
+            # Check if we're in synthesis phase and should force completion
+            if flow_controller.current_phase.value == "synthesis" and round_num > 2:
+                if valves.debug_mode:
+                    debug_log.append(f"  🎯 Synthesis phase reached - encouraging final answer")
+        
         if valves.show_conversation:
             conversation_log.append(f"**💻 Local Model ({valves.local_model}):**")
             if valves.use_structured_output and local_response_data.get("parse_error") is None:

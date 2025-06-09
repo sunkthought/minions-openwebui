@@ -101,6 +101,60 @@ class MinionValves(BaseModel):
     confidence_threshold: float = Field(
         default=0.7, title="Confidence Threshold", description="Minimum confidence level for the LLM's response (0.0-1.0). Primarily a suggestion to the LLM.", ge=0, le=1
     )
+    
+    # Conversation State Tracking (v0.3.6b)
+    track_conversation_state: bool = Field(
+        default=True,
+        description="Enable comprehensive conversation state tracking for better context awareness"
+    )
+    
+    # Question Deduplication (v0.3.6b)
+    enable_deduplication: bool = Field(
+        default=True,
+        description="Prevent duplicate questions by detecting semantic similarity"
+    )
+    deduplication_threshold: float = Field(
+        default=0.8,
+        description="Similarity threshold for question deduplication (0-1). Higher = stricter matching",
+        ge=0.0,
+        le=1.0
+    )
+    
+    # Conversation Flow Control (v0.3.6b)
+    enable_flow_control: bool = Field(
+        default=True,
+        description="Enable phased conversation flow (exploration → deep dive → gap filling → synthesis)"
+    )
+    max_exploration_questions: int = Field(
+        default=3,
+        description="Maximum questions in exploration phase (broad understanding)",
+        ge=1,
+        le=10
+    )
+    max_deep_dive_questions: int = Field(
+        default=4,
+        description="Maximum questions in deep dive phase (specific topics)",
+        ge=1,
+        le=10
+    )
+    max_gap_filling_questions: int = Field(
+        default=2,
+        description="Maximum questions in gap filling phase (missing information)",
+        ge=1,
+        le=10
+    )
+    
+    # Answer Validation (v0.3.6b)
+    enable_answer_validation: bool = Field(
+        default=True,
+        description="Enable answer quality validation and clarification requests"
+    )
+    max_clarification_attempts: int = Field(
+        default=1,
+        description="Maximum clarification requests per question",
+        ge=0,
+        le=3
+    )
 
     # The following class is part of the Pydantic configuration and is standard.
     # It ensures that extra fields passed to the model are ignored rather than causing an error.

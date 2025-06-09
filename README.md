@@ -8,7 +8,7 @@ MinionS (and its predecessor, Minion) is a protocol designed by HazyResearch to 
 
 Key concepts include:
 
-*   **Task Decomposition (MinionS)**: A complex user query is broken down into smaller, manageable sub-tasks by a capable remote "supervisor" model. **Version 0.3.0+** now features advanced code-based task decomposition, where the supervisor generates Python code to dynamically create tasks based on document structure.
+*   **Task Decomposition (MinionS)**: A complex user query is broken down into smaller, manageable sub-tasks by a capable remote "supervisor" model. **Version 0.3.0+** now features advanced code-based task decomposition, where the supervisor generates Python code to dynamically create tasks based on document structure. **Version 0.3.6b** introduces advanced conversation intelligence with state tracking, question deduplication, flow control, and answer validation.
 *   **Specialized Roles**: Different models take on specific roles. In this implementation:
     *   A remote "supervisor" model (e.g., Claude) decomposes tasks (MinionS) or guides the conversation (Minion), and synthesizes final answers.
     *   Local "worker" models (e.g., Ollama-based models) execute specific sub-tasks on portions of data (MinionS) or provide information from the full context (Minion).
@@ -253,6 +253,20 @@ Both Minion and MinionS are designed for collaborative AI, but they employ diffe
 | **Document Chunking** | Automatic chunking for large docs (v0.3.6+) | Built-in chunking and parallel processing         |
 
 By understanding these differences, you can choose the protocol that best fits the complexity and nature of your task when using these functions in Open WebUI.
+
+### What's New in Version 0.3.6b
+
+Version 0.3.6b introduces four major improvements to the Minion protocol:
+
+1. **Conversation State Tracking**: Maintains comprehensive conversation state including Q&A pairs, topics covered, key findings, and information gaps for better context awareness.
+
+2. **Question Deduplication**: Prevents the remote model from asking semantically similar questions by detecting duplicates and requesting alternative questions.
+
+3. **Conversation Flow Control**: Guides conversations through logical phases (exploration → deep dive → gap filling → synthesis) for more efficient and structured interactions.
+
+4. **Answer Validation Loop**: Validates answer quality and automatically requests clarification for unclear or incomplete responses, improving overall answer quality.
+
+These improvements work together to create more intelligent, efficient, and higher-quality conversations between the remote and local models.
 
 ## Advanced: Configuration and Custom Function Generation
 
