@@ -129,6 +129,15 @@ IMPORT_GROUPS = {
         *TYPING_IMPORTS,
         *STANDARD_LIBRARY['async'],
         *STANDARD_LIBRARY['data_handling'],
+        'import time',
+    ],
+    
+    'tool_execution_bridge': [
+        *TYPING_IMPORTS,
+        *STANDARD_LIBRARY['async'],
+        *STANDARD_LIBRARY['data_handling'],
+        'import uuid',
+        'from datetime import datetime',
     ],
 }
 
@@ -204,6 +213,8 @@ def get_imports_for_partial(partial_name: str) -> List[str]:
         category = 'task_visualizer'
     elif partial_name == 'streaming_support':
         category = 'streaming_support'
+    elif partial_name == 'tool_execution_bridge':
+        category = 'tool_execution_bridge'
     else:
         category = 'common_imports'  # Default fallback
     

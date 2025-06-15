@@ -103,12 +103,17 @@ class WebSearchIntegration:
         
         return search_query
     
-    async def execute_web_search(self, search_query: str) -> Dict[str, Any]:
+    async def execute_web_search(self, search_query: str, __user__: dict = None) -> Dict[str, Any]:
         """
-        Execute web search using Open WebUI's search tool format.
+        Execute web search using Open WebUI's search tool format with proper response handling.
+        
+        The search tool response structure in Open WebUI typically includes:
+        - Search results with title, URL, and snippet
+        - The tool execution happens via the pipeline's message handling
         
         Args:
             search_query: The search query to execute
+            __user__: User context from Open WebUI (optional)
             
         Returns:
             Dict containing search results with citations
@@ -121,25 +126,39 @@ class WebSearchIntegration:
         
         try:
             # Generate the search tool call using Open WebUI format
-            search_tool_call = f'''__TOOL_CALL__
-{{"name": "web_search", "parameters": {{"query": "{search_query}"}}}}
-__TOOL_CALL__'''
-            
-            if self.debug_mode:
-                print(f"[WebSearch] Executing search: {search_tool_call}")
-            
-            # Note: In a real implementation, this would be handled by Open WebUI's pipeline
-            # For now, we return a structured placeholder that matches expected format
-            search_results = {
-                "query": search_query,
-                "tool_call": search_tool_call,
-                "results": [],
-                "citations": [],
-                "status": "pending_tool_execution"
+            # This format triggers Open WebUI's tool execution system
+            search_tool_call = {
+                "name": "web_search",
+                "parameters": {"query": search_query}
             }
             
-            # Cache the results
-            self.search_results_cache[search_query] = search_results
+            if self.debug_mode:
+                print(f"[WebSearch] Preparing search tool call: {json.dumps(search_tool_call)}")
+            
+            # Create a special response structure that Open WebUI will recognize
+            # and execute as a tool call
+            tool_request = {
+                "type": "tool_call",
+                "tool": search_tool_call,
+                "query": search_query,
+                "awaiting_response": True
+            }
+            
+            # For actual execution, we need to return the tool call format
+            # that Open WebUI's pipeline will intercept and execute
+            search_results = {
+                "query": search_query,
+                "tool_call": f'''__TOOL_CALL__
+{json.dumps(search_tool_call)}
+__TOOL_CALL__''',
+                "results": [],
+                "citations": [],
+                "status": "tool_execution_requested",
+                "tool_request": tool_request
+            }
+            
+            # Don't cache incomplete results
+            # Cache will be updated when we process the tool response
             
             return search_results
             
@@ -148,6 +167,95 @@ __TOOL_CALL__'''
             if self.debug_mode:
                 print(f"[WebSearch] {error_msg}")
             raise MinionError(error_msg)
+    
+    async def process_tool_response(self, tool_response: Any, original_query: str) -> Dict[str, Any]:
+        """
+        Process the response from Open WebUI's tool execution.
+        
+        Args:
+            tool_response: The response from the tool execution
+            original_query: The original search query for cache management
+            
+        Returns:
+            Dict containing processed search results
+        """
+        try:
+            # Handle different response formats from Open WebUI
+            if isinstance(tool_response, dict):
+                # Standard format with 'sources' key
+                if 'sources' in tool_response:
+                    results = tool_response['sources']
+                # Alternative format with 'results' key
+                elif 'results' in tool_response:
+                    results = tool_response['results']
+                # Direct list of results
+                elif isinstance(tool_response.get('data'), list):
+                    results = tool_response['data']
+                else:
+                    # Fallback: treat the entire response as a single result
+                    results = [tool_response]
+            elif isinstance(tool_response, list):
+                results = tool_response
+            elif isinstance(tool_response, str):
+                # Parse string response
+                results = self.parse_search_results(tool_response)
+            else:
+                if self.debug_mode:
+                    print(f"[WebSearch] Unexpected tool response type: {type(tool_response)}")
+                results = []
+            
+            # Normalize results to ensure consistent format
+            normalized_results = []
+            citations = []
+            
+            for idx, result in enumerate(results[:10]):  # Limit to top 10 results
+                if isinstance(result, dict):
+                    normalized = {
+                        'title': result.get('title', f'Search Result {idx + 1}'),
+                        'url': result.get('url', result.get('link', '')),
+                        'snippet': result.get('snippet', result.get('description', result.get('content', ''))),
+                        'metadata': result.get('metadata', {})
+                    }
+                    
+                    # Create citation for this result
+                    if normalized['snippet']:
+                        citation = self.create_web_search_citation(normalized, normalized['snippet'][:200])
+                        citations.append(citation)
+                    
+                    normalized_results.append(normalized)
+            
+            # Create complete search results
+            search_results = {
+                "query": original_query,
+                "results": normalized_results,
+                "citations": citations,
+                "status": "completed",
+                "timestamp": json.dumps({"timestamp": "now"}),  # Placeholder for actual timestamp
+                "result_count": len(normalized_results)
+            }
+            
+            # Cache the completed results
+            self.search_results_cache[original_query] = search_results
+            
+            if self.debug_mode:
+                print(f"[WebSearch] Processed {len(normalized_results)} search results for: '{original_query}'")
+            
+            return search_results
+            
+        except Exception as e:
+            error_msg = f"Failed to process tool response: {str(e)}"
+            if self.debug_mode:
+                print(f"[WebSearch] {error_msg}")
+                print(f"[WebSearch] Raw response: {tool_response}")
+            
+            # Return error state
+            return {
+                "query": original_query,
+                "results": [],
+                "citations": [],
+                "status": "error",
+                "error": error_msg
+            }
     
     def parse_search_results(self, raw_results: str) -> List[Dict[str, Any]]:
         """

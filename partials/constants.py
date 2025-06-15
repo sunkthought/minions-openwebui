@@ -290,7 +290,7 @@ class ConfidenceLevels:
 class SystemRequirements:
     """System version requirements."""
     MIN_OPENWEBUI_VERSION = "0.5.0"
-    CURRENT_VERSION = "v0.3.7"
+    CURRENT_VERSION = "v0.3.9b"
 
 
 class SpecialMarkers:
