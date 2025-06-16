@@ -16,6 +16,99 @@ async def minion_pipe(
     async for chunk in minion_pipe_streaming(pipe_self, body, __user__, __request__, __files__, __pipe_id__):
         yield chunk
 
+
+async def _call_supervisor_directly(valves: Any, query: str) -> str:
+    """Fallback to direct supervisor call when no context is available"""
+    return await call_supervisor_model(valves, f"Please answer this question: {query}")
+
+
+async def _execute_simplified_chunk_protocol(
+    valves: Any,
+    query: str,
+    context: str,
+    chunk_num: int,
+    total_chunks: int,
+    call_ollama_func: Callable,
+    LocalAssistantResponseModel: Any,
+    shared_state: Any = None,
+    shared_deduplicator: Any = None
+) -> str:
+    """Execute a simplified 1-2 round protocol for individual chunks"""
+    conversation_log = []
+    debug_log = []
+    
+    # Create a focused prompt for this chunk
+    claude_prompt = f"""You are analyzing chunk {chunk_num} of {total_chunks} from a larger document to answer: "{query}"
+
+Here is the chunk content:
+
+<document_chunk>
+{context}
+</document_chunk>
+
+This chunk contains a portion of the document. Your task is to:
+1. Ask ONE focused question to extract the most relevant information from this chunk
+2. Based on the response, either ask ONE follow-up question OR provide a final answer for this chunk
+
+Be concise and focused since this is one chunk of a larger analysis.
+
+Ask your first question about this chunk:"""
+
+    try:
+        # Round 1: Get supervisor's question
+        supervisor_response = await call_supervisor_model(valves, claude_prompt)
+        
+        if valves.show_conversation:
+            conversation_log.append(f"**🤖 Remote Model (Chunk {chunk_num}):** {supervisor_response}")
+        
+        # Get local response
+        local_prompt = get_minion_local_prompt(context, query, supervisor_response, valves)
+        
+        local_response_str = await call_ollama_func(
+            valves,
+            local_prompt,
+            use_json=True,
+            schema=LocalAssistantResponseModel
+        )
+        
+        # Parse local response (simplified)
+        local_response_data = _parse_local_response(
+            local_response_str,
+            is_structured=True,
+            use_structured_output=valves.use_structured_output,
+            debug_mode=valves.debug_mode,
+            LocalAssistantResponseModel=LocalAssistantResponseModel
+        )
+        
+        local_answer = local_response_data.get("answer", "No answer provided")
+        
+        if valves.show_conversation:
+            conversation_log.append(f"**💻 Local Model (Chunk {chunk_num}):** {local_answer}")
+        
+        # Round 2: Quick synthesis
+        synthesis_prompt = f"""Based on the local assistant's response: "{local_answer}"
+
+Provide a brief summary of what this chunk (#{chunk_num} of {total_chunks}) contributes to answering: "{query}"
+
+Keep it concise since this is just one part of a larger document analysis."""
+
+        final_response = await call_supervisor_model(valves, synthesis_prompt)
+        
+        if valves.show_conversation:
+            conversation_log.append(f"**🎯 Chunk Summary:** {final_response}")
+        
+        # Build output
+        output_parts = []
+        if valves.show_conversation:
+            output_parts.extend(conversation_log)
+        output_parts.append(f"**Result:** {final_response}")
+        
+        return "\n\n".join(output_parts)
+        
+    except Exception as e:
+        return f"❌ Error processing chunk {chunk_num}: {str(e)}"
+
+
 async def minion_pipe_streaming(
     pipe_self: Any,
     body: Dict[str, Any],
