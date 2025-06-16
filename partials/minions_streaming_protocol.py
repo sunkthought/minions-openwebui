@@ -222,9 +222,6 @@ async def _execute_minions_protocol_with_streaming_updates(
                     yield update
 
     # Yield final result
-    if streaming_manager:
-        yield await streaming_manager.stream_phase_update("completion", "Protocol execution completed")
-    
     yield f"\n## 🎯 Final Answer\n{final_response}"
 
 

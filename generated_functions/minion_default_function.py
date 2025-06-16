@@ -6893,7 +6893,6 @@ async def minion_pipe_streaming(
                 + direct_response
             )
             
-            yield await streaming_manager.stream_phase_update("completion", "Direct response completed")
             yield f"\n## 🎯 Final Answer\n{final_response}"
             return
 
@@ -6969,7 +6968,6 @@ async def minion_pipe_streaming(
             # Add multi-chunk processing info
             chunk_info = f"\n\n---\n\n## 📄 Multi-Chunk Processing Info\n**Document processed as {len(chunks)} chunks** (max {pipe_self.valves.chunk_size:,} characters each) in {len(chunks)} separate conversation sessions."
             
-            yield await streaming_manager.stream_phase_update("completion", "Multi-chunk processing completed")
             yield f"\n## 🎯 Final Answer\n{combined_results}{chunk_info}"
 
     except Exception as e:
@@ -7190,11 +7188,6 @@ Respond with "FINAL ANSWER READY." followed by your synthesized answer. Do NOT a
     # Calculate token savings
     token_savings = _calculate_token_savings(conversation_history, context, query)
     
-    if streaming_manager:
-        update = await streaming_manager.stream_phase_update("completion", "Conversation completed")
-        if update:
-            yield update
-
     # Yield final result
     yield f"\n## 🎯 Final Answer\n{final_response}"
 
