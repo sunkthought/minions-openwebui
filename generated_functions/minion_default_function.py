@@ -6932,9 +6932,11 @@ async def minion_pipe_streaming(
             
         else:
             # For many chunks, use chunk-by-chunk processing with streaming
-            chunk_results = []
             conversation_state = ConversationState() if pipe_self.valves.track_conversation_state else None
             deduplicator = QuestionDeduplicator(pipe_self.valves.deduplication_threshold) if pipe_self.valves.enable_deduplication else None
+            
+            # Start the final answer section
+            yield f"\n## 🎯 Final Answer\n"
             
             for i, chunk in enumerate(chunks):
                 chunk_header = f"## 📄 Chunk {i+1} of {len(chunks)}\n"
@@ -6959,16 +6961,13 @@ async def minion_pipe_streaming(
                     deduplicator
                 )
                 
-                chunk_results.append(chunk_header + chunk_result)
+                # Yield this chunk's result immediately (progressive streaming)
+                yield f"{chunk_header}{chunk_result}\n\n"
             
-            # Combine results
-            yield await streaming_manager.stream_phase_update("synthesis", "Combining chunk results")
-            combined_results = "\n\n".join(chunk_results)
-            
-            # Add multi-chunk processing info
-            chunk_info = f"\n\n---\n\n## 📄 Multi-Chunk Processing Info\n**Document processed as {len(chunks)} chunks** (max {pipe_self.valves.chunk_size:,} characters each) in {len(chunks)} separate conversation sessions."
-            
-            yield f"\n## 🎯 Final Answer\n{combined_results}{chunk_info}"
+            # Add multi-chunk processing info at the end
+            yield await streaming_manager.stream_phase_update("synthesis", "Finalizing multi-chunk analysis")
+            chunk_info = f"---\n\n## 📄 Multi-Chunk Processing Info\n**Document processed as {len(chunks)} chunks** (max {pipe_self.valves.chunk_size:,} characters each) in {len(chunks)} separate conversation sessions."
+            yield f"{chunk_info}"
 
     except Exception as e:
         error_details: str = traceback.format_exc() if pipe_self.valves.debug_mode else str(e)
