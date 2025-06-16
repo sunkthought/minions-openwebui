@@ -4,6 +4,8 @@ Use at your own risk. Any voluntary testing, reporting of problems and successes
 ## v0.3.9 with Open WebUI Native RAG, Search, and Streaming Results... 
 ...is still highly experimental and in need of a lot of testing. No new features will be pushed for a while, only tweaks based on heavy testing for a while. 0.3.8 is available in the older versions folder.
 
+We have made some code cleanup and connected the unfinished search tool usage in letter releases to 0.3.9 (current version is 0.3.9c).
+
 # Collaborative AI with Minion and MinionS for Open WebUI
 
 This repository provides an implementation of the Minion and MinionS protocols, designed by HazyResearch, tailored for use as **Functions** within the [Open WebUI](https://github.com/open-webui/open-webui) platform. These protocols enable sophisticated collaboration between local AI models (e.g., Ollama) and powerful remote AI models (e.g., Anthropic's Claude) to tackle complex tasks.
