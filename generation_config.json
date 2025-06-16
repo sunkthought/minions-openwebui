@@ -1,15 +1,15 @@
 {
   "minion_default": {
-    "description": "Default Minion function with enhanced modular architecture and improved error handling.",
+    "description": "Default Minion function with enhanced modular architecture and dependency injection (v0.3.9c).",
     "output_filename_template": "{profile_name}_function.py",
     "target_pipe_class_name": "Pipe",
-    "target_pipe_name_in_init": "Minion v0.3.9b (Conversational)",
+    "target_pipe_name_in_init": "Minion v0.3.9c (Conversational)",
     "target_pipe_id_in_init": "minion-claude",
     "header_placeholders": {
-      "TITLE": "Minion Protocol Integration for Open WebUI v0.3.9b",
+      "TITLE": "Minion Protocol Integration for Open WebUI v0.3.9c",
       "AUTHOR": "Wil Everts and the @SunkThought team",
-      "VERSION": "0.3.9b",
-      "DESCRIPTION": "Enhanced Minion protocol with complete web search execution and granular streaming updates",
+      "VERSION": "0.3.9c",
+      "DESCRIPTION": "Enhanced Minion protocol with dependency injection, unified streaming patterns, and centralized prompt templates",
       "REQUIRED_OPEN_WEBUI_VERSION": "0.5.0"
     },
     "partials_concat_order": [
@@ -21,6 +21,11 @@
       "protocol_base.py",
       "protocol_state.py",
       "model_capabilities.py",
+      "dependency_container.py",
+      "prompt_templates.py",
+      "streaming_mixins.py",
+      "metrics_aggregator.py",
+      "unified_web_search_handler.py",
       "minion_models.py",
       "minion_valves.py",
       "common_api_calls.py",
@@ -37,16 +42,16 @@
     ]
   },
   "minions_default": {
-    "description": "Default MinionS function with enhanced modular architecture and improved error handling.",
+    "description": "Default MinionS function with enhanced modular architecture and dependency injection (v0.3.9c).",
     "output_filename_template": "{profile_name}_function.py",
     "target_pipe_class_name": "Pipe",
-    "target_pipe_name_in_init": "MinionS v0.3.9b (Decomposition)",
+    "target_pipe_name_in_init": "MinionS v0.3.9c (Decomposition)",
     "target_pipe_id_in_init": "minions-claude",
     "header_placeholders": {
-      "TITLE": "MinionS Protocol Integration for Open WebUI v0.3.9b",
+      "TITLE": "MinionS Protocol Integration for Open WebUI v0.3.9c",
       "AUTHOR": "Wil Everts and the @SunkThought team",
-      "VERSION": "0.3.9b",
-      "DESCRIPTION": "Enhanced MinionS protocol with complete web search execution and granular streaming updates",
+      "VERSION": "0.3.9c",
+      "DESCRIPTION": "Enhanced MinionS protocol with dependency injection, unified streaming patterns, and centralized prompt templates",
       "REQUIRED_OPEN_WEBUI_VERSION": "0.5.0"
     },
     "partials_concat_order": [
@@ -58,6 +63,11 @@
       "protocol_base.py",
       "protocol_state.py",
       "model_capabilities.py",
+      "dependency_container.py",
+      "prompt_templates.py",
+      "streaming_mixins.py",
+      "metrics_aggregator.py",
+      "unified_web_search_handler.py",
       "minions_models.py",
       "minions_valves.py",
       "common_api_calls.py",
@@ -79,64 +89,5 @@
       "minion_convergence_detector.py",
       "minions_pipe_method.py"
     ]
-  },
-  "minion_default_old": {
-    "description": "Legacy Minion function (v0.3.6b) - use only for compatibility with existing deployments.",
-    "output_filename_template": "{profile_name}_function.py",
-    "target_pipe_class_name": "Pipe",
-    "target_pipe_name_in_init": "Minion v0.3.6b (Conversational)",
-    "target_pipe_id_in_init": "minion-claude-legacy",
-    "header_placeholders": {
-      "TITLE": "Minion Protocol Integration for Open WebUI (Legacy)",
-      "AUTHOR": "Wil Everts and the @SunkThought team",
-      "VERSION": "0.3.6b",
-      "DESCRIPTION": "Legacy Minion protocol - conversational collaboration between local and cloud models",
-      "REQUIRED_OPEN_WEBUI_VERSION": "0.5.0"
-    },
-    "partials_concat_order": [
-      "common_header.py",
-      "common_imports.py",
-      "minion_models.py",
-      "minion_valves.py",
-      "common_api_calls.py",
-      "common_context_utils.py",
-      "common_file_processing.py",
-      "minion_prompts.py",
-      "minion_protocol_logic.py",
-      "minion_pipe_method.py"
-    ],
-    "specific_imports_map": {},
-    "execute_protocol_dependencies_map": {}
-  },
-  "minions_default_old": {
-    "description": "Legacy MinionS function (v0.3.5b) - use only for compatibility with existing deployments.",
-    "output_filename_template": "{profile_name}_function.py",
-    "target_pipe_class_name": "Pipe",
-    "target_pipe_name_in_init": "MinionS v0.3.5b (Decomposition)",
-    "target_pipe_id_in_init": "minions-claude-legacy",
-    "header_placeholders": {
-      "TITLE": "MinionS Protocol Integration for Open WebUI (Legacy)",
-      "AUTHOR": "Wil Everts and the @SunkThought team",
-      "VERSION": "0.3.5b",
-      "DESCRIPTION": "Legacy MinionS protocol - task decomposition and parallel processing between local and cloud models",
-      "REQUIRED_OPEN_WEBUI_VERSION": "0.5.0"
-    },
-    "partials_concat_order": [
-      "common_header.py",
-      "common_imports.py",
-      "minions_models.py",
-      "minions_valves.py",
-      "common_api_calls.py",
-      "common_context_utils.py",
-      "common_file_processing.py",
-      "minions_prompts.py",
-      "minions_decomposition_logic.py",
-      "minions_protocol_logic.py",
-      "minion_sufficiency_analyzer.py",
-      "minion_convergence_detector.py",
-      "minions_pipe_method.py"
-    ],
-    "specific_imports_map": {},
-    "execute_protocol_dependencies_map": {}
   }
 }

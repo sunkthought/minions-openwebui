@@ -53,13 +53,6 @@ THIRD_PARTY = {
 IMPORT_GROUPS = {
     'common_header': [],
     
-    'common_imports': [
-        *TYPING_IMPORTS,
-        *STANDARD_LIBRARY['async'],
-        *STANDARD_LIBRARY['data_handling'],
-        *THIRD_PARTY['http'],
-        *THIRD_PARTY['data_validation'],
-    ],
     
     'models': [
         *TYPING_IMPORTS,
@@ -164,14 +157,6 @@ CONDITIONAL_IMPORTS = {
 
 # Internal imports between partials (for reference, not included in generated code)
 INTERNAL_DEPENDENCIES = {
-    'minion_pipe_method': [
-        'common_api_calls',
-        'minion_protocol_logic',
-        'minion_models',
-        'common_context_utils',
-        'common_file_processing',
-        'minion_prompts',
-    ],
     'minions_pipe_method': [
         'common_api_calls',
         'minions_protocol_logic',
@@ -214,8 +199,6 @@ def get_imports_for_partial(partial_name: str) -> List[str]:
         category = 'pipe_method'
     elif partial_name in ['common_context_utils', 'common_file_processing']:
         category = 'utils'
-    elif partial_name == 'common_imports':
-        category = 'common_imports'
     # v0.3.9 Open WebUI Integration partials
     elif partial_name == 'web_search_integration':
         category = 'web_search_integration'
@@ -234,7 +217,7 @@ def get_imports_for_partial(partial_name: str) -> List[str]:
     elif partial_name == 'minion_streaming_pipe':
         category = 'minion_streaming_pipe'
     else:
-        category = 'common_imports'  # Default fallback
+        category = 'models'  # Default fallback
     
     return IMPORT_GROUPS.get(category, [])
 
