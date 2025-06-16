@@ -145,6 +145,14 @@ IMPORT_GROUPS = {
         *STANDARD_LIBRARY['async'],
         *STANDARD_LIBRARY['data_handling'],
     ],
+    
+    'minion_streaming_pipe': [
+        *TYPING_IMPORTS,
+        *STANDARD_LIBRARY['async'],
+        *STANDARD_LIBRARY['data_handling'],
+        *THIRD_PARTY['web_framework'],
+        *STANDARD_LIBRARY['error_handling'],
+    ],
 }
 
 # Conditional imports that should be handled specially
@@ -223,6 +231,8 @@ def get_imports_for_partial(partial_name: str) -> List[str]:
         category = 'tool_execution_bridge'
     elif partial_name == 'minions_streaming_protocol':
         category = 'minions_streaming_protocol'
+    elif partial_name == 'minion_streaming_pipe':
+        category = 'minion_streaming_pipe'
     else:
         category = 'common_imports'  # Default fallback
     
