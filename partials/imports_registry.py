@@ -139,6 +139,12 @@ IMPORT_GROUPS = {
         'import uuid',
         'from datetime import datetime',
     ],
+    
+    'minions_streaming_protocol': [
+        *TYPING_IMPORTS,
+        *STANDARD_LIBRARY['async'],
+        *STANDARD_LIBRARY['data_handling'],
+    ],
 }
 
 # Conditional imports that should be handled specially
@@ -215,6 +221,8 @@ def get_imports_for_partial(partial_name: str) -> List[str]:
         category = 'streaming_support'
     elif partial_name == 'tool_execution_bridge':
         category = 'tool_execution_bridge'
+    elif partial_name == 'minions_streaming_protocol':
+        category = 'minions_streaming_protocol'
     else:
         category = 'common_imports'  # Default fallback
     

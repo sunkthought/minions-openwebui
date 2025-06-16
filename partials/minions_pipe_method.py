@@ -1132,60 +1132,30 @@ async def _execute_minions_protocol_with_streaming_generator(
 ):
     """Execute MinionS protocol with streaming progress updates as an async generator"""
     
-    import asyncio
-    
-    # Show working indicator
+    # Show initial working indicator
     yield "🔄 **Executing MinionS protocol...** ⏳\n\n"
     
-    # Create a task for the main execution
-    main_task = asyncio.create_task(_execute_minions_protocol(
+    # Use the new streaming protocol implementation
+    async for update in _execute_minions_protocol_with_streaming_updates(
         valves, 
         query, 
         context, 
         call_claude,
         call_ollama_func,
-        TaskResultModel
-    ))
-    
-    # Create periodic update indicators
-    update_count = 0
-    indicators = ["⏳ Working", "🔄 Processing", "⚙️ Analyzing", "🧠 Thinking", "📊 Computing"]
-    
-    try:
-        while not main_task.done():
-            await asyncio.sleep(30)  # Update every 30 seconds
-            if not main_task.done():
-                update_count += 1
-                if update_count == 1:
-                    yield "🔄 **Still working...** ⏳\n"
-                else:
-                    yield f"🔄 **Still working...** (⏱️ {update_count * 30}s)\n"
-                
-        # Get the result
-        result = await main_task
+        TaskResultModel,
+        streaming_manager
+    ):
+        yield update
         
-        # Show completion
-        yield await streaming_manager.stream_phase_update("completion", "MinionS protocol execution completed")
+    # Add final visualization if enabled
+    if task_visualizer and task_visualizer.is_visualization_enabled():
+        # Update task statuses to completed
+        task_visualizer.update_task_status("task_1", TaskStatus.COMPLETED)
+        task_visualizer.update_task_status("task_2", TaskStatus.COMPLETED)
+        task_visualizer.update_task_status("task_3", TaskStatus.COMPLETED)
         
-        # Add final visualization if enabled
-        if task_visualizer and task_visualizer.is_visualization_enabled():
-            # Update task statuses to completed
-            task_visualizer.update_task_status("task_1", TaskStatus.COMPLETED)
-            task_visualizer.update_task_status("task_2", TaskStatus.COMPLETED)
-            task_visualizer.update_task_status("task_3", TaskStatus.COMPLETED)
-            
-            # Generate final diagram
-            final_diagram = task_visualizer.generate_mermaid_diagram(include_status_colors=True)
-            
-            if final_diagram:
-                yield f"\n## 📊 Final Task Status\n\n{final_diagram}\n\n"
+        # Generate final diagram
+        final_diagram = task_visualizer.generate_mermaid_diagram(include_status_colors=True)
         
-        # Final completion message and result
-        yield "✅ **Processing complete!**\n\n"
-        yield result
-        
-    except Exception as e:
-        if not main_task.done():
-            main_task.cancel()
-        yield await streaming_manager.stream_error_update(f"Error during execution: {str(e)}", "execution")
-        raise e
+        if final_diagram:
+            yield f"\n## 📊 Final Task Status\n\n{final_diagram}\n\n"

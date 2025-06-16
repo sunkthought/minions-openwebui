@@ -74,6 +74,7 @@
       "minions_scaling_strategies.py",
       "minions_adaptive_rounds.py",
       "minions_protocol_logic.py",
+      "minions_streaming_protocol.py",
       "minion_sufficiency_analyzer.py",
       "minion_convergence_detector.py",
       "minions_pipe_method.py"
