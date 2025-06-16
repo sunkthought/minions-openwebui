@@ -322,12 +322,12 @@ You can generate different versions of Minion and MinionS functions:
 
 # Generates minion_default_function.py with full Open WebUI integration suite
 python generator_script.py minion
-# or you can generate the same fikle thus
+# or you can generate the same file thus
 python generator_script.py minion --profile minion_default
 
 # Generates minions_default_function.py with full Open WebUI integration suite
 python generator_script.py miniond
-# or you can generate the same fikle thus
+# or you can generate the same file thus
 python generator_script.py minions --profile minions_default
 ```
 
