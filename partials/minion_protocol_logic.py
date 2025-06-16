@@ -184,7 +184,8 @@ async def _execute_minion_protocol(
     ConversationStateModel: Any = None,
     QuestionDeduplicatorModel: Any = None,
     ConversationFlowControllerModel: Any = None,
-    AnswerValidatorModel: Any = None
+    AnswerValidatorModel: Any = None,
+    streaming_manager: Any = None
 ) -> str:
     """Execute the Minion protocol"""
     conversation_log = []
@@ -246,6 +247,16 @@ async def _execute_minion_protocol(
         
         if valves.show_conversation:
             conversation_log.append(f"### 🔄 Round {round_num + 1}")
+        
+        # Stream conversation progress if streaming manager is available
+        if streaming_manager and hasattr(streaming_manager, 'stream_conversation_progress'):
+            update = await streaming_manager.stream_conversation_progress(
+                round_num=round_num + 1,
+                max_rounds=valves.max_rounds,
+                stage="questioning"
+            )
+            if update:
+                conversation_log.append(update)
 
         # Get phase guidance if flow control is enabled
         phase_guidance = None

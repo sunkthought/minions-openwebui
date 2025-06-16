@@ -1,6 +1,6 @@
 # Partials File: partials/minion_pipe_method.py
 import asyncio
-from typing import Any, List, Callable, Dict
+from typing import Any, List, Callable, Dict, AsyncGenerator
 from fastapi import Request
 
 from .common_api_calls import call_claude, call_ollama, call_supervisor_model
@@ -8,6 +8,18 @@ from .minion_protocol_logic import _execute_minion_protocol
 from .minion_models import LocalAssistantResponse, ConversationState, QuestionDeduplicator, ConversationFlowController, AnswerValidator # Import all models
 from .common_context_utils import extract_context_from_messages, extract_context_from_files
 from .common_file_processing import create_chunks
+
+async def minion_pipe(
+    pipe_self: Any,
+    body: Dict[str, Any],
+    __user__: Dict[str, Any],
+    __request__: Request,
+    __files__: List[Dict[str, Any]] = [],
+    __pipe_id__: str = "minion-claude",
+) -> AsyncGenerator[str, None]:
+    """Execute the Minion protocol with streaming updates"""
+    async for chunk in minion_pipe_streaming(pipe_self, body, __user__, __request__, __files__, __pipe_id__):
+        yield chunk
 
 async def _call_supervisor_directly(valves: Any, query: str) -> str:
     """Fallback to direct supervisor call when no context is available"""
@@ -146,6 +158,11 @@ async def minion_pipe(
                 + direct_response
             )
 
+        # Initialize streaming manager if enabled
+        streaming_manager = None
+        if getattr(pipe_self.valves, 'enable_streaming_responses', True):
+            streaming_manager = StreamingResponseManager(pipe_self.valves, pipe_self.valves.debug_mode)
+
         # Handle chunking for large documents
         chunks = create_chunks(context, pipe_self.valves.chunk_size, pipe_self.valves.max_chunks)
         if not chunks and context:
@@ -164,7 +181,8 @@ async def minion_pipe(
                 ConversationStateModel=ConversationState,
                 QuestionDeduplicatorModel=QuestionDeduplicator,
                 ConversationFlowControllerModel=ConversationFlowController,
-                AnswerValidatorModel=AnswerValidator
+                AnswerValidatorModel=AnswerValidator,
+                streaming_manager=streaming_manager
             )
             
             if len(chunks) > 1:

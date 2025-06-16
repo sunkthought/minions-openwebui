@@ -1,6 +1,28 @@
 # Version History
 
-## v0.3.9 - Open WebUI Integration Suite (Latest)
+## v0.3.9b - Enhanced Web Search & Granular Streaming (Latest)
+- **🔍 Complete Web Search Tool Execution**: Full implementation of Open WebUI's tool execution lifecycle
+  - **Tool Response Processing**: Comprehensive handling of Open WebUI's search tool responses with multiple format support
+  - **Response Normalization**: Automatic normalization of various search provider formats (Google, Bing, DuckDuckGo)
+  - **Tool Execution Bridge**: New `ToolExecutionBridge` class for seamless integration with Open WebUI's async tool system
+  - **Error Recovery**: Robust fallback handling with configurable retry logic and timeout management
+- **📊 Granular Streaming Updates**: Fine-grained progress tracking within execution phases
+  - **Sub-Phase Progress**: Detailed progress within each major phase (0-100% per phase)
+  - **Task Decomposition Progress**: Step-by-step updates for query analysis, document structure, task generation
+  - **Chunk-Level Progress**: Individual progress tracking for each task-chunk combination
+  - **Conversation Round Progress**: Detailed updates for each conversation round in Minion protocol
+  - **Visual Progress Bars**: Text-based progress bars with percentage indicators
+- **⚡ Rate-Limited Streaming**: Intelligent update throttling to prevent UI flooding
+  - **Adaptive Rate Limiting**: Configurable minimum interval between updates (default 0.1s)
+  - **Update Queuing**: Automatic queuing of rapid updates with batch delivery
+  - **Force Update Support**: Critical updates can bypass rate limiting
+- **🛠️ Protocol Enhancement Points**: Strategic integration of progress tracking
+  - **MinionS Protocol**: Progress tracking in task decomposition, execution, and synthesis phases
+  - **Minion Protocol**: Conversation round progress with stage indicators
+  - **Web Search Phase**: Query formulation, execution, parsing, and citation progress
+  - **Synthesis Phase**: Result collection, answer generation, and formatting progress
+
+## v0.3.9 - Open WebUI Integration Suite
 - **🌐 Full Open WebUI Search Integration**: Native web search capabilities using Open WebUI's search tool format
   - **Smart Detection**: Automatic identification of queries requiring external information (current events, fact-checking, latest data)
   - **Tool Format Compliance**: Uses `__TOOL_CALL__` format for seamless integration with Open WebUI's search infrastructure

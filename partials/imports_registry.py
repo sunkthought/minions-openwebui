@@ -129,6 +129,29 @@ IMPORT_GROUPS = {
         *TYPING_IMPORTS,
         *STANDARD_LIBRARY['async'],
         *STANDARD_LIBRARY['data_handling'],
+        'import time',
+    ],
+    
+    'tool_execution_bridge': [
+        *TYPING_IMPORTS,
+        *STANDARD_LIBRARY['async'],
+        *STANDARD_LIBRARY['data_handling'],
+        'import uuid',
+        'from datetime import datetime',
+    ],
+    
+    'minions_streaming_protocol': [
+        *TYPING_IMPORTS,
+        *STANDARD_LIBRARY['async'],
+        *STANDARD_LIBRARY['data_handling'],
+    ],
+    
+    'minion_streaming_pipe': [
+        *TYPING_IMPORTS,
+        *STANDARD_LIBRARY['async'],
+        *STANDARD_LIBRARY['data_handling'],
+        *THIRD_PARTY['web_framework'],
+        *STANDARD_LIBRARY['error_handling'],
     ],
 }
 
@@ -204,6 +227,12 @@ def get_imports_for_partial(partial_name: str) -> List[str]:
         category = 'task_visualizer'
     elif partial_name == 'streaming_support':
         category = 'streaming_support'
+    elif partial_name == 'tool_execution_bridge':
+        category = 'tool_execution_bridge'
+    elif partial_name == 'minions_streaming_protocol':
+        category = 'minions_streaming_protocol'
+    elif partial_name == 'minion_streaming_pipe':
+        category = 'minion_streaming_pipe'
     else:
         category = 'common_imports'  # Default fallback
     

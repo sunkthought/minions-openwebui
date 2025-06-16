@@ -126,6 +126,11 @@ async def _execute_minions_protocol(
 
     overall_start_time = asyncio.get_event_loop().time()
 
+    # Initialize streaming manager if enabled
+    streaming_manager = None
+    if getattr(valves, 'enable_streaming_responses', True):
+        streaming_manager = StreamingResponseManager(valves, valves.debug_mode)
+
     # User query is passed directly to _execute_minions_protocol
     user_query = query # Use the passed 'query' as user_query for clarity if needed elsewhere
 
@@ -262,6 +267,15 @@ async def _execute_minions_protocol(
         if valves.show_conversation:
             conversation_log.append(f"### 🎯 Round {current_round + 1}/{current_run_max_rounds} - Task Decomposition Phase") # Use current_run_max_rounds
 
+        # Stream task decomposition progress if streaming is enabled
+        if streaming_manager and hasattr(streaming_manager, 'stream_task_decomposition_progress'):
+            # Analyzing complexity
+            update = await streaming_manager.stream_task_decomposition_progress(
+                "analyzing_complexity", 1, 5, f"Analyzing query for round {current_round + 1}"
+            )
+            if update:
+                conversation_log.append(update)
+
         # Call the new decompose_task function
         # Note: now returns three values instead of two
         tasks, claude_response_for_decomposition, decomposition_prompt = await decompose_task(
@@ -275,6 +289,14 @@ async def _execute_minions_protocol(
             debug_log=debug_log
         )
         
+        # Stream task generation completion
+        if streaming_manager and hasattr(streaming_manager, 'stream_task_decomposition_progress'):
+            update = await streaming_manager.stream_task_decomposition_progress(
+                "generating_tasks", 3, 5, f"Generated {len(tasks)} tasks"
+            )
+            if update:
+                conversation_log.append(update)
+
         # Store the decomposition prompt in history
         if decomposition_prompt:  # Only add if not empty (error case)
             decomposition_prompts_history.append(decomposition_prompt)
@@ -321,7 +343,7 @@ async def _execute_minions_protocol(
         
         execution_details = await execute_tasks_on_chunks(
             tasks, chunks, conversation_log if valves.show_conversation else debug_log, 
-            current_round + 1, valves, call_ollama_func, TaskResultModel
+            current_round + 1, valves, call_ollama_func, TaskResultModel, streaming_manager
         )
         current_round_task_results = execution_details["results"]
         round_chunk_attempts = execution_details["total_chunk_processing_attempts"]
@@ -686,6 +708,15 @@ async def _execute_minions_protocol(
     if not claude_provided_final_answer:
         if valves.show_conversation:
             conversation_log.append("\n### 🔄 Final Synthesis Phase")
+        
+        # Stream synthesis progress
+        if streaming_manager and hasattr(streaming_manager, 'stream_synthesis_progress'):
+            update = await streaming_manager.stream_synthesis_progress(
+                "collecting", total_tasks=len(all_round_results_aggregated)
+            )
+            if update:
+                conversation_log.append(update)
+        
         if not all_round_results_aggregated:
             final_response = "No information was gathered from the document by local models across the rounds."
             if valves.show_conversation:
@@ -698,6 +729,15 @@ async def _execute_minions_protocol(
             synthesis_prompt = get_minions_synthesis_claude_prompt(query, synthesis_input_summary, valves)
             synthesis_prompts_history.append(synthesis_prompt)
             
+            # Stream synthesis generation progress
+            if streaming_manager and hasattr(streaming_manager, 'stream_synthesis_progress'):
+                update = await streaming_manager.stream_synthesis_progress(
+                    "generating", processed_tasks=len(all_round_results_aggregated), 
+                    total_tasks=len(all_round_results_aggregated)
+                )
+                if update:
+                    conversation_log.append(update)
+            
             start_time_claude_synth = 0
             if valves.debug_mode:
                 start_time_claude_synth = asyncio.get_event_loop().time()
@@ -707,6 +747,12 @@ async def _execute_minions_protocol(
                     end_time_claude_synth = asyncio.get_event_loop().time()
                     time_taken_claude_synth = end_time_claude_synth - start_time_claude_synth
                     debug_log.append(f"⏱️ Claude call (Final Synthesis) took {time_taken_claude_synth:.2f}s. (Debug Mode)")
+                # Stream synthesis completion
+                if streaming_manager and hasattr(streaming_manager, 'stream_synthesis_progress'):
+                    update = await streaming_manager.stream_synthesis_progress("complete")
+                    if update:
+                        conversation_log.append(update)
+                
                 if valves.show_conversation:
                     conversation_log.append(f"**🤖 Claude (Final Synthesis):**\n{final_response}")
             except Exception as e:
@@ -1086,60 +1132,30 @@ async def _execute_minions_protocol_with_streaming_generator(
 ):
     """Execute MinionS protocol with streaming progress updates as an async generator"""
     
-    import asyncio
-    
-    # Show working indicator
+    # Show initial working indicator
     yield "🔄 **Executing MinionS protocol...** ⏳\n\n"
     
-    # Create a task for the main execution
-    main_task = asyncio.create_task(_execute_minions_protocol(
+    # Use the new streaming protocol implementation
+    async for update in _execute_minions_protocol_with_streaming_updates(
         valves, 
         query, 
         context, 
         call_claude,
         call_ollama_func,
-        TaskResultModel
-    ))
-    
-    # Create periodic update indicators
-    update_count = 0
-    indicators = ["⏳ Working", "🔄 Processing", "⚙️ Analyzing", "🧠 Thinking", "📊 Computing"]
-    
-    try:
-        while not main_task.done():
-            await asyncio.sleep(30)  # Update every 30 seconds
-            if not main_task.done():
-                update_count += 1
-                if update_count == 1:
-                    yield "🔄 **Still working...** ⏳\n"
-                else:
-                    yield f"🔄 **Still working...** (⏱️ {update_count * 30}s)\n"
-                
-        # Get the result
-        result = await main_task
+        TaskResultModel,
+        streaming_manager
+    ):
+        yield update
         
-        # Show completion
-        yield await streaming_manager.stream_phase_update("completion", "MinionS protocol execution completed")
+    # Add final visualization if enabled
+    if task_visualizer and task_visualizer.is_visualization_enabled():
+        # Update task statuses to completed
+        task_visualizer.update_task_status("task_1", TaskStatus.COMPLETED)
+        task_visualizer.update_task_status("task_2", TaskStatus.COMPLETED)
+        task_visualizer.update_task_status("task_3", TaskStatus.COMPLETED)
         
-        # Add final visualization if enabled
-        if task_visualizer and task_visualizer.is_visualization_enabled():
-            # Update task statuses to completed
-            task_visualizer.update_task_status("task_1", TaskStatus.COMPLETED)
-            task_visualizer.update_task_status("task_2", TaskStatus.COMPLETED)
-            task_visualizer.update_task_status("task_3", TaskStatus.COMPLETED)
-            
-            # Generate final diagram
-            final_diagram = task_visualizer.generate_mermaid_diagram(include_status_colors=True)
-            
-            if final_diagram:
-                yield f"\n## 📊 Final Task Status\n\n{final_diagram}\n\n"
+        # Generate final diagram
+        final_diagram = task_visualizer.generate_mermaid_diagram(include_status_colors=True)
         
-        # Final completion message and result
-        yield "✅ **Processing complete!**\n\n"
-        yield result
-        
-    except Exception as e:
-        if not main_task.done():
-            main_task.cancel()
-        yield await streaming_manager.stream_error_update(f"Error during execution: {str(e)}", "execution")
-        raise e
+        if final_diagram:
+            yield f"\n## 📊 Final Task Status\n\n{final_diagram}\n\n"

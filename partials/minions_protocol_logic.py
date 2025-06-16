@@ -157,7 +157,8 @@ async def execute_tasks_on_chunks(
     current_round: int,
     valves: Any,
     call_ollama: Callable,
-    TaskResult: Any
+    TaskResult: Any,
+    streaming_manager: Any = None
 ) -> Dict:
     """Execute tasks on chunks using local model"""
     overall_task_results = []
@@ -185,9 +186,31 @@ async def execute_tasks_on_chunks(
         current_task_chunk_confidences = [] # Initialize for current task
         chunk_timeout_count_for_task = 0
         num_relevant_chunks_found = 0
+        
+        # Stream task execution progress if streaming manager is available
+        if streaming_manager and hasattr(streaming_manager, 'stream_task_execution_progress'):
+            update = await streaming_manager.stream_task_execution_progress(
+                task_idx=task_idx,
+                total_tasks=len(tasks),
+                task_description=task
+            )
+            if update:  # Only append if we got a non-empty update
+                conversation_log.append(update)
 
         for chunk_idx, chunk in enumerate(chunks):
             total_attempts_this_call += 1
+            
+            # Stream chunk processing progress if streaming manager is available
+            if streaming_manager and hasattr(streaming_manager, 'stream_task_execution_progress'):
+                update = await streaming_manager.stream_task_execution_progress(
+                    task_idx=task_idx,
+                    total_tasks=len(tasks),
+                    chunk_idx=chunk_idx,
+                    total_chunks=len(chunks),
+                    task_description=task
+                )
+                if update:  # Only append if we got a non-empty update
+                    conversation_log.append(update)
             
             # Call the new function for local task prompt
             local_prompt = get_minions_local_task_prompt( # Ensure this function is defined or imported

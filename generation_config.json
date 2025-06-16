@@ -3,13 +3,13 @@
     "description": "Default Minion function with enhanced modular architecture and improved error handling.",
     "output_filename_template": "{profile_name}_function.py",
     "target_pipe_class_name": "Pipe",
-    "target_pipe_name_in_init": "Minion v0.3.9 (Conversational)",
+    "target_pipe_name_in_init": "Minion v0.3.9b (Conversational)",
     "target_pipe_id_in_init": "minion-claude",
     "header_placeholders": {
-      "TITLE": "Minion Protocol Integration for Open WebUI v0.3.9",
+      "TITLE": "Minion Protocol Integration for Open WebUI v0.3.9b",
       "AUTHOR": "Wil Everts and the @SunkThought team",
-      "VERSION": "0.3.9",
-      "DESCRIPTION": "Enhanced Minion protocol with OpenAI API support, scaling strategies, and adaptive round control",
+      "VERSION": "0.3.9b",
+      "DESCRIPTION": "Enhanced Minion protocol with complete web search execution and granular streaming updates",
       "REQUIRED_OPEN_WEBUI_VERSION": "0.5.0"
     },
     "partials_concat_order": [
@@ -27,25 +27,26 @@
       "common_context_utils.py",
       "common_file_processing.py",
       "web_search_integration.py",
+      "tool_execution_bridge.py",
       "rag_retriever.py",
       "citation_manager.py",
       "streaming_support.py",
       "minion_prompts.py",
       "minion_protocol_logic.py",
-      "minion_pipe_method.py"
+      "minion_streaming_pipe.py"
     ]
   },
   "minions_default": {
     "description": "Default MinionS function with enhanced modular architecture and improved error handling.",
     "output_filename_template": "{profile_name}_function.py",
     "target_pipe_class_name": "Pipe",
-    "target_pipe_name_in_init": "MinionS v0.3.9 (Decomposition)",
+    "target_pipe_name_in_init": "MinionS v0.3.9b (Decomposition)",
     "target_pipe_id_in_init": "minions-claude",
     "header_placeholders": {
-      "TITLE": "MinionS Protocol Integration for Open WebUI v0.3.9",
+      "TITLE": "MinionS Protocol Integration for Open WebUI v0.3.9b",
       "AUTHOR": "Wil Everts and the @SunkThought team",
-      "VERSION": "0.3.9",
-      "DESCRIPTION": "Enhanced MinionS protocol with OpenAI API support, scaling strategies, and adaptive round control",
+      "VERSION": "0.3.9b",
+      "DESCRIPTION": "Enhanced MinionS protocol with complete web search execution and granular streaming updates",
       "REQUIRED_OPEN_WEBUI_VERSION": "0.5.0"
     },
     "partials_concat_order": [
@@ -63,6 +64,7 @@
       "common_context_utils.py",
       "common_file_processing.py",
       "web_search_integration.py",
+      "tool_execution_bridge.py",
       "rag_retriever.py",
       "citation_manager.py",
       "task_visualizer.py",
@@ -72,6 +74,7 @@
       "minions_scaling_strategies.py",
       "minions_adaptive_rounds.py",
       "minions_protocol_logic.py",
+      "minions_streaming_protocol.py",
       "minion_sufficiency_analyzer.py",
       "minion_convergence_detector.py",
       "minions_pipe_method.py"
