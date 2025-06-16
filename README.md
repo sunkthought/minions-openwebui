@@ -324,33 +324,6 @@ python generator_script.py minion --profile minion_default
 python generator_script.py minions --profile minions_default
 ```
 
-#### Previous Functions (v0.3.8 with OpenAI Support)
-```bash
-# Generates minion_v037_function.py using v0.3.8 features including OpenAI API support
-python generator_script.py minion --profile minion_v037
-
-# Generates minions_v037_function.py using v0.3.8 features including scaling strategies
-python generator_script.py minions --profile minions_v037
-```
-
-#### Default Functions (v0.3.7 Enhanced)
-```bash
-# Generates minion_default_function.py using the enhanced v0.3.7 modular architecture
-python generator_script.py minion
-
-# Generates minions_default_function.py using the enhanced v0.3.7 modular architecture
-python generator_script.py minions
-```
-
-#### Legacy Functions (v0.3.6 Stable)
-```bash
-# Generates minion_default_old_function.py with legacy architecture
-python generator_script.py minion --profile minion_default_old
-
-# Generates minions_default_old_function.py with legacy architecture
-python generator_script.py minions --profile minions_default_old
-```
-
 The output files will be placed in the `generated_functions/` directory.
 
 ### Creating Custom Function Versions
