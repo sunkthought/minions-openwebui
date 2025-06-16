@@ -121,52 +121,6 @@ class RoundResult:
         }
 
 
-@dataclass
-class ConversationState:
-    """State management for conversational protocols (Minion)."""
-    questions_asked: List[str] = field(default_factory=list)
-    answers_received: List[str] = field(default_factory=list)
-    conversation_log: List[str] = field(default_factory=list)
-    deduplication_fingerprints: set = field(default_factory=set)
-    phase: str = "exploration"
-    clarification_attempts: int = 0
-    final_answer_detected: bool = False
-    
-    def add_question(self, question: str) -> None:
-        """Add a question to the conversation."""
-        self.questions_asked.append(question)
-        self.conversation_log.append(f"Q: {question}")
-    
-    def add_answer(self, answer: str) -> None:
-        """Add an answer to the conversation."""
-        self.answers_received.append(answer)
-        self.conversation_log.append(f"A: {answer}")
-    
-    def add_fingerprint(self, fingerprint: str) -> bool:
-        """
-        Add deduplication fingerprint.
-        
-        Args:
-            fingerprint: Question/task fingerprint
-            
-        Returns:
-            True if fingerprint was new, False if duplicate
-        """
-        if fingerprint in self.deduplication_fingerprints:
-            return False
-        self.deduplication_fingerprints.add(fingerprint)
-        return True
-    
-    def get_conversation_summary(self) -> Dict[str, Any]:
-        """Get summary of conversation state."""
-        return {
-            "total_questions": len(self.questions_asked),
-            "total_answers": len(self.answers_received),
-            "current_phase": self.phase,
-            "clarification_attempts": self.clarification_attempts,
-            "final_answer_detected": self.final_answer_detected,
-            "unique_fingerprints": len(self.deduplication_fingerprints)
-        }
 
 
 @dataclass
