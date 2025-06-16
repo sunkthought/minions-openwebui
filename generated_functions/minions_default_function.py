@@ -2705,7 +2705,8 @@ def adjust_parameters_for_capabilities(valves: Any, capabilities: Dict[str, Any]
 # Partials File: partials/dependency_container.py
 from dataclasses import dataclass
 
-T = TypeVar('T')
+# Note: TypeVar not used in practice, simplified for compatibility
+T = Any
 
 @dataclass
 class DependencyRegistration:

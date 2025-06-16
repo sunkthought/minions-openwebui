@@ -1,9 +1,10 @@
 # Partials File: partials/dependency_container.py
-from typing import Any, Callable, Dict, Optional, TypeVar, Type
+from typing import Any, Callable, Dict, Optional, Type
 import inspect
 from dataclasses import dataclass
 
-T = TypeVar('T')
+# Note: TypeVar not used in practice, simplified for compatibility
+T = Any
 
 @dataclass
 class DependencyRegistration:
