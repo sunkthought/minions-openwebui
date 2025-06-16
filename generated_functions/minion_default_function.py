@@ -1,12 +1,12 @@
 """
-title: Minion Protocol Integration for Open WebUI v0.3.9b
+title: Minion Protocol Integration for Open WebUI v0.3.9c
 author: Wil Everts and the @SunkThought team
 author_url: https://github.com/SunkThought/minions-openwebui
 original_author: Copyright (c) 2025 Sabri Eyuboglu, Avanika Narayan, Dan Biderman, and the rest of the Minions team (@HazyResearch wrote the original MinionS Protocol paper and code examples on github that spawned this)
 original_author_url: https://github.com/HazyResearch/
 funding_url: https://github.com/HazyResearch/minions
-version: 0.3.9b
-description: Enhanced Minion protocol with complete web search execution and granular streaming updates
+version: 0.3.9c
+description: Enhanced Minion protocol with dependency injection, unified streaming patterns, and centralized prompt templates
 required_open_webui_version: 0.5.0
 license: MIT License
 """
@@ -2701,6 +2701,2333 @@ def adjust_parameters_for_capabilities(valves: Any, capabilities: Dict[str, Any]
             adjustments["use_structured_output"] = False
     
     return adjustments
+
+# Partials File: partials/dependency_container.py
+from dataclasses import dataclass
+
+T = TypeVar('T')
+
+@dataclass
+class DependencyRegistration:
+    """Represents a dependency registration."""
+    factory: Callable
+    singleton: bool = True
+    dependencies: Optional[Dict[str, str]] = None
+
+
+class DependencyContainer:
+    """
+    IoC container for managing dependencies across both protocols.
+    Provides singleton instances and lazy initialization.
+    """
+    
+    def __init__(self, valves: Any, debug_mode: bool = False):
+        self.valves = valves
+        self.debug_mode = debug_mode
+        self._instances: Dict[str, Any] = {}
+        self._registrations: Dict[str, DependencyRegistration] = {}
+        
+        # Register core dependencies
+        self._register_core_dependencies()
+        
+    def _register_core_dependencies(self):
+        """Register core dependencies that are always available."""
+        # Lazy imports to avoid circular dependencies
+        self.register_factory(
+            'web_search', 
+            lambda: self._create_web_search_integration(),
+            singleton=True
+        )
+        
+        self.register_factory(
+            'tool_bridge',
+            lambda: self._create_tool_execution_bridge(),
+            singleton=True
+        )
+        
+        self.register_factory(
+            'streaming_manager',
+            lambda: self._create_streaming_manager(),
+            singleton=True
+        )
+        
+        self.register_factory(
+            'citation_manager',
+            lambda: self._create_citation_manager(),
+            singleton=True
+        )
+        
+        self.register_factory(
+            'rag_retriever',
+            lambda: self._create_rag_retriever(),
+            singleton=True
+        )
+        
+        self.register_factory(
+            'metrics_aggregator',
+            lambda: self._create_metrics_aggregator(),
+            singleton=True
+        )
+        
+        self.register_factory(
+            'unified_web_search_handler',
+            lambda: self._create_unified_web_search_handler(),
+            singleton=True
+        )
+        
+    def register_factory(self, name: str, factory: Callable, singleton: bool = True, dependencies: Optional[Dict[str, str]] = None):
+        """Register a factory function for creating instances."""
+        self._registrations[name] = DependencyRegistration(
+            factory=factory,
+            singleton=singleton,
+            dependencies=dependencies or {}
+        )
+        
+    def get(self, name: str) -> Any:
+        """Get or create an instance by name."""
+        if name not in self._registrations:
+            raise ValueError(f"Dependency '{name}' not registered")
+            
+        registration = self._registrations[name]
+        
+        # Return cached instance if singleton
+        if registration.singleton and name in self._instances:
+            return self._instances[name]
+            
+        # Create new instance
+        instance = self._create_instance(name, registration)
+        
+        # Cache if singleton
+        if registration.singleton:
+            self._instances[name] = instance
+            
+        return instance
+        
+    def _create_instance(self, name: str, registration: DependencyRegistration) -> Any:
+        """Create an instance using the factory."""
+        try:
+            # Check if factory needs dependency injection
+            signature = inspect.signature(registration.factory)
+            
+            if len(signature.parameters) == 0:
+                # No parameters needed
+                return registration.factory()
+            else:
+                # Inject dependencies based on registration
+                kwargs = {}
+                for param_name, dependency_name in registration.dependencies.items():
+                    kwargs[param_name] = self.get(dependency_name)
+                
+                return registration.factory(**kwargs)
+                
+        except Exception as e:
+            if self.debug_mode:
+                print(f"DEBUG [DependencyContainer]: Failed to create '{name}': {str(e)}")
+            raise RuntimeError(f"Failed to create dependency '{name}': {str(e)}")
+    
+    def _create_web_search_integration(self):
+        """Create WebSearchIntegration instance."""
+        return WebSearchIntegration(self.valves, self.debug_mode)
+        
+    def _create_tool_execution_bridge(self):
+        """Create ToolExecutionBridge instance."""
+        return ToolExecutionBridge(self.valves, self.debug_mode)
+        
+    def _create_streaming_manager(self):
+        """Create StreamingResponseManager instance."""
+        return StreamingResponseManager(self.valves, self.debug_mode)
+        
+    def _create_citation_manager(self):
+        """Create CitationManager instance."""
+        return CitationManager(self.valves, self.debug_mode)
+        
+    def _create_rag_retriever(self):
+        """Create RAGRetriever instance."""
+        return RAGRetriever(self.valves, self.debug_mode)
+        
+    def _create_metrics_aggregator(self):
+        """Create MetricsAggregator instance."""
+        protocol_name = getattr(self.valves, 'protocol_name', 'unknown')
+        return MetricsAggregator(protocol_name, self.debug_mode)
+        
+    def _create_unified_web_search_handler(self):
+        """Create UnifiedWebSearchHandler instance."""
+        return UnifiedWebSearchHandler(
+            web_search=self.get('web_search'),
+            tool_bridge=self.get('tool_bridge'),
+            citation_manager=self.get('citation_manager'),
+            streaming_manager=self.get('streaming_manager')
+        )
+    
+    # Typed getters for better IDE support and type safety
+    def get_web_search(self) -> Any:
+        """Get WebSearchIntegration instance."""
+        return self.get('web_search')
+        
+    def get_tool_bridge(self) -> Any:
+        """Get ToolExecutionBridge instance."""
+        return self.get('tool_bridge')
+        
+    def get_streaming_manager(self) -> Any:
+        """Get StreamingResponseManager instance."""
+        return self.get('streaming_manager')
+        
+    def get_citation_manager(self) -> Any:
+        """Get CitationManager instance."""
+        return self.get('citation_manager')
+        
+    def get_rag_retriever(self) -> Any:
+        """Get RAGRetriever instance."""
+        return self.get('rag_retriever')
+        
+    def get_metrics_aggregator(self) -> Any:
+        """Get MetricsAggregator instance."""
+        return self.get('metrics_aggregator')
+        
+    def get_unified_web_search_handler(self) -> Any:
+        """Get UnifiedWebSearchHandler instance."""
+        return self.get('unified_web_search_handler')
+        
+    def register_protocol_specific_dependencies(self, protocol_name: str):
+        """Register protocol-specific dependencies."""
+        if protocol_name.lower() == 'minion':
+            self._register_minion_dependencies()
+        elif protocol_name.lower() == 'minions':
+            self._register_minions_dependencies()
+            
+    def _register_minion_dependencies(self):
+        """Register Minion-specific dependencies."""
+        self.register_factory(
+            'conversation_state',
+            lambda: self._create_minion_conversation_state(),
+            singleton=False  # New instance for each conversation
+        )
+        
+        self.register_factory(
+            'question_deduplicator',
+            lambda: self._create_question_deduplicator(),
+            singleton=True
+        )
+        
+        self.register_factory(
+            'flow_controller',
+            lambda: self._create_flow_controller(),
+            singleton=True
+        )
+        
+        self.register_factory(
+            'answer_validator',
+            lambda: self._create_answer_validator(),
+            singleton=True
+        )
+        
+    def _register_minions_dependencies(self):
+        """Register MinionS-specific dependencies."""
+        self.register_factory(
+            'task_visualizer',
+            lambda: self._create_task_visualizer(),
+            singleton=True
+        )
+        
+        self.register_factory(
+            'decomposition_logic',
+            lambda: self._create_decomposition_logic(),
+            singleton=True
+        )
+        
+        self.register_factory(
+            'scaling_strategies',
+            lambda: self._create_scaling_strategies(),
+            singleton=True
+        )
+        
+        self.register_factory(
+            'adaptive_rounds',
+            lambda: self._create_adaptive_rounds(),
+            singleton=True
+        )
+        
+    def _create_minion_conversation_state(self):
+        """Create ConversationState instance for Minion."""
+        return ConversationState()
+        
+    def _create_question_deduplicator(self):
+        """Create QuestionDeduplicator instance."""
+        threshold = getattr(self.valves, 'deduplication_threshold', 0.8)
+        return QuestionDeduplicator(threshold)
+        
+    def _create_flow_controller(self):
+        """Create ConversationFlowController instance."""
+        return ConversationFlowController()
+        
+    def _create_answer_validator(self):
+        """Create AnswerValidator instance."""
+        return AnswerValidator()
+        
+    def _create_task_visualizer(self):
+        """Create TaskVisualizer instance."""
+        from .task_visualizer import TaskVisualizer
+        return TaskVisualizer(self.valves, self.debug_mode)
+        
+    def _create_decomposition_logic(self):
+        """Create decomposition logic instance."""
+        # This would be refactored from existing logic
+        pass
+        
+    def _create_scaling_strategies(self):
+        """Create scaling strategies instance."""
+        # This would be refactored from existing logic
+        pass
+        
+    def _create_adaptive_rounds(self):
+        """Create adaptive rounds instance."""
+        # This would be refactored from existing logic
+        pass
+        
+    def dispose(self):
+        """Clean up resources."""
+        for instance in self._instances.values():
+            if hasattr(instance, 'dispose'):
+                try:
+                    instance.dispose()
+                except Exception as e:
+                    if self.debug_mode:
+                        print(f"DEBUG [DependencyContainer]: Error disposing instance: {str(e)}")
+        
+        self._instances.clear()
+        self._registrations.clear()
+
+# Partials File: partials/prompt_templates.py
+
+
+class PromptTemplates:
+    """Centralized prompt templates for both Minion and MinionS protocols."""
+    
+    # =======================
+    # MINION PROTOCOL TEMPLATES
+    # =======================
+    
+    MINION_INITIAL_CLAUDE = '''You are a research coordinator working with a knowledgeable local assistant who has access to specific documents.
+
+Your task: Gather information to answer the user's query by asking strategic questions.
+
+USER'S QUERY: "{query}"
+
+The local assistant has FULL ACCESS to the relevant document ({context_len} characters long) and will provide factual information extracted from it.
+
+Guidelines for effective questions:
+1. Ask ONE specific, focused question at a time
+2. Build upon previous answers to go deeper
+3. Avoid broad questions like "What does the document say?" 
+4. Good: "What are the specific budget allocations for Q2?"
+   Poor: "Tell me about the budget"
+5. Track what you've learned to avoid redundancy
+
+When to conclude:
+- Start your response with "I now have sufficient information" when ready to provide the final answer
+- You have {max_rounds} rounds maximum to gather information
+
+QUESTION STRATEGY TIPS:
+- For factual queries: Ask for specific data points, dates, numbers, or names
+- For analytical queries: Ask about relationships, comparisons, or patterns
+- For summary queries: Ask about key themes, main points, or conclusions
+- For procedural queries: Ask about steps, sequences, or requirements
+
+Remember: The assistant can only see the document, not your conversation history.
+
+If you have gathered enough information to answer "{query}", respond with "FINAL ANSWER READY." followed by your comprehensive answer.
+
+Otherwise, ask your first strategic question to the local assistant.'''
+
+    MINION_CONVERSATION_CLAUDE = '''You are continuing to gather information to answer: "{original_query}"
+
+Round {current_round} of {max_rounds}
+
+INFORMATION GATHERED SO FAR:
+{conversation_history}
+
+DECISION POINT:
+Evaluate if you have sufficient information to answer the original question comprehensively.
+
+✅ If YES: Start with 'FINAL ANSWER READY.' then provide your complete answer
+❓ If NO: Ask ONE more strategic question (you have {rounds_remaining} rounds left)
+
+TIPS FOR YOUR NEXT QUESTION:
+- What specific gaps remain in your understanding?
+- Can you drill deeper into any mentioned topics?
+- Are there related aspects you haven't explored?
+- Would examples or specific details strengthen your answer?
+
+Remember: Each question should build on what you've learned, not repeat previous inquiries.'''
+
+    MINION_LOCAL_ASSISTANT_BASE = '''You are a document analysis assistant with exclusive access to the following document:
+
+<document>
+{context}
+</document>
+
+A research coordinator needs specific information from this document to answer: "{query}"
+
+Their current question is:
+<question>
+{claude_request}
+</question>
+
+RESPONSE GUIDELINES:
+
+1. ACCURACY: Base your answer ONLY on information found in the document above
+   
+2. CITATIONS: When possible, include direct quotes or specific references:
+   - Good: "According to section 3.2, 'the budget increased by 15%'"
+   - Good: "The document states on page 4 that..."
+   - Poor: "The document mentions something about budgets"
+
+3. ORGANIZATION: For complex answers, structure your response:
+   - Use bullet points or numbered lists for multiple items
+   - Separate distinct pieces of information clearly
+   - Highlight key findings at the beginning
+
+4. CONFIDENCE LEVELS:
+   - HIGH: Information directly answers the question with explicit statements
+   - MEDIUM: Information partially addresses the question or requires some inference
+   - LOW: Information is tangentially related or requires significant interpretation
+
+5. HANDLING MISSING INFORMATION:
+   - If not found: "This specific information is not available in the document"
+   - If partially found: "The document provides partial information: [explain what's available]"
+   - Suggest related info: "While X is not mentioned, the document does discuss Y which may be relevant"
+
+Remember: The coordinator cannot see the document and relies entirely on your accurate extraction.'''
+
+    MINION_LOCAL_STRUCTURED_OUTPUT = '''
+
+RESPONSE FORMAT:
+Respond ONLY with a JSON object in this exact format:
+{{
+    "answer": "Your detailed answer addressing the specific question",
+    "confidence": "HIGH/MEDIUM/LOW",
+    "key_points": ["Main finding 1", "Main finding 2", "..."] or null,
+    "citations": ["Exact quote from document", "Another relevant quote", "..."] or null
+}}
+
+JSON Guidelines:
+- answer: Comprehensive response to the question (required)
+- confidence: Your assessment based on criteria above (required)
+- key_points: List main findings if multiple important points exist (optional)
+- citations: Direct quotes that support your answer (optional but recommended)
+
+IMPORTANT: Output ONLY the JSON object. No additional text, no markdown formatting.'''
+
+    MINION_LOCAL_NON_STRUCTURED = '''
+
+Format your response clearly with:
+- Main answer first
+- Supporting details or quotes
+- Confidence level (HIGH/MEDIUM/LOW) at the end
+- Note if any information is not found in the document'''
+
+    MINION_INITIAL_CLAUDE_WITH_STATE = '''CONVERSATION STATE CONTEXT:
+{state_summary}
+
+Based on this context, ask your first strategic question to the local assistant.'''
+
+    MINION_CONVERSATION_CLAUDE_WITH_STATE = '''
+CURRENT CONVERSATION STATE:
+{state_summary}
+
+TOPICS COVERED: {topics_covered}
+KEY FINDINGS COUNT: {key_findings_count}
+INFORMATION GAPS: {information_gaps_count}
+
+DECISION POINT:'''
+
+    MINION_CONVERSATION_WITH_PHASE = '''CURRENT CONVERSATION PHASE:
+{phase_guidance}
+
+DECISION POINT:'''
+
+    MINION_DEDUPLICATION_WARNING = '''
+PREVIOUSLY ASKED QUESTIONS (DO NOT REPEAT):
+{previous_questions}
+
+⚠️ IMPORTANT: Avoid asking questions that are semantically similar to the above. Each new question should explore genuinely new information.
+
+Remember: Each question should build on what you've learned, not repeat previous inquiries.'''
+
+    # =======================
+    # MINIONS PROTOCOL TEMPLATES
+    # =======================
+    
+    MINIONS_SYNTHESIS_CLAUDE = '''Based on all the information gathered across multiple rounds, provide a comprehensive answer to the original query: "{query}"
+
+GATHERED INFORMATION:
+{synthesis_input_summary}
+
+{synthesis_guidelines}
+
+If the gathered information is insufficient, explain what's missing or state that the answer cannot be provided.
+Final Answer:'''
+
+    MINIONS_SYNTHESIS_GUIDELINES = '''
+SYNTHESIS GUIDELINES:
+{guidelines}'''
+
+    MINIONS_LOCAL_TASK_BASE = '''Text to analyze (Chunk {chunk_idx}/{total_chunks} of document):
+---BEGIN TEXT---
+{chunk}
+---END TEXT---
+
+Task: {task}
+
+{task_specific_instructions}'''
+
+    MINIONS_TASK_SPECIFIC_INSTRUCTIONS = '''
+TASK-SPECIFIC INSTRUCTIONS:
+{instructions}'''
+
+    MINIONS_STRUCTURED_OUTPUT_FORMAT = '''
+
+IMPORTANT: You must respond with ONLY a valid JSON object. Do not include any text before or after the JSON.
+
+Required JSON structure:
+{{
+    "explanation": "Brief explanation of your findings for this task",
+    "citation": "Direct quote from the text if applicable to this task, or null",
+    "answer": "Your complete answer to the task as a SINGLE STRING",
+    "confidence": "HIGH, MEDIUM, or LOW"
+}}'''
+
+    MINIONS_STRUCTURED_OUTPUT_RULES = '''
+CRITICAL RULES FOR JSON OUTPUT:
+1. Output ONLY the JSON object - no markdown formatting, no explanatory text, no code blocks
+2. The "answer" field MUST be a plain text string, NOT an object or array
+3. If listing multiple items, format as a single string (e.g., "Item 1: Description. Item 2: Description.")
+4. Use proper JSON escaping for quotes within strings (\\" for quotes inside string values)
+5. If information is not found, set "answer" to null and "confidence" to "LOW"
+6. The "confidence" field must be exactly one of: "HIGH", "MEDIUM", or "LOW"
+7. All string values must be properly quoted and escaped'''
+
+    MINIONS_FORMAT_SPECIFIC_INSTRUCTION = '''5. Format the content WITHIN the "answer" field as {format}. For example, if "bullet points", the "answer" string should look like "- Point 1\\n- Point 2".'''
+
+    MINIONS_JSON_FORMAT_INSTRUCTION = '''5. The overall response is already JSON. Ensure the content of the 'answer' field is a simple string, not further JSON encoded, unless the task specifically asks for a JSON string as the answer.'''
+
+    MINIONS_STRUCTURED_OUTPUT_EXAMPLES = '''
+
+EXAMPLES OF CORRECT JSON OUTPUT:
+
+Example 1 - Information found:
+{{
+    "explanation": "Found budget information in the financial section",
+    "citation": "The total project budget is set at $2.5 million for fiscal year 2024",
+    "answer": "$2.5 million",
+    "confidence": "HIGH"
+}}
+
+Example 2 - Information NOT found:
+{{
+    "explanation": "Searched for revenue projections but this chunk only contains expense data",
+    "citation": null,
+    "answer": null,
+    "confidence": "LOW"
+}}
+
+Example 3 - Multiple items found:
+{{
+    "explanation": "Identified three risk factors mentioned in the document",
+    "citation": "Key risks include: market volatility, regulatory changes, and supply chain disruptions",
+    "answer": "1. Market volatility 2. Regulatory changes 3. Supply chain disruptions",
+    "confidence": "HIGH"
+}}'''
+
+    MINIONS_BULLET_POINTS_EXAMPLE = '''
+
+Example with bullet points in answer field:
+{{
+    "explanation": "Found multiple implementation steps",
+    "citation": "The implementation plan consists of three phases...",
+    "answer": "- Phase 1: Initial setup and configuration\\n- Phase 2: Testing and validation\\n- Phase 3: Full deployment",
+    "confidence": "MEDIUM"
+}}'''
+
+    MINIONS_INCORRECT_OUTPUT_EXAMPLES = '''
+
+EXAMPLES OF INCORRECT OUTPUT (DO NOT DO THIS):
+
+Wrong - Wrapped in markdown:
+```json
+{{"answer": "some value"}}
+```
+
+Wrong - Answer is not a string:
+{{
+    "answer": {{"key": "value"}},
+    "confidence": "HIGH"
+}}
+
+Wrong - Missing required fields:
+{{
+    "answer": "some value"
+}}
+
+Wrong - Text outside JSON:
+Here is my response:
+{{"answer": "some value"}}'''
+
+    MINIONS_NON_STRUCTURED_OUTPUT = '''
+
+Provide a brief, specific answer based ONLY on the text provided above.
+{format_instruction}
+If no relevant information is found in THIS SPECIFIC TEXT, respond with the single word "NONE".'''
+
+    # =======================
+    # SHARED TEMPLATES
+    # =======================
+    
+    STRUCTURED_OUTPUT_INSTRUCTION = '''Respond in JSON format:
+{schema}'''
+
+    ERROR_CONTEXT = '''An error occurred: {error}
+Please provide a helpful response despite this limitation.'''
+
+    CHUNK_ANALYSIS_HEADER = '''You are analyzing chunk {chunk_num} of {total_chunks} from a larger document to answer: "{query}"
+
+Here is the chunk content:
+
+<document_chunk>
+{context}
+</document_chunk>
+
+This chunk contains a portion of the document. Your task is to:
+1. Ask ONE focused question to extract the most relevant information from this chunk
+2. Based on the response, either ask ONE follow-up question OR provide a final answer for this chunk
+
+Be concise and focused since this is one chunk of a larger analysis.
+
+Ask your first question about this chunk:'''
+
+    SYNTHESIS_PROMPT = '''Based on the local assistant's response: "{local_answer}"
+
+Provide a brief summary of what this chunk (#{chunk_num} of {total_chunks}) contributes to answering: "{query}"
+
+Keep it concise since this is just one part of a larger document analysis.'''
+
+    MULTI_CHUNK_SYNTHESIS = '''You have analyzed a document in {chunk_count} chunks to answer: "{query}"
+
+Here are the results from each chunk:
+
+{chunk_results}
+
+Based on all the information gathered from these chunks, provide a comprehensive final answer to the user's original question: "{query}"
+
+Your response should:
+1. Synthesize the key information from all chunks
+2. Address the specific question asked
+3. Be well-organized and coherent
+4. Include the most important findings and insights
+
+Provide your final comprehensive answer:'''
+
+    FALLBACK_SYNTHESIS = '''Based on the analysis of {chunk_count} document chunks, here are the key findings for: "{query}"
+
+{chunk_summaries}
+
+Note: This synthesis was generated locally due to a temporary API connectivity issue. The individual chunk analyses above contain the detailed information extracted from the document.'''
+
+    @classmethod
+    def get_template(cls, template_name: str, **kwargs) -> str:
+        """Get a template by name and format with provided kwargs."""
+        template = getattr(cls, template_name, None)
+        if not template:
+            raise ValueError(f"Template '{template_name}' not found")
+        return template.format(**kwargs)
+    
+    @classmethod 
+    def get_minion_initial_claude_prompt(cls, query: str, context_len: int, max_rounds: int) -> str:
+        """Get the initial Claude prompt for Minion protocol."""
+        return cls.get_template(
+            'MINION_INITIAL_CLAUDE',
+            query=query.replace('"', '\\"').replace("'", "\\'"),
+            context_len=context_len,
+            max_rounds=max_rounds
+        )
+    
+    @classmethod
+    def get_minion_conversation_claude_prompt(cls, 
+                                            original_query: str, 
+                                            current_round: int, 
+                                            max_rounds: int,
+                                            conversation_history: str) -> str:
+        """Get the conversation Claude prompt for Minion protocol."""
+        return cls.get_template(
+            'MINION_CONVERSATION_CLAUDE',
+            original_query=original_query.replace('"', '\\"').replace("'", "\\'"),
+            current_round=current_round,
+            max_rounds=max_rounds,
+            conversation_history=conversation_history,
+            rounds_remaining=max_rounds - current_round
+        )
+    
+    @classmethod
+    def get_minion_local_prompt(cls, 
+                              context: str, 
+                              query: str, 
+                              claude_request: str, 
+                              use_structured_output: bool = False) -> str:
+        """Get the local assistant prompt for Minion protocol."""
+        base_prompt = cls.get_template(
+            'MINION_LOCAL_ASSISTANT_BASE',
+            context=context,
+            query=query,
+            claude_request=claude_request
+        )
+        
+        if use_structured_output:
+            return base_prompt + cls.MINION_LOCAL_STRUCTURED_OUTPUT
+        else:
+            return base_prompt + cls.MINION_LOCAL_NON_STRUCTURED
+    
+    @classmethod
+    def get_minions_synthesis_claude_prompt(cls, query: str, synthesis_input_summary: str, guidelines: List[str] = None) -> str:
+        """Get the synthesis prompt for MinionS protocol."""
+        synthesis_guidelines = ""
+        if guidelines:
+            formatted_guidelines = "\n".join([f"- {guideline}" for guideline in guidelines])
+            synthesis_guidelines = cls.get_template('MINIONS_SYNTHESIS_GUIDELINES', guidelines=formatted_guidelines)
+        
+        return cls.get_template(
+            'MINIONS_SYNTHESIS_CLAUDE',
+            query=query,
+            synthesis_input_summary=synthesis_input_summary or "No specific information was extracted by local models.",
+            synthesis_guidelines=synthesis_guidelines
+        )
+    
+    @classmethod
+    def get_minions_local_task_prompt(cls,
+                                    chunk: str,
+                                    task: str,
+                                    chunk_idx: int,
+                                    total_chunks: int,
+                                    use_structured_output: bool = False,
+                                    task_instructions: List[str] = None,
+                                    expected_format: str = None) -> str:
+        """Get the local task prompt for MinionS protocol."""
+        
+        # Build task-specific instructions
+        task_specific_instructions = ""
+        if task_instructions:
+            formatted_instructions = "\n".join([f"- {instruction}" for instruction in task_instructions])
+            task_specific_instructions = cls.get_template('MINIONS_TASK_SPECIFIC_INSTRUCTIONS', instructions=formatted_instructions)
+        
+        base_prompt = cls.get_template(
+            'MINIONS_LOCAL_TASK_BASE',
+            chunk=chunk,
+            task=task,
+            chunk_idx=chunk_idx + 1,
+            total_chunks=total_chunks,
+            task_specific_instructions=task_specific_instructions
+        )
+        
+        if use_structured_output:
+            structured_parts = [
+                cls.MINIONS_STRUCTURED_OUTPUT_FORMAT,
+                cls.MINIONS_STRUCTURED_OUTPUT_RULES
+            ]
+            
+            # Add format-specific instruction
+            if expected_format and expected_format.lower() != "json":
+                if expected_format.lower() == "bullet points":
+                    structured_parts.append(cls.get_template('MINIONS_FORMAT_SPECIFIC_INSTRUCTION', format=expected_format.upper()))
+                else:
+                    structured_parts.append(cls.get_template('MINIONS_FORMAT_SPECIFIC_INSTRUCTION', format=expected_format.upper()))
+            elif expected_format and expected_format.lower() == "json":
+                structured_parts.append(cls.MINIONS_JSON_FORMAT_INSTRUCTION)
+            
+            # Add examples
+            structured_parts.append(cls.MINIONS_STRUCTURED_OUTPUT_EXAMPLES)
+            
+            if expected_format and expected_format.lower() == "bullet points":
+                structured_parts.append(cls.MINIONS_BULLET_POINTS_EXAMPLE)
+            
+            structured_parts.append(cls.MINIONS_INCORRECT_OUTPUT_EXAMPLES)
+            
+            return base_prompt + "".join(structured_parts)
+        else:
+            format_instruction = ""
+            if expected_format and expected_format.lower() != "text":
+                format_instruction = f"Format your entire response as {expected_format.upper()}."
+            
+            return base_prompt + cls.get_template('MINIONS_NON_STRUCTURED_OUTPUT', format_instruction=format_instruction)
+    
+    @classmethod
+    def build_conversation_history(cls, history: List[Tuple[str, str]]) -> str:
+        """Build formatted conversation history for prompts."""
+        context_parts = []
+        
+        for i, (role, message) in enumerate(history):
+            if role == "assistant":  # Claude's previous message
+                context_parts.append(f'\nQ{i//2 + 1}: {message}')
+            else:  # Local model's response
+                context_parts.append(f'A{i//2 + 1}: {message}')
+        
+        return "".join(context_parts)
+    
+    @classmethod
+    def enhance_prompt_with_state(cls, base_prompt: str, state_summary: str, topics_covered: List[str] = None, key_findings_count: int = 0, information_gaps_count: int = 0) -> str:
+        """Enhance a prompt with conversation state information."""
+        state_context = cls.get_template(
+            'MINION_CONVERSATION_CLAUDE_WITH_STATE',
+            state_summary=state_summary,
+            topics_covered=', '.join(topics_covered) if topics_covered else 'None yet',
+            key_findings_count=key_findings_count,
+            information_gaps_count=information_gaps_count
+        )
+        
+        return base_prompt.replace("DECISION POINT:", state_context + "\nDECISION POINT:")
+    
+    @classmethod
+    def enhance_prompt_with_deduplication(cls, base_prompt: str, previous_questions: List[str]) -> str:
+        """Enhance a prompt with question deduplication guidance."""
+        formatted_questions = "\n".join([f"{i}. {q}" for i, q in enumerate(previous_questions, 1)])
+        deduplication_section = cls.get_template('MINION_DEDUPLICATION_WARNING', previous_questions=formatted_questions)
+        
+        return base_prompt.replace(
+            "Remember: Each question should build on what you've learned, not repeat previous inquiries.",
+            deduplication_section
+        )
+    
+    @classmethod
+    def enhance_prompt_with_phase_guidance(cls, base_prompt: str, phase_guidance: str) -> str:
+        """Enhance a prompt with phase guidance."""
+        phase_context = cls.get_template('MINION_CONVERSATION_WITH_PHASE', phase_guidance=phase_guidance)
+        
+        return base_prompt.replace("DECISION POINT:", phase_context)
+    
+    @classmethod
+    def get_available_templates(cls) -> List[str]:
+        """Get a list of all available template names."""
+        return [attr for attr in dir(cls) if not attr.startswith('_') and attr.isupper() and isinstance(getattr(cls, attr), str)]
+
+# Partials File: partials/streaming_mixins.py
+from contextlib import asynccontextmanager
+
+
+class ProgressTrackingMixin:
+    """Mixin for consistent progress tracking across protocols."""
+    
+    async def track_phase_progress(self,
+                                 phase_name: str,
+                                 operation: Callable,
+                                 total_steps: int,
+                                 streaming_manager: Any,
+                                 step_descriptions: List[str] = None) -> Any:
+        """
+        Track progress for any phase with automatic updates.
+        
+        Args:
+            phase_name: Name of the phase (e.g., "task_decomposition")
+            operation: Async operation to track
+            total_steps: Total number of steps
+            streaming_manager: Manager for streaming updates
+            step_descriptions: Optional descriptions for each step
+            
+        Returns:
+            Result of the operation
+        """
+        if not streaming_manager or not streaming_manager.is_streaming_enabled():
+            return await operation()
+        
+        phase_tracker = PhaseTracker(streaming_manager, phase_name, total_steps)
+        
+        # If we have step descriptions, use them for sub-phase naming
+        if step_descriptions and len(step_descriptions) == total_steps:
+            phase_tracker.set_step_descriptions(step_descriptions)
+        
+        # Start the phase
+        await phase_tracker.start_phase()
+        
+        try:
+            # Execute the operation with phase tracking context
+            result = await self._execute_with_phase_tracking(operation, phase_tracker)
+            await phase_tracker.complete_phase()
+            return result
+        except Exception as e:
+            await phase_tracker.error_occurred(str(e))
+            raise
+    
+    async def _execute_with_phase_tracking(self, operation: Callable, phase_tracker: 'PhaseTracker') -> Any:
+        """Execute operation with phase tracking support."""
+        # For now, just execute the operation
+        # This can be enhanced to provide more granular tracking
+        result = await operation()
+        return result
+    
+    async def track_iterative_progress(self,
+                                     items: List[Any],
+                                     processor: Callable,
+                                     phase_name: str,
+                                     streaming_manager: Any,
+                                     parallel: bool = False,
+                                     item_name_extractor: Callable[[Any], str] = None) -> List[Any]:
+        """
+        Track progress for iterative operations.
+        
+        Args:
+            items: List of items to process
+            processor: Function to process each item
+            phase_name: Name of the phase
+            streaming_manager: Manager for streaming updates
+            parallel: Whether to process items in parallel
+            item_name_extractor: Function to extract readable name from item
+            
+        Returns:
+            List of processed results
+        """
+        if not streaming_manager or not streaming_manager.is_streaming_enabled():
+            if parallel:
+                return await asyncio.gather(*[processor(item) for item in items])
+            else:
+                return [await processor(item) for item in items]
+        
+        total_items = len(items)
+        phase_tracker = PhaseTracker(streaming_manager, phase_name, total_items)
+        
+        await phase_tracker.start_phase()
+        results = []
+        
+        try:
+            if parallel:
+                # Process items in parallel with progress tracking
+                tasks = []
+                for i, item in enumerate(items):
+                    item_name = item_name_extractor(item) if item_name_extractor else f"item_{i+1}"
+                    task = self._process_item_with_tracking(
+                        processor, item, phase_tracker, i, item_name
+                    )
+                    tasks.append(task)
+                
+                results = await asyncio.gather(*tasks)
+            else:
+                # Process items sequentially with progress tracking
+                for i, item in enumerate(items):
+                    item_name = item_name_extractor(item) if item_name_extractor else f"item_{i+1}"
+                    await phase_tracker.update_step(i, f"Processing {item_name}")
+                    
+                    result = await processor(item)
+                    results.append(result)
+            
+            await phase_tracker.complete_phase()
+            return results
+            
+        except Exception as e:
+            await phase_tracker.error_occurred(str(e))
+            raise
+    
+    async def _process_item_with_tracking(self,
+                                        processor: Callable,
+                                        item: Any,
+                                        phase_tracker: 'PhaseTracker',
+                                        index: int,
+                                        item_name: str) -> Any:
+        """Process a single item with progress tracking."""
+        await phase_tracker.update_step(index, f"Processing {item_name}")
+        result = await processor(item)
+        return result
+
+
+class StreamingPatterns:
+    """Common streaming patterns for both protocols."""
+    
+    @staticmethod
+    async def stream_with_retry(operation: Callable,
+                               streaming_manager: Any,
+                               max_attempts: int = 3,
+                               phase_name: str = "operation",
+                               backoff_factor: float = 1.0) -> Any:
+        """
+        Execute operation with retry logic and progress updates.
+        
+        Args:
+            operation: Async operation to execute
+            streaming_manager: Manager for streaming updates
+            max_attempts: Maximum number of retry attempts
+            phase_name: Name of the phase for progress tracking
+            backoff_factor: Backoff factor for retry delays
+            
+        Returns:
+            Result of the operation
+        """
+        last_exception = None
+        
+        for attempt in range(max_attempts):
+            try:
+                if streaming_manager and streaming_manager.is_streaming_enabled():
+                    if attempt > 0:
+                        await streaming_manager.stream_granular_update(
+                            phase_name,
+                            f"retry_attempt_{attempt + 1}",
+                            attempt / max_attempts,
+                            f"Retrying operation (attempt {attempt + 1}/{max_attempts})"
+                        )
+                    else:
+                        await streaming_manager.stream_granular_update(
+                            phase_name,
+                            "executing",
+                            0.0,
+                            "Starting operation"
+                        )
+                
+                result = await operation()
+                
+                if streaming_manager and streaming_manager.is_streaming_enabled():
+                    await streaming_manager.stream_granular_update(
+                        phase_name,
+                        "completed",
+                        1.0,
+                        "Operation completed successfully"
+                    )
+                
+                return result
+                
+            except Exception as e:
+                last_exception = e
+                
+                if streaming_manager and streaming_manager.is_streaming_enabled():
+                    await streaming_manager.stream_granular_update(
+                        phase_name,
+                        f"error_attempt_{attempt + 1}",
+                        (attempt + 1) / max_attempts,
+                        f"Operation failed: {str(e)}"
+                    )
+                
+                if attempt < max_attempts - 1:
+                    # Calculate backoff delay
+                    delay = backoff_factor * (2 ** attempt)
+                    await asyncio.sleep(delay)
+                    continue
+                else:
+                    # Final attempt failed
+                    break
+        
+        # All attempts failed
+        if streaming_manager and streaming_manager.is_streaming_enabled():
+            await streaming_manager.stream_granular_update(
+                phase_name,
+                "failed",
+                1.0,
+                f"All {max_attempts} attempts failed. Last error: {str(last_exception)}"
+            )
+        
+        raise last_exception
+    
+    @staticmethod
+    async def stream_document_processing(chunks: List[str],
+                                       processor: Callable,
+                                       streaming_manager: Any,
+                                       phase_name: str = "document_processing") -> List[Any]:
+        """
+        Standard pattern for streaming document chunk processing.
+        
+        Args:
+            chunks: List of document chunks to process
+            processor: Function to process each chunk
+            streaming_manager: Manager for streaming updates
+            phase_name: Name of the phase
+            
+        Returns:
+            List of processed chunk results
+        """
+        if not streaming_manager or not streaming_manager.is_streaming_enabled():
+            return [await processor(chunk, i) for i, chunk in enumerate(chunks)]
+        
+        total_chunks = len(chunks)
+        results = []
+        
+        await streaming_manager.stream_granular_update(
+            phase_name,
+            "initializing",
+            0.0,
+            f"Starting processing of {total_chunks} document chunks"
+        )
+        
+        for i, chunk in enumerate(chunks):
+            progress = i / total_chunks
+            
+            await streaming_manager.stream_granular_update(
+                phase_name,
+                f"chunk_{i+1}_of_{total_chunks}",
+                progress,
+                f"Processing chunk {i+1}/{total_chunks} ({len(chunk)} characters)"
+            )
+            
+            try:
+                result = await processor(chunk, i)
+                results.append(result)
+                
+                # Update progress after completion
+                completion_progress = (i + 1) / total_chunks
+                await streaming_manager.stream_granular_update(
+                    phase_name,
+                    f"chunk_{i+1}_completed",
+                    completion_progress,
+                    f"Completed chunk {i+1}/{total_chunks}"
+                )
+                
+            except Exception as e:
+                await streaming_manager.stream_granular_update(
+                    phase_name,
+                    f"chunk_{i+1}_error",
+                    progress,
+                    f"Error processing chunk {i+1}: {str(e)}"
+                )
+                results.append(None)  # or handle error differently
+        
+        await streaming_manager.stream_granular_update(
+            phase_name,
+            "completed",
+            1.0,
+            f"Completed processing all {total_chunks} chunks"
+        )
+        
+        return results
+    
+    @staticmethod
+    @asynccontextmanager
+    async def stream_operation_context(streaming_manager: Any,
+                                     phase_name: str,
+                                     operation_description: str = "",
+                                     total_steps: int = 1):
+        """
+        Context manager for automatic streaming operation tracking.
+        
+        Args:
+            streaming_manager: Manager for streaming updates
+            phase_name: Name of the phase
+            operation_description: Description of the operation
+            total_steps: Total number of steps (for progress calculation)
+        """
+        if not streaming_manager or not streaming_manager.is_streaming_enabled():
+            yield None
+            return
+        
+        # Start the operation
+        await streaming_manager.stream_granular_update(
+            phase_name,
+            "starting",
+            0.0,
+            operation_description or "Starting operation"
+        )
+        
+        try:
+            # Create a simple tracker object for the context
+            tracker = SimpleOperationTracker(streaming_manager, phase_name, total_steps)
+            yield tracker
+            
+            # Operation completed successfully
+            await streaming_manager.stream_granular_update(
+                phase_name,
+                "completed",
+                1.0,
+                "Operation completed successfully"
+            )
+            
+        except Exception as e:
+            # Operation failed
+            await streaming_manager.stream_granular_update(
+                phase_name,
+                "error",
+                1.0,
+                f"Operation failed: {str(e)}"
+            )
+            raise
+
+
+class SimpleOperationTracker:
+    """Simple tracker for operations within a streaming context."""
+    
+    def __init__(self, streaming_manager: Any, phase_name: str, total_steps: int):
+        self.streaming_manager = streaming_manager
+        self.phase_name = phase_name
+        self.total_steps = total_steps
+        self.current_step = 0
+    
+    async def update_progress(self, step_name: str, details: str = ""):
+        """Update progress for the current step."""
+        progress = self.current_step / self.total_steps if self.total_steps > 0 else 0.0
+        await self.streaming_manager.stream_granular_update(
+            self.phase_name,
+            step_name,
+            progress,
+            details
+        )
+    
+    async def next_step(self, step_name: str, details: str = ""):
+        """Move to the next step and update progress."""
+        self.current_step += 1
+        progress = self.current_step / self.total_steps if self.total_steps > 0 else 1.0
+        await self.streaming_manager.stream_granular_update(
+            self.phase_name,
+            step_name,
+            progress,
+            details
+        )
+
+
+class PhaseTracker:
+    """Tracks progress for a specific phase with detailed step management."""
+    
+    def __init__(self, streaming_manager: Any, phase_name: str, total_steps: int):
+        self.streaming_manager = streaming_manager
+        self.phase_name = phase_name
+        self.total_steps = total_steps
+        self.current_step = 0
+        self.step_descriptions = []
+        self.start_time = None
+        self.completed = False
+    
+    def set_step_descriptions(self, descriptions: List[str]):
+        """Set descriptions for each step."""
+        self.step_descriptions = descriptions
+    
+    async def start_phase(self):
+        """Start the phase tracking."""
+        self.start_time = time.time()
+        await self.streaming_manager.stream_granular_update(
+            self.phase_name,
+            "initializing",
+            0.0,
+            f"Starting {self.phase_name.replace('_', ' ')} ({self.total_steps} steps)"
+        )
+    
+    async def update_step(self, step_index: int, details: str = ""):
+        """Update progress for a specific step."""
+        self.current_step = step_index + 1
+        progress = self.current_step / self.total_steps if self.total_steps > 0 else 0.0
+        
+        step_name = (
+            self.step_descriptions[step_index] 
+            if step_index < len(self.step_descriptions) 
+            else f"step_{step_index + 1}"
+        )
+        
+        await self.streaming_manager.stream_granular_update(
+            self.phase_name,
+            step_name,
+            progress,
+            details
+        )
+    
+    async def next_step(self, step_name: str = "", details: str = ""):
+        """Move to the next step."""
+        await self.update_step(self.current_step, details)
+    
+    async def complete_phase(self):
+        """Complete the phase tracking."""
+        if not self.completed:
+            self.completed = True
+            elapsed_time = time.time() - self.start_time if self.start_time else 0
+            
+            await self.streaming_manager.stream_granular_update(
+                self.phase_name,
+                "completed",
+                1.0,
+                f"Phase completed in {elapsed_time:.2f}s"
+            )
+    
+    async def error_occurred(self, error_message: str):
+        """Handle error during phase execution."""
+        elapsed_time = time.time() - self.start_time if self.start_time else 0
+        
+        await self.streaming_manager.stream_granular_update(
+            self.phase_name,
+            "error",
+            self.current_step / self.total_steps if self.total_steps > 0 else 1.0,
+            f"Error after {elapsed_time:.2f}s: {error_message}"
+        )
+
+
+class EnhancedStreamingMixin(ProgressTrackingMixin):
+    """Enhanced streaming mixin that combines multiple streaming patterns."""
+    
+    async def stream_multi_phase_operation(self,
+                                         phases: List[Dict[str, Any]],
+                                         streaming_manager: Any) -> List[Any]:
+        """
+        Execute multiple phases with streaming progress.
+        
+        Args:
+            phases: List of phase dictionaries with 'name', 'operation', 'steps' keys
+            streaming_manager: Manager for streaming updates
+            
+        Returns:
+            List of results from each phase
+        """
+        total_phases = len(phases)
+        results = []
+        
+        if not streaming_manager or not streaming_manager.is_streaming_enabled():
+            return [await phase['operation']() for phase in phases]
+        
+        for i, phase in enumerate(phases):
+            phase_name = phase.get('name', f'phase_{i+1}')
+            operation = phase['operation']
+            steps = phase.get('steps', 1)
+            step_descriptions = phase.get('step_descriptions', [])
+            
+            # Update overall progress
+            overall_progress = i / total_phases
+            await streaming_manager.stream_granular_update(
+                "multi_phase_operation",
+                f"starting_{phase_name}",
+                overall_progress,
+                f"Starting {phase_name} (phase {i+1}/{total_phases})"
+            )
+            
+            # Execute the phase with detailed tracking
+            result = await self.track_phase_progress(
+                phase_name,
+                operation,
+                steps,
+                streaming_manager,
+                step_descriptions
+            )
+            
+            results.append(result)
+        
+        # Final completion update
+        await streaming_manager.stream_granular_update(
+            "multi_phase_operation",
+            "all_phases_completed",
+            1.0,
+            f"All {total_phases} phases completed successfully"
+        )
+        
+        return results
+
+# Partials File: partials/metrics_aggregator.py
+from dataclasses import dataclass, field
+from contextlib import contextmanager
+from enum import Enum
+
+
+class OperationType(Enum):
+    """Enumeration of operation types for consistent tracking."""
+    TASK_DECOMPOSITION = "task_decomposition"
+    TASK_EXECUTION = "task_execution"
+    WEB_SEARCH = "web_search"
+    DOCUMENT_PROCESSING = "document_processing"
+    API_CALL = "api_call"
+    CONVERSATION_ROUND = "conversation_round"
+    SYNTHESIS = "synthesis"
+    CITATION_PROCESSING = "citation_processing"
+    STREAMING_UPDATE = "streaming_update"
+    ERROR_HANDLING = "error_handling"
+    CACHE_OPERATION = "cache_operation"
+
+
+@dataclass
+class OperationMetric:
+    """Single operation metric with comprehensive tracking."""
+    operation_type: str
+    duration: float
+    success: bool
+    timestamp: float
+    metadata: Dict[str, Any] = field(default_factory=dict)
+    
+    # Additional performance metrics
+    tokens_used: Optional[int] = None
+    api_calls_made: Optional[int] = None
+    cache_hits: Optional[int] = None
+    cache_misses: Optional[int] = None
+    error_message: Optional[str] = None
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert metric to dictionary for serialization."""
+        return {
+            "operation_type": self.operation_type,
+            "duration": self.duration,
+            "success": self.success,
+            "timestamp": self.timestamp,
+            "metadata": self.metadata,
+            "tokens_used": self.tokens_used,
+            "api_calls_made": self.api_calls_made,
+            "cache_hits": self.cache_hits,
+            "cache_misses": self.cache_misses,
+            "error_message": self.error_message
+        }
+
+
+@dataclass
+class PhaseMetrics:
+    """Metrics for a complete phase of operation."""
+    phase_name: str
+    start_time: float
+    end_time: Optional[float] = None
+    operations: List[OperationMetric] = field(default_factory=list)
+    success: bool = True
+    metadata: Dict[str, Any] = field(default_factory=dict)
+    
+    @property
+    def duration(self) -> float:
+        """Calculate total phase duration."""
+        if self.end_time is None:
+            return time.time() - self.start_time
+        return self.end_time - self.start_time
+    
+    @property
+    def operation_count(self) -> int:
+        """Get total number of operations in this phase."""
+        return len(self.operations)
+    
+    @property
+    def success_rate(self) -> float:
+        """Calculate success rate for operations in this phase."""
+        if not self.operations:
+            return 1.0
+        successful = sum(1 for op in self.operations if op.success)
+        return successful / len(self.operations)
+
+
+class MetricsAggregator:
+    """
+    Centralized metrics collection and reporting for both protocols.
+    Provides comprehensive performance tracking and analysis.
+    """
+    
+    def __init__(self, protocol_name: str, debug_mode: bool = False):
+        self.protocol_name = protocol_name
+        self.debug_mode = debug_mode
+        self.metrics: List[OperationMetric] = []
+        self.phases: Dict[str, PhaseMetrics] = {}
+        self.start_time = time.time()
+        self.session_metadata = {}
+        
+        # Performance counters
+        self.total_api_calls = 0
+        self.total_tokens_used = 0
+        self.cache_hits = 0
+        self.cache_misses = 0
+        self.error_count = 0
+        
+    def set_session_metadata(self, metadata: Dict[str, Any]):
+        """Set metadata for the current session."""
+        self.session_metadata.update(metadata)
+        
+    def start_phase(self, phase_name: str, metadata: Dict[str, Any] = None) -> str:
+        """
+        Start tracking a new phase.
+        
+        Args:
+            phase_name: Name of the phase
+            metadata: Optional metadata for the phase
+            
+        Returns:
+            str: Phase ID for reference
+        """
+        phase_id = f"{phase_name}_{len(self.phases)}"
+        self.phases[phase_id] = PhaseMetrics(
+            phase_name=phase_name,
+            start_time=time.time(),
+            metadata=metadata or {}
+        )
+        
+        if self.debug_mode:
+            print(f"DEBUG [MetricsAggregator]: Started phase '{phase_name}' (ID: {phase_id})")
+        
+        return phase_id
+    
+    def end_phase(self, phase_id: str, success: bool = True, metadata: Dict[str, Any] = None):
+        """
+        End tracking for a phase.
+        
+        Args:
+            phase_id: Phase ID returned from start_phase
+            success: Whether the phase completed successfully
+            metadata: Additional metadata for the phase
+        """
+        if phase_id in self.phases:
+            phase = self.phases[phase_id]
+            phase.end_time = time.time()
+            phase.success = success
+            if metadata:
+                phase.metadata.update(metadata)
+            
+            if self.debug_mode:
+                print(f"DEBUG [MetricsAggregator]: Ended phase '{phase.phase_name}' "
+                      f"(Duration: {phase.duration:.2f}s, Success: {success})")
+    
+    def track_operation(self,
+                       operation_type: Union[str, OperationType],
+                       duration: float,
+                       success: bool,
+                       metadata: Dict[str, Any] = None,
+                       phase_id: str = None,
+                       **kwargs) -> OperationMetric:
+        """
+        Track a single operation.
+        
+        Args:
+            operation_type: Type of operation
+            duration: Duration in seconds
+            success: Whether operation succeeded
+            metadata: Additional metadata
+            phase_id: Optional phase ID to associate with
+            **kwargs: Additional metric fields
+            
+        Returns:
+            OperationMetric: The created metric
+        """
+        # Convert enum to string if needed
+        if isinstance(operation_type, OperationType):
+            operation_type = operation_type.value
+        
+        metric = OperationMetric(
+            operation_type=operation_type,
+            duration=duration,
+            success=success,
+            timestamp=time.time(),
+            metadata=metadata or {},
+            **kwargs
+        )
+        
+        self.metrics.append(metric)
+        
+        # Add to phase if specified
+        if phase_id and phase_id in self.phases:
+            self.phases[phase_id].operations.append(metric)
+        
+        # Update counters
+        if not success:
+            self.error_count += 1
+        
+        if metric.api_calls_made:
+            self.total_api_calls += metric.api_calls_made
+        
+        if metric.tokens_used:
+            self.total_tokens_used += metric.tokens_used
+        
+        if metric.cache_hits:
+            self.cache_hits += metric.cache_hits
+        
+        if metric.cache_misses:
+            self.cache_misses += metric.cache_misses
+        
+        if self.debug_mode:
+            self._log_metric(metric)
+        
+        return metric
+    
+    @contextmanager
+    def track_operation_context(self,
+                              operation_type: Union[str, OperationType],
+                              metadata: Dict[str, Any] = None,
+                              phase_id: str = None,
+                              **kwargs):
+        """
+        Context manager for automatic operation tracking.
+        
+        Args:
+            operation_type: Type of operation
+            metadata: Additional metadata
+            phase_id: Optional phase ID to associate with
+            **kwargs: Additional metric fields
+        """
+        start_time = time.time()
+        success = True
+        error_message = None
+        
+        try:
+            yield
+        except Exception as e:
+            success = False
+            error_message = str(e)
+            if metadata is None:
+                metadata = {}
+            metadata['error'] = error_message
+            raise
+        finally:
+            duration = time.time() - start_time
+            self.track_operation(
+                operation_type=operation_type,
+                duration=duration,
+                success=success,
+                metadata=metadata,
+                phase_id=phase_id,
+                error_message=error_message,
+                **kwargs
+            )
+    
+    def track_api_call(self,
+                      api_name: str,
+                      duration: float,
+                      success: bool,
+                      tokens_used: int = None,
+                      model_name: str = None,
+                      phase_id: str = None) -> OperationMetric:
+        """
+        Track an API call with specific metrics.
+        
+        Args:
+            api_name: Name of the API called
+            duration: Duration of the call
+            success: Whether the call succeeded
+            tokens_used: Number of tokens used
+            model_name: Name of the model used
+            phase_id: Optional phase ID
+            
+        Returns:
+            OperationMetric: The created metric
+        """
+        metadata = {"api_name": api_name}
+        if model_name:
+            metadata["model_name"] = model_name
+        
+        return self.track_operation(
+            operation_type=OperationType.API_CALL,
+            duration=duration,
+            success=success,
+            metadata=metadata,
+            tokens_used=tokens_used,
+            api_calls_made=1,
+            phase_id=phase_id
+        )
+    
+    def track_cache_operation(self,
+                            operation: str,
+                            hit: bool,
+                            duration: float = 0.0,
+                            phase_id: str = None) -> OperationMetric:
+        """
+        Track a cache operation.
+        
+        Args:
+            operation: Type of cache operation (get, set, etc.)
+            hit: Whether it was a cache hit
+            duration: Duration of the operation
+            phase_id: Optional phase ID
+            
+        Returns:
+            OperationMetric: The created metric
+        """
+        metadata = {"cache_operation": operation, "cache_hit": hit}
+        
+        return self.track_operation(
+            operation_type=OperationType.CACHE_OPERATION,
+            duration=duration,
+            success=True,
+            metadata=metadata,
+            cache_hits=1 if hit else 0,
+            cache_misses=0 if hit else 1,
+            phase_id=phase_id
+        )
+    
+    def get_summary(self) -> Dict[str, Any]:
+        """Get comprehensive metrics summary."""
+        total_duration = time.time() - self.start_time
+        
+        # Group metrics by operation type
+        operations_by_type = {}
+        for metric in self.metrics:
+            if metric.operation_type not in operations_by_type:
+                operations_by_type[metric.operation_type] = []
+            operations_by_type[metric.operation_type].append(metric)
+        
+        # Calculate statistics
+        summary = {
+            "protocol": self.protocol_name,
+            "session_metadata": self.session_metadata,
+            "timing": {
+                "total_duration": total_duration,
+                "start_time": self.start_time,
+                "end_time": time.time()
+            },
+            "operations": {
+                "total_operations": len(self.metrics),
+                "successful_operations": sum(1 for m in self.metrics if m.success),
+                "failed_operations": self.error_count,
+                "success_rate": (len(self.metrics) - self.error_count) / len(self.metrics) if self.metrics else 1.0
+            },
+            "performance": {
+                "total_api_calls": self.total_api_calls,
+                "total_tokens_used": self.total_tokens_used,
+                "cache_hits": self.cache_hits,
+                "cache_misses": self.cache_misses,
+                "cache_hit_rate": self.cache_hits / (self.cache_hits + self.cache_misses) if (self.cache_hits + self.cache_misses) > 0 else 0.0
+            },
+            "operations_by_type": {},
+            "phases": {}
+        }
+        
+        # Add operation type statistics
+        for op_type, metrics in operations_by_type.items():
+            successful = [m for m in metrics if m.success]
+            total_duration_for_type = sum(m.duration for m in metrics)
+            
+            summary["operations_by_type"][op_type] = {
+                "count": len(metrics),
+                "success_count": len(successful),
+                "success_rate": len(successful) / len(metrics) if metrics else 0,
+                "avg_duration": total_duration_for_type / len(metrics) if metrics else 0,
+                "total_duration": total_duration_for_type,
+                "min_duration": min(m.duration for m in metrics) if metrics else 0,
+                "max_duration": max(m.duration for m in metrics) if metrics else 0
+            }
+        
+        # Add phase statistics
+        for phase_id, phase in self.phases.items():
+            summary["phases"][phase_id] = {
+                "phase_name": phase.phase_name,
+                "duration": phase.duration,
+                "success": phase.success,
+                "operation_count": phase.operation_count,
+                "success_rate": phase.success_rate,
+                "metadata": phase.metadata
+            }
+        
+        return summary
+    
+    def format_summary_report(self, include_details: bool = False) -> str:
+        """
+        Format a human-readable summary report.
+        
+        Args:
+            include_details: Whether to include detailed operation breakdowns
+            
+        Returns:
+            str: Formatted report
+        """
+        summary = self.get_summary()
+        
+        lines = [
+            f"## 📊 {self.protocol_name.title()} Protocol Performance Report",
+            "",
+            f"**Total Duration:** {summary['timing']['total_duration']:.2f}s",
+            f"**Operations:** {summary['operations']['total_operations']} total, "
+            f"{summary['operations']['successful_operations']} successful "
+            f"({summary['operations']['success_rate']:.1%} success rate)",
+            ""
+        ]
+        
+        # Performance metrics
+        perf = summary['performance']
+        if perf['total_api_calls'] > 0:
+            lines.extend([
+                "### 🔌 API Performance",
+                f"- **API Calls:** {perf['total_api_calls']}",
+                f"- **Tokens Used:** {perf['total_tokens_used']:,}",
+                f"- **Cache Hit Rate:** {perf['cache_hit_rate']:.1%} "
+                f"({perf['cache_hits']} hits, {perf['cache_misses']} misses)",
+                ""
+            ])
+        
+        # Phase breakdown
+        if summary['phases']:
+            lines.extend([
+                "### 📋 Phase Breakdown",
+                ""
+            ])
+            
+            for phase_id, phase in summary['phases'].items():
+                status_emoji = "✅" if phase['success'] else "❌"
+                lines.append(
+                    f"- **{phase['phase_name']}** {status_emoji}: "
+                    f"{phase['duration']:.2f}s, {phase['operation_count']} operations "
+                    f"({phase['success_rate']:.1%} success)"
+                )
+            
+            lines.append("")
+        
+        # Operation type breakdown
+        if include_details and summary['operations_by_type']:
+            lines.extend([
+                "### 🔧 Operation Details",
+                ""
+            ])
+            
+            for op_type, stats in summary['operations_by_type'].items():
+                lines.append(
+                    f"- **{op_type.replace('_', ' ').title()}**: "
+                    f"{stats['count']} ops, {stats['avg_duration']:.3f}s avg, "
+                    f"{stats['success_rate']:.1%} success"
+                )
+        
+        # Session metadata
+        if summary['session_metadata']:
+            lines.extend([
+                "",
+                "### 📝 Session Info",
+                ""
+            ])
+            
+            for key, value in summary['session_metadata'].items():
+                lines.append(f"- **{key.replace('_', ' ').title()}**: {value}")
+        
+        return "\n".join(lines)
+    
+    def format_performance_summary(self) -> str:
+        """Format a concise performance summary for inclusion in responses."""
+        summary = self.get_summary()
+        
+        # Calculate key metrics
+        duration = summary['timing']['total_duration']
+        operations = summary['operations']['total_operations']
+        success_rate = summary['operations']['success_rate']
+        api_calls = summary['performance']['total_api_calls']
+        tokens = summary['performance']['total_tokens_used']
+        
+        parts = [
+            f"⏱️ {duration:.1f}s",
+            f"🔧 {operations} ops",
+            f"✅ {success_rate:.0%}"
+        ]
+        
+        if api_calls > 0:
+            parts.append(f"🔌 {api_calls} API calls")
+        
+        if tokens > 0:
+            parts.append(f"🎯 {tokens:,} tokens")
+        
+        return " | ".join(parts)
+    
+    def export_metrics(self, format: str = "json") -> Union[str, Dict[str, Any]]:
+        """
+        Export metrics in various formats.
+        
+        Args:
+            format: Export format ("json", "dict", "csv")
+            
+        Returns:
+            Exported metrics in requested format
+        """
+        if format.lower() == "dict":
+            return self.get_summary()
+        elif format.lower() == "json":
+            return json.dumps(self.get_summary(), indent=2, default=str)
+        elif format.lower() == "csv":
+            return self._export_csv()
+        else:
+            raise ValueError(f"Unsupported export format: {format}")
+    
+    def _export_csv(self) -> str:
+        """Export metrics as CSV format."""
+        
+        output = io.StringIO()
+        writer = csv.writer(output)
+        
+        # Write header
+        writer.writerow([
+            "timestamp", "operation_type", "duration", "success",
+            "tokens_used", "api_calls_made", "cache_hits", "cache_misses",
+            "error_message", "metadata"
+        ])
+        
+        # Write metrics
+        for metric in self.metrics:
+            writer.writerow([
+                metric.timestamp,
+                metric.operation_type,
+                metric.duration,
+                metric.success,
+                metric.tokens_used or 0,
+                metric.api_calls_made or 0,
+                metric.cache_hits or 0,
+                metric.cache_misses or 0,
+                metric.error_message or "",
+                json.dumps(metric.metadata) if metric.metadata else ""
+            ])
+        
+        return output.getvalue()
+    
+    def _log_metric(self, metric: OperationMetric):
+        """Log a metric for debugging purposes."""
+        status = "SUCCESS" if metric.success else "FAILED"
+        print(f"DEBUG [MetricsAggregator]: {metric.operation_type} - "
+              f"{status} in {metric.duration:.3f}s")
+        
+        if metric.error_message:
+            print(f"  Error: {metric.error_message}")
+        
+        if metric.metadata:
+            print(f"  Metadata: {metric.metadata}")
+    
+    def reset(self):
+        """Reset all metrics and start fresh."""
+        self.metrics.clear()
+        self.phases.clear()
+        self.start_time = time.time()
+        self.session_metadata.clear()
+        
+        # Reset counters
+        self.total_api_calls = 0
+        self.total_tokens_used = 0
+        self.cache_hits = 0
+        self.cache_misses = 0
+        self.error_count = 0
+
+# Partials File: partials/unified_web_search_handler.py
+
+
+class UnifiedWebSearchHandler:
+    """
+    Handles web search integration for both Minion and MinionS protocols.
+    Provides unified web search handling with streaming updates.
+    """
+    
+    def __init__(self, 
+                web_search: Any,
+                tool_bridge: Any,
+                citation_manager: Any,
+                streaming_manager: Any):
+        self.web_search = web_search
+        self.tool_bridge = tool_bridge
+        self.citation_manager = citation_manager
+        self.streaming_manager = streaming_manager
+        self.search_cache = {}
+        self.search_history = []
+    
+    async def handle_search_if_needed(self,
+                                    query: str,
+                                    context: str = "",
+                                    task_description: str = None,
+                                    protocol_type: str = "minion") -> Dict[str, Any]:
+        """
+        Unified web search handling with streaming updates.
+        
+        Args:
+            query: User query
+            context: Document context (if any)
+            task_description: Specific task description (for MinionS)
+            protocol_type: "minion" or "minions" for protocol-specific behavior
+            
+        Returns:
+            Dict with search_performed, results, and enriched_context
+        """
+        # Initialize result structure
+        search_result = {
+            "search_performed": False,
+            "results": [],
+            "enriched_context": context,
+            "search_queries": [],
+            "search_metadata": {}
+        }
+        
+        # Check if web search is enabled
+        if not self.web_search.is_web_search_enabled():
+            return search_result
+        
+        # Determine if search is needed
+        needs_search = await self._determine_search_necessity(
+            query, context, task_description, protocol_type
+        )
+        
+        if not needs_search:
+            return search_result
+        
+        # Execute search with streaming progress
+        return await self._execute_search_with_progress(
+            query, context, task_description, protocol_type
+        )
+    
+    async def _determine_search_necessity(self,
+                                        query: str,
+                                        context: str,
+                                        task_description: str,
+                                        protocol_type: str) -> bool:
+        """Determine if web search is necessary for the given inputs."""
+        
+        # Protocol-specific search determination
+        if protocol_type == "minions" and task_description:
+            # For MinionS, check if the specific task requires web search
+            return self.web_search.requires_web_search(task_description, query)
+        else:
+            # For Minion, check if the query needs current information
+            return (
+                self.web_search.requires_web_search("", query) or
+                (not context and self._query_needs_current_info(query))
+            )
+    
+    def _query_needs_current_info(self, query: str) -> bool:
+        """Determine if query requires current information."""
+        current_info_indicators = [
+            "current", "latest", "today", "recent", "now",
+            "2024", "2025", "news", "update", "trending",
+            "happening", "this year", "this month"
+        ]
+        query_lower = query.lower()
+        return any(indicator in query_lower for indicator in current_info_indicators)
+    
+    async def _execute_search_with_progress(self,
+                                          query: str,
+                                          context: str,
+                                          task_description: str,
+                                          protocol_type: str) -> Dict[str, Any]:
+        """Execute web search with streaming progress updates."""
+        
+        search_start_time = time.time()
+        
+        # Use streaming patterns for the search operation
+        async def search_operation():
+            return await self._perform_search_operation(
+                query, context, task_description, protocol_type
+            )
+        
+        try:
+            # Execute search with retry logic and progress tracking
+            search_result = await StreamingPatterns.stream_with_retry(
+                search_operation,
+                self.streaming_manager,
+                max_attempts=2,
+                phase_name="web_search",
+                backoff_factor=1.5
+            )
+            
+            # Log search performance
+            search_duration = time.time() - search_start_time
+            search_result["search_metadata"]["duration"] = search_duration
+            search_result["search_metadata"]["timestamp"] = search_start_time
+            
+            # Add to search history
+            self.search_history.append({
+                "query": query,
+                "task_description": task_description,
+                "protocol_type": protocol_type,
+                "duration": search_duration,
+                "results_count": len(search_result.get("results", []))
+            })
+            
+            return search_result
+            
+        except Exception as e:
+            # Handle search failure gracefully
+            if self.streaming_manager and self.streaming_manager.is_streaming_enabled():
+                await self.streaming_manager.stream_granular_update(
+                    "web_search",
+                    "search_failed",
+                    1.0,
+                    f"Web search failed: {str(e)}"
+                )
+            
+            return {
+                "search_performed": False,
+                "results": [],
+                "enriched_context": context,
+                "search_queries": [],
+                "search_metadata": {"error": str(e)},
+                "error": f"Web search failed: {str(e)}"
+            }
+    
+    async def _perform_search_operation(self,
+                                      query: str,
+                                      context: str,
+                                      task_description: str,
+                                      protocol_type: str) -> Dict[str, Any]:
+        """Perform the actual search operation with detailed progress."""
+        
+        # Step 1: Generate search queries
+        if self.streaming_manager and self.streaming_manager.is_streaming_enabled():
+            await self.streaming_manager.stream_granular_update(
+                "web_search",
+                "generating_queries",
+                0.1,
+                "Generating optimized search queries"
+            )
+        
+        search_queries = await self._generate_search_queries(
+            query, task_description, protocol_type
+        )
+        
+        # Step 2: Execute searches
+        if self.streaming_manager and self.streaming_manager.is_streaming_enabled():
+            await self.streaming_manager.stream_granular_update(
+                "web_search",
+                "executing_searches",
+                0.3,
+                f"Executing {len(search_queries)} search queries"
+            )
+        
+        all_results = []
+        for i, search_query in enumerate(search_queries):
+            # Check cache first
+            cache_key = self._generate_cache_key(search_query)
+            if cache_key in self.search_cache:
+                cached_result = self.search_cache[cache_key]
+                if self._is_cache_valid(cached_result):
+                    all_results.extend(cached_result["results"])
+                    continue
+            
+            # Perform search
+            search_results = await self._execute_single_search(search_query)
+            all_results.extend(search_results)
+            
+            # Cache results
+            self.search_cache[cache_key] = {
+                "results": search_results,
+                "timestamp": time.time(),
+                "query": search_query
+            }
+            
+            # Update progress
+            progress = 0.3 + (0.4 * (i + 1) / len(search_queries))
+            if self.streaming_manager and self.streaming_manager.is_streaming_enabled():
+                await self.streaming_manager.stream_granular_update(
+                    "web_search",
+                    f"search_{i+1}_completed",
+                    progress,
+                    f"Completed search {i+1}/{len(search_queries)}: {len(search_results)} results"
+                )
+        
+        # Step 3: Process and rank results
+        if self.streaming_manager and self.streaming_manager.is_streaming_enabled():
+            await self.streaming_manager.stream_granular_update(
+                "web_search",
+                "processing_results",
+                0.8,
+                f"Processing and ranking {len(all_results)} search results"
+            )
+        
+        processed_results = await self._process_search_results(
+            all_results, query, task_description
+        )
+        
+        # Step 4: Generate enriched context
+        if self.streaming_manager and self.streaming_manager.is_streaming_enabled():
+            await self.streaming_manager.stream_granular_update(
+                "web_search",
+                "enriching_context",
+                0.9,
+                "Enriching context with search results"
+            )
+        
+        enriched_context = await self._generate_enriched_context(
+            context, processed_results, query, task_description
+        )
+        
+        # Final completion
+        if self.streaming_manager and self.streaming_manager.is_streaming_enabled():
+            await self.streaming_manager.stream_granular_update(
+                "web_search",
+                "search_completed",
+                1.0,
+                f"Web search completed: {len(processed_results)} relevant results found"
+            )
+        
+        return {
+            "search_performed": True,
+            "results": processed_results,
+            "enriched_context": enriched_context,
+            "search_queries": search_queries,
+            "search_metadata": {
+                "total_results": len(all_results),
+                "processed_results": len(processed_results),
+                "queries_executed": len(search_queries)
+            }
+        }
+    
+    async def _generate_search_queries(self,
+                                     query: str,
+                                     task_description: str,
+                                     protocol_type: str) -> List[str]:
+        """Generate optimized search queries based on the input."""
+        search_queries = []
+        
+        if protocol_type == "minions" and task_description:
+            # For MinionS, generate queries based on the specific task
+            primary_query = self.web_search.generate_search_query(task_description, query)
+            search_queries.append(primary_query)
+            
+            # Generate additional queries for comprehensive coverage
+            additional_queries = await self._generate_additional_task_queries(
+                task_description, query
+            )
+            search_queries.extend(additional_queries)
+        else:
+            # For Minion, generate queries based on the main query
+            primary_query = self.web_search.generate_search_query("", query)
+            search_queries.append(primary_query)
+            
+            # Generate related queries
+            related_queries = await self._generate_related_queries(query)
+            search_queries.extend(related_queries)
+        
+        # Remove duplicates and limit to reasonable number
+        unique_queries = list(dict.fromkeys(search_queries))  # Preserves order
+        return unique_queries[:3]  # Limit to 3 queries maximum
+    
+    async def _generate_additional_task_queries(self,
+                                              task_description: str,
+                                              query: str) -> List[str]:
+        """Generate additional search queries for task-specific searches."""
+        additional_queries = []
+        
+        # Extract key concepts from task description
+        task_lower = task_description.lower()
+        
+        # Add time-based queries for current information requests
+        if any(word in task_lower for word in ["current", "latest", "recent", "today"]):
+            time_query = f"{query} 2024 latest"
+            additional_queries.append(time_query)
+        
+        # Add comparative queries
+        if any(word in task_lower for word in ["compare", "versus", "vs", "difference"]):
+            comparative_query = f"{query} comparison analysis"
+            additional_queries.append(comparative_query)
+        
+        return additional_queries
+    
+    async def _generate_related_queries(self, query: str) -> List[str]:
+        """Generate related queries for comprehensive search coverage."""
+        related_queries = []
+        
+        # Add specific variation queries
+        query_lower = query.lower()
+        
+        # Add news/update queries for current events
+        if any(word in query_lower for word in ["news", "update", "current", "latest"]):
+            news_query = f"{query} news update"
+            related_queries.append(news_query)
+        
+        return related_queries
+    
+    async def _execute_single_search(self, search_query: str) -> List[Dict[str, Any]]:
+        """Execute a single search query using the tool bridge."""
+        try:
+            # Use tool bridge to execute web search
+            search_result = await self.tool_bridge.execute_web_search(search_query)
+            return search_result.get("results", [])
+        except Exception as e:
+            # Log error but don't fail the entire operation
+            if hasattr(self.web_search, 'debug_mode') and self.web_search.debug_mode:
+                print(f"DEBUG [UnifiedWebSearchHandler]: Search failed for '{search_query}': {str(e)}")
+            return []
+    
+    async def _process_search_results(self,
+                                    results: List[Dict[str, Any]],
+                                    query: str,
+                                    task_description: str) -> List[Dict[str, Any]]:
+        """Process and rank search results by relevance."""
+        if not results:
+            return []
+        
+        # Remove duplicates based on URL
+        seen_urls = set()
+        unique_results = []
+        for result in results:
+            url = result.get("url", "")
+            if url and url not in seen_urls:
+                seen_urls.add(url)
+                unique_results.append(result)
+        
+        # Score results based on relevance
+        scored_results = []
+        for result in unique_results:
+            score = self._calculate_relevance_score(result, query, task_description)
+            scored_results.append((score, result))
+        
+        # Sort by score (descending) and return top results
+        scored_results.sort(key=lambda x: x[0], reverse=True)
+        return [result for score, result in scored_results[:10]]  # Top 10 results
+    
+    def _calculate_relevance_score(self,
+                                 result: Dict[str, Any],
+                                 query: str,
+                                 task_description: str) -> float:
+        """Calculate relevance score for a search result."""
+        score = 0.0
+        
+        title = result.get("title", "").lower()
+        snippet = result.get("snippet", "").lower()
+        url = result.get("url", "").lower()
+        
+        query_terms = query.lower().split()
+        task_terms = task_description.lower().split() if task_description else []
+        
+        # Score based on query term matches
+        for term in query_terms:
+            if term in title:
+                score += 2.0  # Title matches are important
+            if term in snippet:
+                score += 1.0  # Snippet matches
+            if term in url:
+                score += 0.5  # URL matches
+        
+        # Score based on task term matches (for MinionS)
+        for term in task_terms:
+            if term in title:
+                score += 1.5
+            if term in snippet:
+                score += 0.75
+        
+        # Bonus for recent results (if timestamp available)
+        if "date" in result or "timestamp" in result:
+            score += 0.5
+        
+        # Penalty for very short snippets
+        if len(snippet) < 50:
+            score -= 0.5
+        
+        return max(0.0, score)  # Ensure non-negative score
+    
+    async def _generate_enriched_context(self,
+                                       original_context: str,
+                                       search_results: List[Dict[str, Any]],
+                                       query: str,
+                                       task_description: str) -> str:
+        """Generate enriched context by combining original context with search results."""
+        if not search_results:
+            return original_context
+        
+        # Build web search context section
+        web_context_parts = ["=== WEB SEARCH RESULTS ==="]
+        
+        for i, result in enumerate(search_results[:5]):  # Top 5 results
+            title = result.get("title", "No title")
+            snippet = result.get("snippet", "No snippet available")
+            url = result.get("url", "")
+            
+            result_section = f"""
+Result {i+1}: {title}
+URL: {url}
+Summary: {snippet}
+"""
+            web_context_parts.append(result_section.strip())
+        
+        web_context = "\n\n".join(web_context_parts)
+        
+        # Combine with original context
+        if original_context:
+            return f"{original_context}\n\n{web_context}"
+        else:
+            return web_context
+    
+    def _generate_cache_key(self, search_query: str) -> str:
+        """Generate cache key for search query."""
+        return f"search_{hash(search_query.lower())}"
+    
+    def _is_cache_valid(self, cached_result: Dict[str, Any], max_age_hours: float = 1.0) -> bool:
+        """Check if cached search result is still valid."""
+        cache_timestamp = cached_result.get("timestamp", 0)
+        current_time = time.time()
+        age_hours = (current_time - cache_timestamp) / 3600
+        
+        return age_hours < max_age_hours
+    
+    def get_search_history(self) -> List[Dict[str, Any]]:
+        """Get the search history for debugging/analytics."""
+        return self.search_history.copy()
+    
+    def clear_search_cache(self):
+        """Clear the search cache."""
+        self.search_cache.clear()
+    
+    def get_cache_stats(self) -> Dict[str, Any]:
+        """Get cache statistics."""
+        total_entries = len(self.search_cache)
+        valid_entries = sum(1 for entry in self.search_cache.values() if self._is_cache_valid(entry))
+        
+        return {
+            "total_entries": total_entries,
+            "valid_entries": valid_entries,
+            "cache_hit_rate": valid_entries / total_entries if total_entries > 0 else 0.0
+        }
 
 # Partials File: partials/minion_models.py
 from enum import Enum
@@ -5810,166 +8137,38 @@ def get_minion_initial_claude_prompt(query: str, context_len: int, valves: Any) 
     Returns the initial prompt for Claude in the Minion protocol.
     Enhanced with better question generation guidance.
     """
-    # Escape any quotes in the query to prevent f-string issues
-    escaped_query = query.replace('"', '\\"').replace("'", "\\'")
-    
-    return f'''You are a research coordinator working with a knowledgeable local assistant who has access to specific documents.
-
-Your task: Gather information to answer the user's query by asking strategic questions.
-
-USER'S QUERY: "{escaped_query}"
-
-The local assistant has FULL ACCESS to the relevant document ({context_len} characters long) and will provide factual information extracted from it.
-
-Guidelines for effective questions:
-1. Ask ONE specific, focused question at a time
-2. Build upon previous answers to go deeper
-3. Avoid broad questions like "What does the document say?" 
-4. Good: "What are the specific budget allocations for Q2?"
-   Poor: "Tell me about the budget"
-5. Track what you've learned to avoid redundancy
-
-When to conclude:
-- Start your response with "I now have sufficient information" when ready to provide the final answer
-- You have {valves.max_rounds} rounds maximum to gather information
-
-QUESTION STRATEGY TIPS:
-- For factual queries: Ask for specific data points, dates, numbers, or names
-- For analytical queries: Ask about relationships, comparisons, or patterns
-- For summary queries: Ask about key themes, main points, or conclusions
-- For procedural queries: Ask about steps, sequences, or requirements
-
-Remember: The assistant can only see the document, not your conversation history.
-
-If you have gathered enough information to answer "{escaped_query}", respond with "FINAL ANSWER READY." followed by your comprehensive answer.
-
-Otherwise, ask your first strategic question to the local assistant.'''
+    return PromptTemplates.get_minion_initial_claude_prompt(
+        query=query,
+        context_len=context_len,
+        max_rounds=valves.max_rounds
+    )
 
 def get_minion_conversation_claude_prompt(history: List[Tuple[str, str]], original_query: str, valves: Any) -> str:
     """
     Returns the prompt for Claude during subsequent conversation rounds in the Minion protocol.
     Enhanced with better guidance for follow-up questions.
     """
-    # Escape the original query
-    escaped_query = original_query.replace('"', '\\"').replace("'", "\\'")
-    
     current_round = len(history) // 2 + 1
-    rounds_remaining = valves.max_rounds - current_round
+    conversation_history = PromptTemplates.build_conversation_history(history)
     
-    context_parts = [
-        f'You are continuing to gather information to answer: "{escaped_query}"',
-        f"Round {current_round} of {valves.max_rounds}",
-        "",
-        "INFORMATION GATHERED SO FAR:",
-    ]
-
-    for i, (role, message) in enumerate(history):
-        if role == "assistant":  # Claude's previous message
-            context_parts.append(f'\nQ{i//2 + 1}: {message}')
-        else:  # Local model's response
-            # Extract key information if structured
-            if isinstance(message, str) and message.startswith('{'):
-                context_parts.append(f'A{i//2 + 1}: {message}')
-            else:
-                context_parts.append(f'A{i//2 + 1}: {message}')
-
-    context_parts.extend(
-        [
-            "",
-            "DECISION POINT:",
-            "Evaluate if you have sufficient information to answer the original question comprehensively.",
-            "",
-            "✅ If YES: Start with 'FINAL ANSWER READY.' then provide your complete answer",
-            f"❓ If NO: Ask ONE more strategic question (you have {rounds_remaining} rounds left)",
-            "",
-            "TIPS FOR YOUR NEXT QUESTION:",
-            "- What specific gaps remain in your understanding?",
-            "- Can you drill deeper into any mentioned topics?",
-            "- Are there related aspects you haven't explored?",
-            "- Would examples or specific details strengthen your answer?",
-            "",
-            "Remember: Each question should build on what you've learned, not repeat previous inquiries.",
-        ]
+    return PromptTemplates.get_minion_conversation_claude_prompt(
+        original_query=original_query,
+        current_round=current_round,
+        max_rounds=valves.max_rounds,
+        conversation_history=conversation_history
     )
-    return "\n".join(context_parts)
 
 def get_minion_local_prompt(context: str, query: str, claude_request: str, valves: Any) -> str:
     """
     Returns the prompt for the local Ollama model in the Minion protocol.
     Enhanced with better guidance for structured, useful responses.
     """
-    # query is the original user query.
-    # context is the document chunk.
-    # claude_request (the parameter) is the specific question from the remote model to the local model.
-
-    base_prompt = f"""You are a document analysis assistant with exclusive access to the following document:
-
-<document>
-{context}
-</document>
-
-A research coordinator needs specific information from this document to answer: "{query}"
-
-Their current question is:
-<question>
-{claude_request}
-</question>
-
-RESPONSE GUIDELINES:
-
-1. ACCURACY: Base your answer ONLY on information found in the document above
-   
-2. CITATIONS: When possible, include direct quotes or specific references:
-   - Good: "According to section 3.2, 'the budget increased by 15%'"
-   - Good: "The document states on page 4 that..."
-   - Poor: "The document mentions something about budgets"
-
-3. ORGANIZATION: For complex answers, structure your response:
-   - Use bullet points or numbered lists for multiple items
-   - Separate distinct pieces of information clearly
-   - Highlight key findings at the beginning
-
-4. CONFIDENCE LEVELS:
-   - HIGH: Information directly answers the question with explicit statements
-   - MEDIUM: Information partially addresses the question or requires some inference
-   - LOW: Information is tangentially related or requires significant interpretation
-
-5. HANDLING MISSING INFORMATION:
-   - If not found: "This specific information is not available in the document"
-   - If partially found: "The document provides partial information: [explain what's available]"
-   - Suggest related info: "While X is not mentioned, the document does discuss Y which may be relevant"
-
-Remember: The coordinator cannot see the document and relies entirely on your accurate extraction."""
-
-    if valves.use_structured_output:
-        structured_output_instructions = """
-
-RESPONSE FORMAT:
-Respond ONLY with a JSON object in this exact format:
-{
-    "answer": "Your detailed answer addressing the specific question",
-    "confidence": "HIGH/MEDIUM/LOW",
-    "key_points": ["Main finding 1", "Main finding 2", "..."] or null,
-    "citations": ["Exact quote from document", "Another relevant quote", "..."] or null
-}
-
-JSON Guidelines:
-- answer: Comprehensive response to the question (required)
-- confidence: Your assessment based on criteria above (required)
-- key_points: List main findings if multiple important points exist (optional)
-- citations: Direct quotes that support your answer (optional but recommended)
-
-IMPORTANT: Output ONLY the JSON object. No additional text, no markdown formatting."""
-        return base_prompt + structured_output_instructions
-    else:
-        non_structured_instructions = """
-
-Format your response clearly with:
-- Main answer first
-- Supporting details or quotes
-- Confidence level (HIGH/MEDIUM/LOW) at the end
-- Note if any information is not found in the document"""
-        return base_prompt + non_structured_instructions
+    return PromptTemplates.get_minion_local_prompt(
+        context=context,
+        query=query,
+        claude_request=claude_request,
+        use_structured_output=valves.use_structured_output
+    )
 
 def get_minion_initial_claude_prompt_with_state(query: str, context_len: int, valves: Any, conversation_state: Optional[Any] = None, phase_guidance: Optional[str] = None) -> str:
     """
@@ -5980,23 +8179,14 @@ def get_minion_initial_claude_prompt_with_state(query: str, context_len: int, va
     if conversation_state and valves.track_conversation_state:
         state_summary = conversation_state.get_state_summary()
         if state_summary:
-            base_prompt = base_prompt.replace(
-                "Otherwise, ask your first strategic question to the local assistant.",
-                f"""
-CONVERSATION STATE CONTEXT:
-{state_summary}
-
-Based on this context, ask your first strategic question to the local assistant."""
+            base_prompt = PromptTemplates.enhance_prompt_with_state(
+                base_prompt, state_summary
             )
     
     # Add phase guidance if provided
     if phase_guidance and valves.enable_flow_control:
-        base_prompt = base_prompt.replace(
-            "Guidelines for effective questions:",
-            f"""CURRENT PHASE:
-{phase_guidance}
-
-Guidelines for effective questions:"""
+        base_prompt = PromptTemplates.enhance_prompt_with_phase_guidance(
+            base_prompt, phase_guidance
         )
     
     return base_prompt
@@ -6009,43 +8199,25 @@ def get_minion_conversation_claude_prompt_with_state(history: List[Tuple[str, st
     
     if conversation_state and valves.track_conversation_state:
         state_summary = conversation_state.get_state_summary()
+        topics_covered = getattr(conversation_state, 'topics_covered', [])
+        key_findings_count = len(getattr(conversation_state, 'key_findings', []))
+        information_gaps_count = len(getattr(conversation_state, 'information_gaps', []))
         
-        # Insert state summary before decision point
-        state_section = f"""
-CURRENT CONVERSATION STATE:
-{state_summary}
-
-TOPICS COVERED: {', '.join(conversation_state.topics_covered) if conversation_state.topics_covered else 'None yet'}
-KEY FINDINGS COUNT: {len(conversation_state.key_findings)}
-INFORMATION GAPS: {len(conversation_state.information_gaps)}
-"""
-        
-        base_prompt = base_prompt.replace(
-            "DECISION POINT:",
-            state_section + "\nDECISION POINT:"
+        base_prompt = PromptTemplates.enhance_prompt_with_state(
+            base_prompt, state_summary, topics_covered, 
+            key_findings_count, information_gaps_count
         )
     
     # Add deduplication guidance if previous questions provided
     if previous_questions and valves.enable_deduplication:
-        questions_section = "\nPREVIOUSLY ASKED QUESTIONS (DO NOT REPEAT):\n"
-        for i, q in enumerate(previous_questions, 1):
-            questions_section += f"{i}. {q}\n"
-        
-        questions_section += "\n⚠️ IMPORTANT: Avoid asking questions that are semantically similar to the above. Each new question should explore genuinely new information.\n"
-        
-        base_prompt = base_prompt.replace(
-            "Remember: Each question should build on what you've learned, not repeat previous inquiries.",
-            questions_section + "Remember: Each question should build on what you've learned, not repeat previous inquiries."
+        base_prompt = PromptTemplates.enhance_prompt_with_deduplication(
+            base_prompt, previous_questions
         )
     
     # Add phase guidance if provided
     if phase_guidance and valves.enable_flow_control:
-        base_prompt = base_prompt.replace(
-            "DECISION POINT:",
-            f"""CURRENT CONVERSATION PHASE:
-{phase_guidance}
-
-DECISION POINT:"""
+        base_prompt = PromptTemplates.enhance_prompt_with_phase_guidance(
+            base_prompt, phase_guidance
         )
     
     return base_prompt
@@ -7237,7 +9409,7 @@ class Pipe:
 
     def __init__(self):
         self.valves = self.Valves()
-        self.name = "Minion v0.3.9b (Conversational)"
+        self.name = "Minion v0.3.9c (Conversational)"
 
     def pipes(self):
         """Define the available models"""
