@@ -7060,7 +7060,7 @@ Respond with "FINAL ANSWER READY." followed by your synthesized answer. Do NOT a
                 yield update
 
         try:
-            claude_response = await call_claude(valves, claude_prompt_for_this_round)
+            claude_response = await call_supervisor_model(valves, claude_prompt_for_this_round)
             conversation_history.append(("assistant", claude_response))
             
             # Check for final answer
