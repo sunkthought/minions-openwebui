@@ -184,7 +184,8 @@ async def _execute_minion_protocol(
     ConversationStateModel: Any = None,
     QuestionDeduplicatorModel: Any = None,
     ConversationFlowControllerModel: Any = None,
-    AnswerValidatorModel: Any = None
+    AnswerValidatorModel: Any = None,
+    streaming_manager: Any = None
 ) -> str:
     """Execute the Minion protocol"""
     conversation_log = []

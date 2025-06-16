@@ -146,6 +146,11 @@ async def minion_pipe(
                 + direct_response
             )
 
+        # Initialize streaming manager if enabled
+        streaming_manager = None
+        if getattr(pipe_self.valves, 'enable_streaming_responses', True):
+            streaming_manager = StreamingResponseManager(pipe_self.valves, pipe_self.valves.debug_mode)
+
         # Handle chunking for large documents
         chunks = create_chunks(context, pipe_self.valves.chunk_size, pipe_self.valves.max_chunks)
         if not chunks and context:
@@ -164,7 +169,8 @@ async def minion_pipe(
                 ConversationStateModel=ConversationState,
                 QuestionDeduplicatorModel=QuestionDeduplicator,
                 ConversationFlowControllerModel=ConversationFlowController,
-                AnswerValidatorModel=AnswerValidator
+                AnswerValidatorModel=AnswerValidator,
+                streaming_manager=streaming_manager
             )
             
             if len(chunks) > 1:

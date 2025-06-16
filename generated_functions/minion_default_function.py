@@ -1,12 +1,12 @@
 """
-title: Minion Protocol Integration for Open WebUI v0.3.9
+title: Minion Protocol Integration for Open WebUI v0.3.9b
 author: Wil Everts and the @SunkThought team
 author_url: https://github.com/SunkThought/minions-openwebui
 original_author: Copyright (c) 2025 Sabri Eyuboglu, Avanika Narayan, Dan Biderman, and the rest of the Minions team (@HazyResearch wrote the original MinionS Protocol paper and code examples on github that spawned this)
 original_author_url: https://github.com/HazyResearch/
 funding_url: https://github.com/HazyResearch/minions
-version: 0.3.9
-description: Enhanced Minion protocol with OpenAI API support, scaling strategies, and adaptive round control
+version: 0.3.9b
+description: Enhanced Minion protocol with complete web search execution and granular streaming updates
 required_open_webui_version: 0.5.0
 license: MIT License
 """
@@ -332,7 +332,7 @@ class ConfidenceLevels:
 class SystemRequirements:
     """System version requirements."""
     MIN_OPENWEBUI_VERSION = "0.5.0"
-    CURRENT_VERSION = "v0.3.7"
+    CURRENT_VERSION = "v0.3.9b"
 
 
 class SpecialMarkers:
@@ -3828,12 +3828,17 @@ class WebSearchIntegration:
         
         return search_query
     
-    async def execute_web_search(self, search_query: str) -> Dict[str, Any]:
+    async def execute_web_search(self, search_query: str, __user__: dict = None) -> Dict[str, Any]:
         """
-        Execute web search using Open WebUI's search tool format.
+        Execute web search using Open WebUI's search tool format with proper response handling.
+        
+        The search tool response structure in Open WebUI typically includes:
+        - Search results with title, URL, and snippet
+        - The tool execution happens via the pipeline's message handling
         
         Args:
             search_query: The search query to execute
+            __user__: User context from Open WebUI (optional)
             
         Returns:
             Dict containing search results with citations
@@ -3846,25 +3851,39 @@ class WebSearchIntegration:
         
         try:
             # Generate the search tool call using Open WebUI format
-            search_tool_call = f'''__TOOL_CALL__
-{{"name": "web_search", "parameters": {{"query": "{search_query}"}}}}
-__TOOL_CALL__'''
-            
-            if self.debug_mode:
-                print(f"[WebSearch] Executing search: {search_tool_call}")
-            
-            # Note: In a real implementation, this would be handled by Open WebUI's pipeline
-            # For now, we return a structured placeholder that matches expected format
-            search_results = {
-                "query": search_query,
-                "tool_call": search_tool_call,
-                "results": [],
-                "citations": [],
-                "status": "pending_tool_execution"
+            # This format triggers Open WebUI's tool execution system
+            search_tool_call = {
+                "name": "web_search",
+                "parameters": {"query": search_query}
             }
             
-            # Cache the results
-            self.search_results_cache[search_query] = search_results
+            if self.debug_mode:
+                print(f"[WebSearch] Preparing search tool call: {json.dumps(search_tool_call)}")
+            
+            # Create a special response structure that Open WebUI will recognize
+            # and execute as a tool call
+            tool_request = {
+                "type": "tool_call",
+                "tool": search_tool_call,
+                "query": search_query,
+                "awaiting_response": True
+            }
+            
+            # For actual execution, we need to return the tool call format
+            # that Open WebUI's pipeline will intercept and execute
+            search_results = {
+                "query": search_query,
+                "tool_call": f'''__TOOL_CALL__
+{json.dumps(search_tool_call)}
+__TOOL_CALL__''',
+                "results": [],
+                "citations": [],
+                "status": "tool_execution_requested",
+                "tool_request": tool_request
+            }
+            
+            # Don't cache incomplete results
+            # Cache will be updated when we process the tool response
             
             return search_results
             
@@ -3873,6 +3892,95 @@ __TOOL_CALL__'''
             if self.debug_mode:
                 print(f"[WebSearch] {error_msg}")
             raise MinionError(error_msg)
+    
+    async def process_tool_response(self, tool_response: Any, original_query: str) -> Dict[str, Any]:
+        """
+        Process the response from Open WebUI's tool execution.
+        
+        Args:
+            tool_response: The response from the tool execution
+            original_query: The original search query for cache management
+            
+        Returns:
+            Dict containing processed search results
+        """
+        try:
+            # Handle different response formats from Open WebUI
+            if isinstance(tool_response, dict):
+                # Standard format with 'sources' key
+                if 'sources' in tool_response:
+                    results = tool_response['sources']
+                # Alternative format with 'results' key
+                elif 'results' in tool_response:
+                    results = tool_response['results']
+                # Direct list of results
+                elif isinstance(tool_response.get('data'), list):
+                    results = tool_response['data']
+                else:
+                    # Fallback: treat the entire response as a single result
+                    results = [tool_response]
+            elif isinstance(tool_response, list):
+                results = tool_response
+            elif isinstance(tool_response, str):
+                # Parse string response
+                results = self.parse_search_results(tool_response)
+            else:
+                if self.debug_mode:
+                    print(f"[WebSearch] Unexpected tool response type: {type(tool_response)}")
+                results = []
+            
+            # Normalize results to ensure consistent format
+            normalized_results = []
+            citations = []
+            
+            for idx, result in enumerate(results[:10]):  # Limit to top 10 results
+                if isinstance(result, dict):
+                    normalized = {
+                        'title': result.get('title', f'Search Result {idx + 1}'),
+                        'url': result.get('url', result.get('link', '')),
+                        'snippet': result.get('snippet', result.get('description', result.get('content', ''))),
+                        'metadata': result.get('metadata', {})
+                    }
+                    
+                    # Create citation for this result
+                    if normalized['snippet']:
+                        citation = self.create_web_search_citation(normalized, normalized['snippet'][:200])
+                        citations.append(citation)
+                    
+                    normalized_results.append(normalized)
+            
+            # Create complete search results
+            search_results = {
+                "query": original_query,
+                "results": normalized_results,
+                "citations": citations,
+                "status": "completed",
+                "timestamp": json.dumps({"timestamp": "now"}),  # Placeholder for actual timestamp
+                "result_count": len(normalized_results)
+            }
+            
+            # Cache the completed results
+            self.search_results_cache[original_query] = search_results
+            
+            if self.debug_mode:
+                print(f"[WebSearch] Processed {len(normalized_results)} search results for: '{original_query}'")
+            
+            return search_results
+            
+        except Exception as e:
+            error_msg = f"Failed to process tool response: {str(e)}"
+            if self.debug_mode:
+                print(f"[WebSearch] {error_msg}")
+                print(f"[WebSearch] Raw response: {tool_response}")
+            
+            # Return error state
+            return {
+                "query": original_query,
+                "results": [],
+                "citations": [],
+                "status": "error",
+                "error": error_msg
+            }
     
     def parse_search_results(self, raw_results: str) -> List[Dict[str, Any]]:
         """
@@ -3981,6 +4089,300 @@ __TOOL_CALL__'''
             "cached_queries": list(self.search_results_cache.keys()),
             "web_search_enabled": self.is_web_search_enabled()
         }
+
+# Partials File: partials/tool_execution_bridge.py
+
+from datetime import datetime
+
+class ToolExecutionBridge:
+    """
+    Bridges MinionS protocol with Open WebUI's tool execution system.
+    Handles the async communication between function calls and tool responses.
+    """
+    
+    def __init__(self, valves, debug_mode: bool = False):
+        self.valves = valves
+        self.debug_mode = debug_mode
+        self.pending_tool_calls = {}
+        self.tool_results = {}
+        self.max_wait_time = 30  # Maximum seconds to wait for tool response
+    
+    async def request_tool_execution(self, tool_name: str, parameters: Dict[str, Any]) -> str:
+        """
+        Request tool execution from Open WebUI's pipeline.
+        Returns a placeholder that will be replaced with actual results.
+        
+        Args:
+            tool_name: Name of the tool to execute (e.g., "web_search")
+            parameters: Tool parameters
+            
+        Returns:
+            str: Tool call ID for tracking
+        """
+        # Generate unique ID for this tool call
+        tool_call_id = str(uuid.uuid4())
+        
+        # Create tool call structure
+        tool_call = {
+            "id": tool_call_id,
+            "name": tool_name,
+            "parameters": parameters,
+            "timestamp": datetime.now().isoformat(),
+            "status": "pending"
+        }
+        
+        # Store in pending calls
+        self.pending_tool_calls[tool_call_id] = tool_call
+        
+        if self.debug_mode:
+            print(f"[ToolBridge] Requested tool execution: {tool_name} with ID: {tool_call_id}")
+        
+        return tool_call_id
+    
+    async def process_tool_response(self, tool_response: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Process the response from Open WebUI's tool execution.
+        
+        Args:
+            tool_response: Response from tool execution
+            
+        Returns:
+            Dict: Processed tool response
+        """
+        try:
+            # Extract tool call ID if present
+            tool_call_id = tool_response.get('tool_call_id')
+            
+            if not tool_call_id:
+                # Try to match by tool name and parameters
+                tool_name = tool_response.get('tool_name')
+                if tool_name:
+                    # Find matching pending call
+                    for call_id, call in self.pending_tool_calls.items():
+                        if call['name'] == tool_name and call['status'] == 'pending':
+                            tool_call_id = call_id
+                            break
+            
+            if tool_call_id and tool_call_id in self.pending_tool_calls:
+                # Update call status
+                self.pending_tool_calls[tool_call_id]['status'] = 'completed'
+                self.pending_tool_calls[tool_call_id]['response'] = tool_response
+                
+                # Store result
+                self.tool_results[tool_call_id] = {
+                    'response': tool_response,
+                    'timestamp': datetime.now().isoformat(),
+                    'success': True
+                }
+                
+                if self.debug_mode:
+                    print(f"[ToolBridge] Processed tool response for ID: {tool_call_id}")
+                
+                return {
+                    'tool_call_id': tool_call_id,
+                    'success': True,
+                    'data': tool_response
+                }
+            else:
+                if self.debug_mode:
+                    print(f"[ToolBridge] No matching tool call found for response")
+                
+                return {
+                    'success': False,
+                    'error': 'No matching tool call found',
+                    'data': tool_response
+                }
+                
+        except Exception as e:
+            error_msg = f"Failed to process tool response: {str(e)}"
+            if self.debug_mode:
+                print(f"[ToolBridge] {error_msg}")
+            
+            return {
+                'success': False,
+                'error': error_msg
+            }
+    
+    async def wait_for_tool_result(self, tool_call_id: str, timeout: Optional[float] = None) -> Dict[str, Any]:
+        """
+        Wait for a tool result to be available.
+        
+        Args:
+            tool_call_id: ID of the tool call to wait for
+            timeout: Maximum time to wait (uses max_wait_time if not specified)
+            
+        Returns:
+            Dict: Tool result or timeout error
+        """
+        timeout = timeout or self.max_wait_time
+        start_time = asyncio.get_event_loop().time()
+        
+        while True:
+            # Check if result is available
+            if tool_call_id in self.tool_results:
+                return self.tool_results[tool_call_id]
+            
+            # Check if call is still pending
+            if tool_call_id in self.pending_tool_calls:
+                call = self.pending_tool_calls[tool_call_id]
+                if call['status'] == 'failed':
+                    return {
+                        'success': False,
+                        'error': 'Tool execution failed'
+                    }
+            
+            # Check timeout
+            elapsed = asyncio.get_event_loop().time() - start_time
+            if elapsed > timeout:
+                if self.debug_mode:
+                    print(f"[ToolBridge] Timeout waiting for tool result: {tool_call_id}")
+                
+                return {
+                    'success': False,
+                    'error': f'Timeout waiting for tool result after {timeout}s'
+                }
+            
+            # Wait a bit before checking again
+            await asyncio.sleep(0.1)
+    
+    def format_tool_call_for_pipeline(self, tool_name: str, parameters: Dict[str, Any]) -> str:
+        """
+        Format a tool call in the way Open WebUI's pipeline expects.
+        
+        Args:
+            tool_name: Name of the tool
+            parameters: Tool parameters
+            
+        Returns:
+            str: Formatted tool call
+        """
+        tool_call = {
+            "name": tool_name,
+            "parameters": parameters
+        }
+        
+        # Use the __TOOL_CALL__ format that Open WebUI recognizes
+        formatted = f"__TOOL_CALL__\n{json.dumps(tool_call, indent=2)}\n__TOOL_CALL__"
+        
+        if self.debug_mode:
+            print(f"[ToolBridge] Formatted tool call:\n{formatted}")
+        
+        return formatted
+    
+    async def execute_tool_with_fallback(self, 
+                                       tool_name: str, 
+                                       parameters: Dict[str, Any],
+                                       fallback_handler: Optional[Callable] = None) -> Dict[str, Any]:
+        """
+        Execute a tool with fallback handling if execution fails.
+        
+        Args:
+            tool_name: Name of the tool
+            parameters: Tool parameters
+            fallback_handler: Optional fallback function if tool execution fails
+            
+        Returns:
+            Dict: Tool execution result or fallback result
+        """
+        try:
+            # Request tool execution
+            tool_call_id = await self.request_tool_execution(tool_name, parameters)
+            
+            # Wait for result
+            result = await self.wait_for_tool_result(tool_call_id)
+            
+            if result.get('success'):
+                return result['data']
+            elif fallback_handler:
+                if self.debug_mode:
+                    print(f"[ToolBridge] Using fallback handler for {tool_name}")
+                
+                return await fallback_handler(parameters)
+            else:
+                raise MinionError(f"Tool execution failed: {result.get('error', 'Unknown error')}")
+                
+        except Exception as e:
+            if fallback_handler:
+                if self.debug_mode:
+                    print(f"[ToolBridge] Exception in tool execution, using fallback: {str(e)}")
+                
+                return await fallback_handler(parameters)
+            else:
+                raise
+    
+    def get_pending_tools(self) -> List[Dict[str, Any]]:
+        """Get list of pending tool calls."""
+        return [
+            call for call in self.pending_tool_calls.values()
+            if call['status'] == 'pending'
+        ]
+    
+    def clear_completed_tools(self) -> None:
+        """Clear completed tool calls to free memory."""
+        # Remove completed calls
+        completed_ids = [
+            call_id for call_id, call in self.pending_tool_calls.items()
+            if call['status'] in ['completed', 'failed']
+        ]
+        
+        for call_id in completed_ids:
+            del self.pending_tool_calls[call_id]
+            if call_id in self.tool_results:
+                del self.tool_results[call_id]
+        
+        if self.debug_mode and completed_ids:
+            print(f"[ToolBridge] Cleared {len(completed_ids)} completed tool calls")
+    
+    def inject_tool_call_into_message(self, message: str, tool_name: str, parameters: Dict[str, Any]) -> str:
+        """
+        Inject a tool call into a message response.
+        This allows the message to trigger Open WebUI's tool execution.
+        
+        Args:
+            message: Original message
+            tool_name: Name of the tool to call
+            parameters: Tool parameters
+            
+        Returns:
+            str: Message with embedded tool call
+        """
+        tool_call = self.format_tool_call_for_pipeline(tool_name, parameters)
+        
+        # Inject the tool call at the end of the message
+        # Open WebUI will detect and execute it
+        return f"{message}\n\n{tool_call}"
+    
+    async def handle_streaming_tool_execution(self, 
+                                            tool_name: str,
+                                            parameters: Dict[str, Any],
+                                            stream_callback: Callable[[str], None]) -> Dict[str, Any]:
+        """
+        Handle tool execution with streaming updates.
+        
+        Args:
+            tool_name: Name of the tool
+            parameters: Tool parameters
+            stream_callback: Callback for streaming updates
+            
+        Returns:
+            Dict: Tool execution result
+        """
+        # Stream initial status
+        await stream_callback(f"🔧 Executing {tool_name}...")
+        
+        try:
+            # Execute tool
+            result = await self.execute_tool_with_fallback(tool_name, parameters)
+            
+            # Stream success
+            await stream_callback(f"✅ {tool_name} completed")
+            
+            return result
+            
+        except Exception as e:
+            # Stream error
+            await stream_callback(f"❌ {tool_name} failed: {str(e)}")
+            raise
 
 # Partials File: partials/rag_retriever.py
 
@@ -4739,10 +5141,98 @@ class StreamingResponseManager:
         self.total_tasks = 0
         self.completed_tasks = 0
         self.error_occurred = False
+        self.last_update_time = 0
+        self.min_update_interval = 0.1  # Minimum seconds between updates
+        self.update_queue = []
     
     def is_streaming_enabled(self) -> bool:
         """Check if streaming responses are enabled via valves."""
         return getattr(self.valves, 'enable_streaming_responses', True)
+    
+    async def _rate_limited_update(self, message: str, force: bool = False) -> str:
+        """
+        Apply rate limiting to streaming updates to prevent flooding.
+        
+        Args:
+            message: The update message
+            force: Force immediate update regardless of rate limit
+            
+        Returns:
+            str: The message if it should be sent, empty string otherwise
+        """
+        current_time = time.time()
+        time_since_last = current_time - self.last_update_time
+        
+        if force or time_since_last >= self.min_update_interval:
+            self.last_update_time = current_time
+            # Flush any queued updates
+            if self.update_queue:
+                combined = "\n".join(self.update_queue) + "\n" + message
+                self.update_queue.clear()
+                return combined
+            return message
+        else:
+            # Queue the update
+            self.update_queue.append(message.strip())
+            return ""
+    
+    async def stream_granular_update(self, 
+                                   phase: str, 
+                                   sub_phase: str,
+                                   progress: float,
+                                   details: str = "") -> str:
+        """
+        Stream granular updates with progress percentages and sub-phases.
+        
+        Args:
+            phase: Main phase (e.g., "task_decomposition")
+            sub_phase: Sub-phase (e.g., "analyzing_complexity", "generating_tasks")
+            progress: Progress percentage (0.0 to 1.0)
+            details: Optional details about current operation
+            
+        Returns:
+            str: Formatted granular update message
+        """
+        # Ensure progress is within bounds
+        progress = max(0.0, min(1.0, progress))
+        
+        # Phase emoji mapping
+        phase_emojis = {
+            "task_decomposition": "🔍",
+            "task_execution": "⚙️",
+            "web_search": "🌐",
+            "synthesis": "🔄",
+            "conversation": "💬",
+            "query_analysis": "🔍",
+            "document_retrieval": "📄",
+            "answer_synthesis": "🧠",
+            "citation_processing": "📚"
+        }
+        
+        emoji = phase_emojis.get(phase.lower().replace(" ", "_"), "📊")
+        progress_bar = self.format_progress_bar(progress)
+        percentage = int(progress * 100)
+        
+        # Format the update message
+        message_parts = [
+            f"{emoji} {phase.replace('_', ' ').title()} {progress_bar}",
+            f"   └─ {sub_phase}: {details}" if details else f"   └─ {sub_phase}"
+        ]
+        
+        message = "\n".join(message_parts) + "\n"
+        
+        if self.debug_mode:
+            print(f"[Streaming] Granular update: {phase}/{sub_phase} - {percentage}%")
+        
+        # Apply rate limiting
+        return await self._rate_limited_update(message)
+    
+    def format_progress_bar(self, progress: float, width: int = 20) -> str:
+        """Create a text-based progress bar."""
+        filled = int(progress * width)
+        bar = "█" * filled + "░" * (width - filled)
+        percentage = int(progress * 100)
+        return f"[{bar}] {percentage}%"
     
     async def stream_phase_update(self, phase_name: str, details: str = "") -> str:
         """
@@ -4923,6 +5413,211 @@ class StreamingResponseManager:
         percentage_text = f"{percentage * 100:.0f}%"
         
         return f"[{bar}] {percentage_text}"
+    
+    async def stream_task_decomposition_progress(self, 
+                                                stage: str,
+                                                current_step: int,
+                                                total_steps: int = 5,
+                                                details: str = "") -> str:
+        """
+        Stream granular updates for task decomposition phase.
+        
+        Args:
+            stage: Current stage (analyzing_complexity, generating_tasks, etc.)
+            current_step: Current step number
+            total_steps: Total steps in decomposition
+            details: Additional details
+            
+        Returns:
+            str: Formatted update
+        """
+        progress = current_step / total_steps
+        
+        stage_details = {
+            "analyzing_complexity": "Analyzing query complexity",
+            "document_structure": "Analyzing document structure",
+            "generating_tasks": "Generating task list",
+            "task_validation": "Validating tasks",
+            "complete": "Decomposition complete"
+        }
+        
+        detail_text = stage_details.get(stage, stage)
+        if details:
+            detail_text = f"{detail_text} - {details}"
+        
+        return await self.stream_granular_update(
+            "task_decomposition",
+            stage,
+            progress,
+            detail_text
+        )
+    
+    async def stream_task_execution_progress(self,
+                                           task_idx: int,
+                                           total_tasks: int,
+                                           chunk_idx: int = None,
+                                           total_chunks: int = None,
+                                           task_description: str = "") -> str:
+        """
+        Stream granular updates for task execution phase.
+        
+        Args:
+            task_idx: Current task index (0-based)
+            total_tasks: Total number of tasks
+            chunk_idx: Current chunk index (optional)
+            total_chunks: Total chunks (optional)
+            task_description: Task being executed
+            
+        Returns:
+            str: Formatted update
+        """
+        # Calculate overall progress
+        if chunk_idx is not None and total_chunks is not None:
+            # Progress within current task considering chunks
+            task_progress = (chunk_idx + 1) / total_chunks
+            overall_progress = (task_idx + task_progress) / total_tasks
+            sub_phase = f"task_{task_idx + 1}_chunk_{chunk_idx + 1}"
+            details = f"Task {task_idx + 1}/{total_tasks}, Chunk {chunk_idx + 1}/{total_chunks}"
+        else:
+            # Simple task progress
+            overall_progress = (task_idx + 1) / total_tasks
+            sub_phase = f"task_{task_idx + 1}"
+            details = f"Task {task_idx + 1}/{total_tasks}"
+        
+        if task_description:
+            # Truncate long task descriptions
+            truncated = task_description[:50] + "..." if len(task_description) > 50 else task_description
+            details = f"{details}: {truncated}"
+        
+        return await self.stream_granular_update(
+            "task_execution",
+            sub_phase,
+            overall_progress,
+            details
+        )
+    
+    async def stream_web_search_progress(self,
+                                       stage: str,
+                                       query: str = "",
+                                       results_count: int = None) -> str:
+        """
+        Stream granular updates for web search phase.
+        
+        Args:
+            stage: Search stage (formulation, execution, parsing, etc.)
+            query: Search query
+            results_count: Number of results found
+            
+        Returns:
+            str: Formatted update
+        """
+        progress_map = {
+            "formulation": 0.2,
+            "execution": 0.4,
+            "parsing": 0.6,
+            "citation": 0.8,
+            "complete": 1.0
+        }
+        
+        progress = progress_map.get(stage, 0.5)
+        
+        stage_details = {
+            "formulation": "Formulating search query",
+            "execution": "Executing web search",
+            "parsing": f"Parsing {results_count} results" if results_count else "Parsing results",
+            "citation": "Generating citations",
+            "complete": "Search complete"
+        }
+        
+        details = stage_details.get(stage, stage)
+        if query and stage in ["formulation", "execution"]:
+            truncated_query = query[:40] + "..." if len(query) > 40 else query
+            details = f'{details}: "{truncated_query}"'
+        
+        return await self.stream_granular_update(
+            "web_search",
+            stage,
+            progress,
+            details
+        )
+    
+    async def stream_synthesis_progress(self,
+                                      stage: str,
+                                      processed_tasks: int = None,
+                                      total_tasks: int = None) -> str:
+        """
+        Stream granular updates for synthesis phase.
+        
+        Args:
+            stage: Synthesis stage
+            processed_tasks: Number of tasks processed
+            total_tasks: Total tasks to process
+            
+        Returns:
+            str: Formatted update
+        """
+        progress_map = {
+            "collecting": 0.2,
+            "generating": 0.5,
+            "formatting": 0.8,
+            "complete": 1.0
+        }
+        
+        # Adjust progress based on task processing
+        if stage == "generating" and processed_tasks is not None and total_tasks:
+            base_progress = 0.4
+            task_progress = 0.4 * (processed_tasks / total_tasks)
+            progress = base_progress + task_progress
+        else:
+            progress = progress_map.get(stage, 0.5)
+        
+        stage_details = {
+            "collecting": "Collecting task results",
+            "generating": f"Generating answer ({processed_tasks}/{total_tasks} tasks)" if processed_tasks else "Generating answer",
+            "formatting": "Formatting citations",
+            "complete": "Synthesis complete"
+        }
+        
+        details = stage_details.get(stage, stage)
+        
+        return await self.stream_granular_update(
+            "synthesis",
+            stage,
+            progress,
+            details
+        )
+    
+    async def stream_conversation_progress(self,
+                                         round_num: int,
+                                         max_rounds: int,
+                                         stage: str = "questioning") -> str:
+        """
+        Stream granular updates for conversation rounds (Minion protocol).
+        
+        Args:
+            round_num: Current conversation round
+            max_rounds: Maximum rounds
+            stage: Current stage (questioning, processing, etc.)
+            
+        Returns:
+            str: Formatted update
+        """
+        progress = round_num / max_rounds
+        
+        stage_map = {
+            "questioning": f"Claude asking question {round_num}",
+            "processing": f"Processing response for round {round_num}",
+            "analyzing": f"Analyzing sufficiency after round {round_num}"
+        }
+        
+        details = stage_map.get(stage, f"Round {round_num}/{max_rounds}")
+        
+        return await self.stream_granular_update(
+            "conversation",
+            f"round_{round_num}",
+            progress,
+            details
+        )
     
     async def stream_visualization_update(self, visualization_content: str) -> str:
         """
@@ -5582,7 +6277,8 @@ async def _execute_minion_protocol(
     ConversationStateModel: Any = None,
     QuestionDeduplicatorModel: Any = None,
     ConversationFlowControllerModel: Any = None,
-    AnswerValidatorModel: Any = None
+    AnswerValidatorModel: Any = None,
+    streaming_manager: Any = None
 ) -> str:
     """Execute the Minion protocol"""
     conversation_log = []
@@ -5644,6 +6340,16 @@ async def _execute_minion_protocol(
         
         if valves.show_conversation:
             conversation_log.append(f"### 🔄 Round {round_num + 1}")
+        
+        # Stream conversation progress if streaming manager is available
+        if streaming_manager and hasattr(streaming_manager, 'stream_conversation_progress'):
+            update = await streaming_manager.stream_conversation_progress(
+                round_num=round_num + 1,
+                max_rounds=valves.max_rounds,
+                stage="questioning"
+            )
+            if update:
+                conversation_log.append(update)
 
         # Get phase guidance if flow control is enabled
         phase_guidance = None
@@ -6202,6 +6908,11 @@ async def minion_pipe(
                 + direct_response
             )
 
+        # Initialize streaming manager if enabled
+        streaming_manager = None
+        if getattr(pipe_self.valves, 'enable_streaming_responses', True):
+            streaming_manager = StreamingResponseManager(pipe_self.valves, pipe_self.valves.debug_mode)
+
         # Handle chunking for large documents
         chunks = create_chunks(context, pipe_self.valves.chunk_size, pipe_self.valves.max_chunks)
         if not chunks and context:
@@ -6220,7 +6931,8 @@ async def minion_pipe(
                 ConversationStateModel=ConversationState,
                 QuestionDeduplicatorModel=QuestionDeduplicator,
                 ConversationFlowControllerModel=ConversationFlowController,
-                AnswerValidatorModel=AnswerValidator
+                AnswerValidatorModel=AnswerValidator,
+                streaming_manager=streaming_manager
             )
             
             if len(chunks) > 1:
@@ -6346,7 +7058,7 @@ class Pipe:
 
     def __init__(self):
         self.valves = self.Valves()
-        self.name = "Minion v0.3.9 (Conversational)"
+        self.name = "Minion v0.3.9b (Conversational)"
 
     def pipes(self):
         """Define the available models"""
