@@ -31,10 +31,9 @@
       "rag_retriever.py",
       "citation_manager.py",
       "streaming_support.py",
-      "minion_streaming_pipe.py",
       "minion_prompts.py",
       "minion_protocol_logic.py",
-      "minion_pipe_method.py"
+      "minion_streaming_pipe.py"
     ]
   },
   "minions_default": {

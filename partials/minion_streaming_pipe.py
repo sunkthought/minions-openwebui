@@ -4,6 +4,18 @@ import asyncio
 from typing import Any, List, Callable, Dict, AsyncGenerator
 from fastapi import Request
 
+async def minion_pipe(
+    pipe_self: Any,
+    body: Dict[str, Any],
+    __user__: Dict[str, Any],
+    __request__: Request,
+    __files__: List[Dict[str, Any]] = [],
+    __pipe_id__: str = "minion-claude",
+) -> AsyncGenerator[str, None]:
+    """Execute the Minion protocol with streaming updates"""
+    async for chunk in minion_pipe_streaming(pipe_self, body, __user__, __request__, __files__, __pipe_id__):
+        yield chunk
+
 async def minion_pipe_streaming(
     pipe_self: Any,
     body: Dict[str, Any],
