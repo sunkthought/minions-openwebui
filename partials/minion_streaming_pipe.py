@@ -212,11 +212,14 @@ async def minion_pipe_streaming(
             conversation_state = ConversationState() if pipe_self.valves.track_conversation_state else None
             deduplicator = QuestionDeduplicator(pipe_self.valves.deduplication_threshold) if pipe_self.valves.enable_deduplication else None
             
-            # Start the final answer section
-            yield f"\n## 🎯 Final Answer\n"
+            # Collect chunk results for synthesis
+            chunk_results = []
+            
+            # Start the chunk analysis section
+            yield f"\n## 📄 Chunk-by-Chunk Analysis\n"
             
             for i, chunk in enumerate(chunks):
-                chunk_header = f"## 📄 Chunk {i+1} of {len(chunks)}\n"
+                chunk_header = f"### Chunk {i+1} of {len(chunks)}\n"
                 
                 # Stream chunk processing progress
                 progress = (i + 1) / len(chunks)
@@ -238,12 +241,49 @@ async def minion_pipe_streaming(
                     deduplicator
                 )
                 
+                # Store result for synthesis
+                chunk_results.append(chunk_result)
+                
                 # Yield this chunk's result immediately (progressive streaming)
                 yield f"{chunk_header}{chunk_result}\n\n"
             
+            # Synthesis phase
+            yield await streaming_manager.stream_phase_update("synthesis", "Synthesizing final answer from all chunks")
+            
+            # Generate final synthesis from all chunk results
+            synthesis_prompt = f"""You have analyzed a document in {len(chunks)} chunks to answer: "{user_query}"
+
+Here are the results from each chunk:
+
+{chr(10).join(chunk_results)}
+
+Based on all the information gathered from these chunks, provide a comprehensive final answer to the user's original question: "{user_query}"
+
+Your response should:
+1. Synthesize the key information from all chunks
+2. Address the specific question asked
+3. Be well-organized and coherent
+4. Include the most important findings and insights
+
+Provide your final comprehensive answer:"""
+
+            try:
+                final_answer = await call_supervisor_model(pipe_self.valves, synthesis_prompt)
+                
+                # Yield the synthesized final answer
+                yield f"\n---\n\n## 🎯 Final Answer\n\n{final_answer}\n"
+                
+            except Exception as e:
+                # Fallback to basic synthesis if API call fails
+                yield f"\n---\n\n## 🎯 Final Answer\n\n"
+                yield "Based on the chunk analyses above, here's a summary of the key findings:\n\n"
+                for i, result in enumerate(chunk_results):
+                    if "**Result:**" in result:
+                        summary = result.split("**Result:**")[1].strip()
+                        yield f"• From Chunk {i+1}: {summary}\n\n"
+            
             # Add multi-chunk processing info at the end
-            yield await streaming_manager.stream_phase_update("synthesis", "Finalizing multi-chunk analysis")
-            chunk_info = f"---\n\n## 📄 Multi-Chunk Processing Info\n**Document processed as {len(chunks)} chunks** (max {pipe_self.valves.chunk_size:,} characters each) in {len(chunks)} separate conversation sessions."
+            chunk_info = f"\n---\n\n## 📄 Multi-Chunk Processing Info\n**Document processed as {len(chunks)} chunks** (max {pipe_self.valves.chunk_size:,} characters each) in {len(chunks)} separate conversation sessions."
             yield f"{chunk_info}"
 
     except Exception as e:
