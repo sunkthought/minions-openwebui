@@ -315,12 +315,17 @@ The Minion and MinionS functions in this repository are not static; they are dyn
 
 You can generate different versions of Minion and MinionS functions:
 
-#### Latest Functions (v0.3.9 with Open WebUI Integrations - Recommended)
+#### Latest Functions
 ```bash
+
 # Generates minion_default_function.py with full Open WebUI integration suite
+python generator_script.py minion
+# Generates minion_default_function.py with full Open WebUI integration suite (you can execute a specific profile by replacing minion_defualt with your custom made profile)
 python generator_script.py minion --profile minion_default
 
-# Generates minions_default_function.py with Open WebUI integrations and task visualization
+# Generates miniond_default_function.py with full Open WebUI integration suite
+python generator_script.py miniond
+# Generates minions_default_function.py with Open WebUI integrations and task visualization (you can execute a specific profile by replacing minions_defualt with your custom made profile)
 python generator_script.py minions --profile minions_default
 ```
 
